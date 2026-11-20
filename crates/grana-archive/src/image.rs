@@ -1,19 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_volume::{Intensity, Level};
+use grana_volume::{Intensity, Level, VoxelFormat};
 
 pub struct Channel<'a> {
     pub name: &'a str,
     pub tint: [f32; 3],
     pub range: Intensity,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Sample {
-    Float,
-    Unsigned16,
-    Unsigned8,
 }
 
 pub type Filler<'a> = dyn Fn(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String>
@@ -46,7 +39,7 @@ pub struct ImageSpec<'a> {
     pub placement: [f32; 3],
     pub frames: u32,
     pub interval: Option<f32>,
-    pub sample: Sample,
+    pub sample: VoxelFormat,
     pub fill: Fill<'a>,
     pub cancel: &'a AtomicBool,
     pub progress: &'a mut dyn FnMut(usize, usize),

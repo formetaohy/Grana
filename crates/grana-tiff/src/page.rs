@@ -1,54 +1,55 @@
-use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
-use grana_volume::VoxelFormat;
+use grana_volume::{Placement, VoxelData, VoxelFormat};
 
 use crate::Cache;
-use crate::codec;
+use crate::codec::{Block as CodecBlock, Compression, reverse_predictor, swap};
+use crate::color::{ColorModel, ColorValues};
+use crate::directory::Directory;
 use crate::error::Error;
+use crate::layout::{Block, Layout};
+use crate::sample::SampleType;
 use crate::store::Store;
 use crate::tag::{
-    Directory, TAG_BITS_PER_SAMPLE, TAG_COMPRESSION, TAG_IMAGE_LENGTH, TAG_IMAGE_WIDTH,
-    TAG_PHOTOMETRIC, TAG_PLANAR_CONFIGURATION, TAG_PREDICTOR, TAG_ROWS_PER_STRIP,
-    TAG_SAMPLE_FORMAT, TAG_SAMPLES_PER_PIXEL, TAG_STRIP_BYTE_COUNTS, TAG_STRIP_OFFSETS,
-    TAG_SUB_IFDS, TAG_TILE_BYTE_COUNTS, TAG_TILE_LENGTH, TAG_TILE_OFFSETS, TAG_TILE_WIDTH,
+    TAG_BITS_PER_SAMPLE, TAG_COLOR_MAP, TAG_COMPRESSION, TAG_EXTRA_SAMPLES, TAG_FILL_ORDER,
+    TAG_IMAGE_LENGTH, TAG_IMAGE_WIDTH, TAG_JPEG_TABLES, TAG_PHOTOMETRIC, TAG_PLANAR_CONFIGURATION,
+    TAG_PREDICTOR, TAG_SAMPLE_FORMAT, TAG_SAMPLES_PER_PIXEL, TAG_SUB_IFDS, TAG_YCBCR_COEFFICIENTS,
+    TAG_YCBCR_SUBSAMPLING,
 };
 
-const COMPRESSION_NONE: u16 = 1;
-const PREDICTOR_NONE: u16 = 1;
-const PREDICTOR_HORIZONTAL: u16 = 2;
+const PREDICTOR_NONE: u64 = 1;
+const PREDICTOR_HORIZONTAL: u64 = 2;
+const PREDICTOR_FLOATING: u64 = 3;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Predictor {
+    None,
+    Horizontal,
+    Floating,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FillOrder {
+    Msb,
+    Lsb,
+}
 
 pub(crate) struct Page {
     pub width: u32,
     pub height: u32,
     pub samples: u32,
-    pub format: VoxelFormat,
     pub planar: bool,
+    pub sample_type: SampleType,
+    components: u32,
+    pub color: ColorModel,
+    pub compression: Compression,
     pub sub_ifds: Vec<u64>,
-    compression: u16,
-    predictor: u16,
+    format: VoxelFormat,
+    predictor: Predictor,
+    fill_order: FillOrder,
     big_endian: bool,
-    min_is_white: bool,
-}
-
-pub(crate) enum Layout {
-    Tiles {
-        width: u32,
-        height: u32,
-        offsets: Vec<u64>,
-        counts: Vec<u64>,
-    },
-    Strips {
-        rows: u32,
-        offsets: Vec<u64>,
-        counts: Vec<u64>,
-    },
-}
-
-pub(crate) struct Region<'a> {
-    pub x: &'a Range<u32>,
-    pub y: &'a Range<u32>,
+    tables: Option<Vec<u8>>,
 }
 
 pub(crate) struct Source<'a> {
@@ -58,69 +59,14 @@ pub(crate) struct Source<'a> {
     pub file: usize,
 }
 
-#[derive(Clone, Copy)]
 pub(crate) struct Plane<'a> {
     pub layout: &'a Layout,
     pub source: &'a Source<'a>,
     pub level: usize,
     pub page: usize,
-    pub sample: u32,
-    pub region: &'a Region<'a>,
-}
-
-struct Block {
-    index: usize,
-    origin: (u32, u32),
-    width: u32,
-    rows: u32,
-    offset: u64,
-    count: u64,
-}
-
-pub(crate) trait Sample: Copy {
-    fn load(bytes: &[u8], index: usize) -> Self;
-
-    fn inverted(self) -> Self;
-}
-
-impl Sample for u8 {
-    fn load(bytes: &[u8], index: usize) -> Self {
-        bytes[index]
-    }
-
-    fn inverted(self) -> Self {
-        !self
-    }
-}
-
-impl Sample for u16 {
-    fn load(bytes: &[u8], index: usize) -> Self {
-        let start = index * 2;
-        Self::from_ne_bytes(
-            bytes[start..start + 2]
-                .try_into()
-                .expect("two bytes are read"),
-        )
-    }
-
-    fn inverted(self) -> Self {
-        !self
-    }
-}
-
-impl Sample for f32 {
-    fn load(bytes: &[u8], index: usize) -> Self {
-        let start = index * 4;
-        Self::from_ne_bytes(
-            bytes[start..start + 4]
-                .try_into()
-                .expect("four bytes are read"),
-        )
-    }
-
-    fn inverted(self) -> Self {
-        1.0 - self
-    }
+    pub channel: u32,
+    pub x: (u32, u32),
+    pub y: (u32, u32),
 }
 
 impl Page {
@@ -130,70 +76,76 @@ impl Page {
         big_endian: bool,
         path: &Path,
     ) -> Result<Self, Error> {
-        let width = required_integer(directory, store, TAG_IMAGE_WIDTH, path)?;
-        let height = required_integer(directory, store, TAG_IMAGE_LENGTH, path)?;
+        let width = required(directory, store, TAG_IMAGE_WIDTH, path)?;
+        let height = required(directory, store, TAG_IMAGE_LENGTH, path)?;
         let samples = directory
             .integer(store, TAG_SAMPLES_PER_PIXEL, path)?
             .unwrap_or(1);
-        let bits = directory.integers(store, TAG_BITS_PER_SAMPLE, path)?;
-        let bits = bits.first().copied().unwrap_or(1);
-        if directory
-            .integers(store, TAG_BITS_PER_SAMPLE, path)?
-            .iter()
-            .any(|value| *value != bits)
-        {
-            return Err(Error::unsupported(
-                path,
-                "the TIFF page mixes different sample widths",
-            ));
-        }
-        let sample_format = directory
-            .integer(store, TAG_SAMPLE_FORMAT, path)?
-            .unwrap_or(1);
-        let format = format(bits, sample_format, path)?;
+        let samples = u32::try_from(samples)
+            .ok()
+            .filter(|samples| *samples > 0)
+            .ok_or_else(|| Error::unsupported(path, "the TIFF sample count is out of range"))?;
+        let bits = uniform(directory, store, TAG_BITS_PER_SAMPLE, 1, path)?;
+        let format = uniform(directory, store, TAG_SAMPLE_FORMAT, 1, path)?;
+        let sample_type = SampleType::of(
+            u16::try_from(bits)
+                .map_err(|_| Error::unsupported(path, "the TIFF sample width is out of range"))?,
+            u16::try_from(format).map_err(|_| {
+                Error::unsupported(path, "the TIFF sample format code is out of range")
+            })?,
+        )
+        .map_err(|detail| Error::unsupported(path, detail))?;
+        let container = sample_type
+            .container()
+            .map_err(|detail| Error::unsupported(path, detail))?;
         let compression = directory
             .integer(store, TAG_COMPRESSION, path)?
-            .unwrap_or(u64::from(COMPRESSION_NONE));
+            .unwrap_or(1);
         let compression = u16::try_from(compression)
             .map_err(|_| Error::unsupported(path, "the TIFF compression code is out of range"))?;
-        let predictor = directory
+        let compression = Compression::of(compression);
+        if compression.stores_rgb_samples() && sample_type.bits != 8 {
+            return Err(Error::unsupported(
+                path,
+                "a JPEG compressed TIFF page stores eight bits per sample",
+            ));
+        }
+        let predictor = match directory
             .integer(store, TAG_PREDICTOR, path)?
-            .unwrap_or(u64::from(PREDICTOR_NONE));
-        if predictor != u64::from(PREDICTOR_NONE) && predictor != u64::from(PREDICTOR_HORIZONTAL) {
+            .unwrap_or(PREDICTOR_NONE)
+        {
+            PREDICTOR_NONE => Predictor::None,
+            PREDICTOR_HORIZONTAL => Predictor::Horizontal,
+            PREDICTOR_FLOATING => Predictor::Floating,
+            other => {
+                return Err(Error::unsupported(
+                    path,
+                    format!("the TIFF predictor {other} is not supported"),
+                ));
+            }
+        };
+        if predictor != Predictor::None && sample_type.packed() {
             return Err(Error::unsupported(
                 path,
-                format!("the TIFF predictor {predictor} is not supported"),
+                "a TIFF predictor meets packed samples",
             ));
         }
-        if predictor == u64::from(PREDICTOR_HORIZONTAL) && format == VoxelFormat::F32 {
-            return Err(Error::unsupported(
-                path,
-                "the TIFF floating point predictor is not supported",
-            ));
-        }
-        let photometric = directory
-            .integer(store, TAG_PHOTOMETRIC, path)?
-            .unwrap_or(1);
-        if !matches!(photometric, 0..=2) {
-            return Err(Error::unsupported(
-                path,
-                format!("the TIFF photometric interpretation {photometric} is not supported"),
-            ));
-        }
+        let fill_order = match directory.integer(store, TAG_FILL_ORDER, path)?.unwrap_or(1) {
+            1 => FillOrder::Msb,
+            2 => FillOrder::Lsb,
+            other => {
+                return Err(Error::unsupported(
+                    path,
+                    format!("the TIFF fill order {other} is not supported"),
+                ));
+            }
+        };
         let planar = match directory
             .integer(store, TAG_PLANAR_CONFIGURATION, path)?
             .unwrap_or(1)
         {
             1 => false,
-            2 => {
-                if samples != 1 {
-                    return Err(Error::unsupported(
-                        path,
-                        "a TIFF page with separate planes must hold one sample",
-                    ));
-                }
-                true
-            }
+            2 => true,
             other => {
                 return Err(Error::unsupported(
                     path,
@@ -201,319 +153,371 @@ impl Page {
                 ));
             }
         };
-        let samples = u32::try_from(samples)
-            .ok()
-            .filter(|samples| *samples > 0)
-            .ok_or_else(|| Error::unsupported(path, "the TIFF sample count is out of range"))?;
+        let color_map = directory.integers(store, TAG_COLOR_MAP, path)?;
+        let subsampling = directory.integers(store, TAG_YCBCR_SUBSAMPLING, path)?;
+        let coefficients = directory.rationals(store, TAG_YCBCR_COEFFICIENTS, path)?;
+        let extra = directory.integers(store, TAG_EXTRA_SAMPLES, path)?;
+        let values = ColorValues {
+            color_map: (!color_map.is_empty()).then_some(color_map),
+            subsampling: match subsampling.as_slice() {
+                [horizontal, vertical] => Some([
+                    u32::try_from(*horizontal).unwrap_or(u32::MAX),
+                    u32::try_from(*vertical).unwrap_or(u32::MAX),
+                ]),
+                _ => None,
+            },
+            coefficients: (!coefficients.is_empty()).then_some(coefficients),
+            extra,
+        };
+        let photometric = directory.integer(store, TAG_PHOTOMETRIC, path)?;
+        let color = ColorModel::of(photometric, samples, sample_type, &values)
+            .map_err(|detail| Error::unsupported(path, detail))?;
+        if sample_type.components() > 1
+            && (color.converts() || samples != 1 || color.channels() != 1)
+        {
+            return Err(Error::unsupported(
+                path,
+                "complex TIFF samples are read for single-sample grayscale pages only",
+            ));
+        }
+        if planar && color.converts() {
+            return Err(Error::unsupported(
+                path,
+                "a TIFF page with separate planes cannot carry a converted color space",
+            ));
+        }
         let sub_ifds = directory.integers(store, TAG_SUB_IFDS, path)?;
+        let tables = directory.bytes(store, TAG_JPEG_TABLES, path)?;
         Ok(Self {
             width,
             height,
             samples,
-            format,
+            components: sample_type.components(),
             planar,
-            sub_ifds,
+            sample_type,
+            color,
             compression,
-            predictor: predictor as u16,
+            sub_ifds,
+            format: container,
+            predictor,
+            fill_order,
             big_endian,
-            min_is_white: photometric == 0,
+            tables,
         })
     }
 
+    pub(crate) fn format(&self) -> VoxelFormat {
+        self.format
+    }
+
     pub(crate) fn bytes(&self) -> u64 {
-        (std::mem::size_of::<Self>() + self.sub_ifds.capacity() * std::mem::size_of::<u64>()) as u64
+        (size_of::<Self>() + self.sub_ifds.capacity() * size_of::<u64>()) as u64
     }
 
-    fn bytes_per_sample(&self) -> usize {
-        match self.format {
-            VoxelFormat::U8 => 1,
-            VoxelFormat::U16 => 2,
-            VoxelFormat::F32 => 4,
+    pub(crate) fn channels(&self) -> u32 {
+        if self.color.converts() {
+            self.color.channels()
+        } else {
+            self.color.channels() * self.components
         }
     }
 
-    pub(crate) fn read_plane<T: Sample>(
-        &self,
-        plane: &Plane<'_>,
-        out: &mut [T],
-    ) -> Result<(), Error> {
-        let Plane {
-            layout,
-            source,
-            level,
-            page,
-            sample,
-            region,
-        } = *plane;
-        let Region { x, y } = region;
-        let columns = (x.end - x.start) as usize;
-        let rows = (y.end - y.start) as usize;
+    pub(crate) fn read_plane(&self, plane: &Plane<'_>, out: &mut VoxelData) -> Result<(), Error> {
         assert_eq!(
-            out.len(),
-            columns * rows,
-            "the plane buffer matches the region"
+            out.format(),
+            self.format,
+            "a decoded plane carries the page format"
         );
-        let samples = self.samples as usize;
-        match layout {
-            Layout::Tiles {
-                width,
-                height,
-                offsets,
-                counts,
-            } => {
-                let across = self.width.div_ceil(*width);
-                for tile_y in y.start / height..=(y.end - 1) / height {
-                    for tile_x in x.start / width..=(x.end - 1) / width {
-                        let index = (tile_y * across + tile_x) as usize;
-                        let origin = (tile_x * width, tile_y * height);
-                        let block = Block {
-                            index,
-                            origin,
-                            width: *width,
-                            rows: (*height).min(self.height - origin.1),
-                            offset: offsets[index],
-                            count: counts[index],
-                        };
-                        let data = self.block(source, level, page, &block)?;
-                        copy_rows(&data, &block, samples, sample, region, out);
-                    }
-                }
+        let sample = if self.planar { plane.channel } else { 0 };
+        let region = [(plane.x.0, plane.x.1), (plane.y.0, plane.y.1)];
+        for block in plane
+            .layout
+            .covering(&region, self.width, self.height, sample)
+        {
+            let held = self.block(plane, sample, &block)?;
+            let pixels = block.width as usize * block.rows as usize;
+            let channels = (held.voxel_count() / pixels) as u32;
+            let index = plane.channel.min(channels - 1);
+            let extracted = held.gather(index as usize, channels as usize, pixels);
+            let left = block.origin.0.max(plane.x.0);
+            let right = (block.origin.0 + block.width).min(plane.x.1);
+            let top = block.origin.1.max(plane.y.0);
+            let bottom = (block.origin.1 + block.rows).min(plane.y.1);
+            if left >= right || top >= bottom {
+                continue;
             }
-            Layout::Strips {
-                rows: strip_rows,
-                offsets,
-                counts,
-            } => {
-                for strip in y.start / strip_rows..=(y.end - 1) / strip_rows {
-                    let index = strip as usize;
-                    let origin = (0, strip * strip_rows);
-                    let block = Block {
-                        index,
-                        origin,
-                        width: self.width,
-                        rows: (*strip_rows).min(self.height - origin.1),
-                        offset: offsets[index],
-                        count: counts[index],
-                    };
-                    let data = self.block(source, level, page, &block)?;
-                    copy_rows(&data, &block, samples, sample, region, out);
-                }
-            }
+            out.blit(
+                &extracted,
+                Placement::new(block.width, [left - block.origin.0, top - block.origin.1]),
+                Placement::new(plane.x.1 - plane.x.0, [left - plane.x.0, top - plane.y.0]),
+                right - left,
+                bottom - top,
+            );
         }
-        if self.min_is_white {
-            for value in out.iter_mut() {
-                *value = value.inverted();
-            }
+        if self.color.inverted() && self.components == 1 {
+            self.invert(out);
         }
         Ok(())
     }
 
     fn block(
         &self,
-        source: &Source<'_>,
-        level: usize,
-        page_index: usize,
+        plane: &Plane<'_>,
+        sample: u32,
         block: &Block,
-    ) -> Result<Arc<Vec<u8>>, Error> {
-        let path = source.path;
-        let key = (source.file, level, page_index, block.index);
-        if let Some(data) = source.cache.fetch(key) {
-            return Ok(data);
+    ) -> Result<Arc<VoxelData>, Error> {
+        let key = (
+            plane.source.file,
+            plane.level,
+            plane.page,
+            sample,
+            block.index,
+        );
+        if let Some(held) = plane.source.cache.fetch(key) {
+            return Ok(held);
         }
-        let expected = block.width as usize
-            * block.rows as usize
-            * self.samples as usize
-            * self.bytes_per_sample();
-        let length = usize::try_from(block.count)
-            .map_err(|_| Error::read(path, "the TIFF block is too large"))?;
-        let raw = source.store.read(block.offset, length)?;
-        let mut data = codec::decompress(self.compression, &raw, expected)
-            .map_err(|detail| Error::read(path, detail))?;
-        if data.len() < expected {
-            return Err(Error::read(
-                path,
-                "the decoded TIFF block is shorter than its geometry",
-            ));
-        }
-        data.truncate(expected);
-        codec::to_native(self.format, &mut data, self.big_endian);
-        if self.predictor == PREDICTOR_HORIZONTAL && self.compression != COMPRESSION_NONE {
-            codec::reverse_predictor(
-                self.format,
-                &mut data,
-                block.width as usize * self.samples as usize,
-                block.rows as usize,
-                self.samples as usize,
-            )
-            .map_err(|detail| Error::unsupported(path, detail))?;
-        }
-        let data = Arc::new(data);
-        source.cache.insert(key, Arc::clone(&data));
+        let data = Arc::new(self.decode(plane.source, block)?);
+        plane.source.cache.insert(key, Arc::clone(&data));
         Ok(data)
     }
-}
 
-impl Layout {
-    pub(crate) fn new(
-        directory: &Directory,
-        store: &Store,
-        width: u32,
-        height: u32,
-        path: &Path,
-    ) -> Result<Self, Error> {
-        let tile_width = directory.integer(store, TAG_TILE_WIDTH, path)?;
-        let tile_length = directory.integer(store, TAG_TILE_LENGTH, path)?;
-        if tile_width.is_some() || tile_length.is_some() {
-            let tile_width = u32::try_from(tile_width.ok_or_else(|| {
-                Error::unsupported(path, "the TIFF page declares tiles without a tile width")
-            })?)
-            .ok()
-            .filter(|width| *width > 0)
-            .ok_or_else(|| Error::unsupported(path, "the TIFF tile width is out of range"))?;
-            let tile_length = u32::try_from(tile_length.ok_or_else(|| {
-                Error::unsupported(path, "the TIFF page declares tiles without a tile length")
-            })?)
-            .ok()
-            .filter(|length| *length > 0)
-            .ok_or_else(|| Error::unsupported(path, "the TIFF tile length is out of range"))?;
-            let offsets = directory.integers(store, TAG_TILE_OFFSETS, path)?;
-            let counts = directory.integers(store, TAG_TILE_BYTE_COUNTS, path)?;
-            let expected =
-                width.div_ceil(tile_width) as usize * height.div_ceil(tile_length) as usize;
-            if offsets.len() != expected || counts.len() != expected {
-                return Err(Error::read(
-                    path,
-                    format!(
-                        "the TIFF page declares {expected} tiles but lists {} offsets and {} byte counts",
-                        offsets.len(),
-                        counts.len()
-                    ),
-                ));
-            }
-            return Self::Tiles {
-                width: tile_width,
-                height: tile_length,
-                offsets,
-                counts,
-            }
-            .require_data(path);
-        }
-        let rows = directory
-            .integer(store, TAG_ROWS_PER_STRIP, path)?
-            .map(|rows| {
-                u32::try_from(rows)
-                    .ok()
-                    .filter(|rows| *rows > 0)
-                    .ok_or_else(|| {
-                        Error::unsupported(path, "the TIFF rows per strip is out of range")
-                    })
-            })
-            .transpose()?
-            .unwrap_or(height);
-        let offsets = directory.integers(store, TAG_STRIP_OFFSETS, path)?;
-        let counts = directory.integers(store, TAG_STRIP_BYTE_COUNTS, path)?;
-        let expected = height.div_ceil(rows) as usize;
-        if offsets.len() != expected || counts.len() != expected {
-            return Err(Error::read(
+    fn decode(&self, source: &Source<'_>, block: &Block) -> Result<VoxelData, Error> {
+        let path = source.path;
+        let pixels = block.width as usize * block.rows as usize;
+        let raw = source.store.read(block.offset, block.count as usize)?;
+        let samples = if self.planar {
+            1
+        } else {
+            self.samples as usize
+        } * self.components as usize;
+        let expected = if self.sample_type.packed() {
+            (block.width as usize * samples * self.sample_type.bits as usize).div_ceil(8)
+                * block.rows as usize
+        } else {
+            pixels * samples * self.format.bytes()
+        };
+        let decoded = self
+            .compression
+            .decode(
+                &raw,
+                &CodecBlock {
+                    expected,
+                    width: block.width,
+                    rows: block.rows,
+                    lsb_first: self.fill_order == FillOrder::Lsb,
+                    tables: self.tables.as_deref(),
+                },
+            )
+            .map_err(|detail| Error::read(path, detail))?;
+        if matches!(self.compression, Compression::Fax { .. }) && self.sample_type.bits != 1 {
+            return Err(Error::unsupported(
                 path,
-                format!(
-                    "the TIFF page declares {expected} strips but lists {} offsets and {} byte counts",
-                    offsets.len(),
-                    counts.len()
-                ),
+                "a TIFF fax stream carries one bit per pixel",
             ));
         }
-        Self::Strips {
-            rows,
-            offsets,
-            counts,
-        }
-        .require_data(path)
-    }
-
-    fn require_data(self, path: &Path) -> Result<Self, Error> {
-        let (noun, offsets, counts) = match &self {
-            Self::Tiles {
-                offsets, counts, ..
-            } => ("tile", offsets, counts),
-            Self::Strips {
-                offsets, counts, ..
-            } => ("strip", offsets, counts),
-        };
-        for (index, (offset, count)) in offsets.iter().zip(counts).enumerate() {
-            if *offset == 0 || *count == 0 {
+        if self.compression.stores_rgb_samples() {
+            if pixels == 0 || !decoded.len().is_multiple_of(pixels) {
                 return Err(Error::read(
                     path,
-                    format!("the TIFF page leaves {noun} {index} without pixel data"),
+                    "the decoded TIFF block does not cover whole pixels",
                 ));
             }
-        }
-        Ok(self)
-    }
-
-    pub(crate) fn bytes(&self) -> u64 {
-        let (offsets, counts) = match self {
-            Self::Tiles {
-                offsets, counts, ..
+            let channels = decoded.len() / pixels;
+            if channels == 0 {
+                return Err(Error::read(path, "the JPEG block carries no sample"));
             }
-            | Self::Strips {
-                offsets, counts, ..
-            } => (offsets.capacity(), counts.capacity()),
+            if decoded.len() < expected {
+                return Err(Error::read(
+                    path,
+                    "the decoded TIFF block is shorter than its geometry",
+                ));
+            }
+            return Ok(VoxelData::reinterpret(self.format, &decoded));
+        }
+        let mut data = if decoded.len() < expected {
+            if !block.padding {
+                return Err(Error::read(
+                    path,
+                    "the decoded TIFF block is shorter than its geometry",
+                ));
+            }
+            let mut data = decoded;
+            data.resize(expected, 0);
+            data
+        } else {
+            let mut data = decoded;
+            data.truncate(expected);
+            data
         };
-        (std::mem::size_of::<Self>() + (offsets + counts) * std::mem::size_of::<u64>()) as u64
+        if self.sample_type.packed() {
+            let unpacked = unpack(
+                &data,
+                self.sample_type.bits,
+                samples,
+                block.width as usize,
+                block.rows as usize,
+                self.fill_order,
+            )?;
+            return Ok(VoxelData::U8(unpacked));
+        }
+        if self.predictor == Predictor::Floating {
+            reverse_predictor(
+                self.format,
+                &mut data,
+                block.width as usize,
+                block.rows as usize,
+                samples,
+                true,
+            )
+            .map_err(|detail| Error::unsupported(path, detail))?;
+        } else {
+            if self.big_endian {
+                swap(self.format, &mut data);
+            }
+            if self.predictor == Predictor::Horizontal {
+                reverse_predictor(
+                    self.format,
+                    &mut data,
+                    block.width as usize,
+                    block.rows as usize,
+                    samples,
+                    false,
+                )
+                .map_err(|detail| Error::unsupported(path, detail))?;
+            }
+        }
+        let reinterpreted = VoxelData::reinterpret(self.format, &data);
+        if self.color.converts() {
+            Ok(self.color.convert(
+                self.format,
+                self.sample_type.maximum(),
+                samples,
+                &reinterpreted,
+            ))
+        } else {
+            Ok(reinterpreted)
+        }
     }
-}
 
-fn copy_rows<T: Sample>(
-    data: &[u8],
-    block: &Block,
-    samples: usize,
-    sample: u32,
-    region: &Region<'_>,
-    out: &mut [T],
-) {
-    let columns = (region.x.end - region.x.start) as usize;
-    let first = region.y.start.max(block.origin.1);
-    let last = region.y.end.min(block.origin.1 + block.rows);
-    let left = region.x.start.max(block.origin.0);
-    let right = region.x.end.min(block.origin.0 + block.width);
-    for row in first..last {
-        let source_row = (row - block.origin.1) as usize * block.width as usize;
-        for column in left..right {
-            let source =
-                (source_row + (column - block.origin.0) as usize) * samples + sample as usize;
-            let target =
-                (row - region.y.start) as usize * columns + (column - region.x.start) as usize;
-            out[target] = T::load(data, source);
+    fn invert(&self, data: &mut VoxelData) {
+        let maximum = self.sample_type.maximum();
+        match data {
+            VoxelData::U8(values) => {
+                let maximum = maximum as u8;
+                values
+                    .iter_mut()
+                    .for_each(|value| *value = maximum.saturating_sub(*value));
+            }
+            VoxelData::U16(values) => {
+                let maximum = maximum as u16;
+                values
+                    .iter_mut()
+                    .for_each(|value| *value = maximum.saturating_sub(*value));
+            }
+            VoxelData::U32(values) => {
+                let maximum = maximum as u32;
+                values
+                    .iter_mut()
+                    .for_each(|value| *value = maximum.saturating_sub(*value));
+            }
+            VoxelData::U64(values) => {
+                let maximum = maximum as u64;
+                values
+                    .iter_mut()
+                    .for_each(|value| *value = maximum.saturating_sub(*value));
+            }
+            VoxelData::I8(values) => values
+                .iter_mut()
+                .for_each(|value| *value = value.wrapping_neg()),
+            VoxelData::I16(values) => values
+                .iter_mut()
+                .for_each(|value| *value = value.wrapping_neg()),
+            VoxelData::I32(values) => values
+                .iter_mut()
+                .for_each(|value| *value = value.wrapping_neg()),
+            VoxelData::I64(values) => values
+                .iter_mut()
+                .for_each(|value| *value = value.wrapping_neg()),
+            VoxelData::F32(values) => values.iter_mut().for_each(|value| *value = 1.0 - *value),
+            VoxelData::F64(values) => values.iter_mut().for_each(|value| *value = 1.0 - *value),
         }
     }
 }
 
-fn required_integer(
-    directory: &Directory,
-    store: &Store,
-    tag: u16,
-    path: &Path,
-) -> Result<u32, Error> {
+fn unpack(
+    data: &[u8],
+    bits: u16,
+    samples: usize,
+    width: usize,
+    rows: usize,
+    order: FillOrder,
+) -> Result<Vec<u8>, Error> {
+    let row_bits = width * samples * bits as usize;
+    let row_bytes = row_bits.div_ceil(8);
+    if data.len() < row_bytes * rows {
+        return Err(Error::read(
+            Path::new(""),
+            "the packed TIFF block is shorter than its geometry",
+        ));
+    }
+    let mut values = Vec::with_capacity(width * samples * rows);
+    let mask = (1u16 << bits) - 1;
+    for row in 0..rows {
+        let line = &data[row * row_bytes..(row + 1) * row_bytes];
+        for slot in 0..width * samples {
+            let offset = slot * bits as usize;
+            let byte = line[offset / 8];
+            let shift = offset % 8;
+            let mut value = if shift + bits as usize <= 8 {
+                u16::from(byte >> (8 - shift - bits as usize))
+            } else {
+                (u16::from(byte) << 8 | u16::from(line[offset / 8 + 1]))
+                    >> (16 - shift - bits as usize)
+            };
+            value &= mask;
+            if order == FillOrder::Lsb {
+                value = reverse_bits(value, bits);
+            }
+            values.push(value as u8);
+        }
+    }
+    Ok(values)
+}
+
+fn reverse_bits(value: u16, bits: u16) -> u16 {
+    let mut reversed = 0;
+    for index in 0..bits {
+        if value & (1 << index) != 0 {
+            reversed |= 1 << (bits - 1 - index);
+        }
+    }
+    reversed
+}
+
+fn required(directory: &Directory, store: &Store, tag: u16, path: &Path) -> Result<u32, Error> {
     let value = directory
         .integer(store, tag, path)?
-        .ok_or_else(|| Error::unsupported(path, format!("the TIFF tag {tag} is missing")))?;
+        .ok_or_else(|| Error::unsupported(path, "the TIFF tag is missing"))?;
     u32::try_from(value)
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| Error::unsupported(path, format!("the TIFF tag {tag} is out of range")))
 }
 
-fn format(bits: u64, sample_format: u64, path: &Path) -> Result<VoxelFormat, Error> {
-    match (bits, sample_format) {
-        (8, 1) => Ok(VoxelFormat::U8),
-        (16, 1) => Ok(VoxelFormat::U16),
-        (32, 3) => Ok(VoxelFormat::F32),
-        _ => Err(Error::unsupported(
+fn uniform(
+    directory: &Directory,
+    store: &Store,
+    tag: u16,
+    fallback: u64,
+    path: &Path,
+) -> Result<u64, Error> {
+    let values = directory.integers(store, tag, path)?;
+    let first = values.first().copied().unwrap_or(fallback);
+    if values.iter().any(|value| *value != first) {
+        return Err(Error::unsupported(
             path,
-            format!(
-                "the TIFF voxel type with {bits} bits and sample format {sample_format} is not supported"
-            ),
-        )),
+            format!("the TIFF tag {tag} differs between samples"),
+        ));
     }
+    Ok(first)
 }

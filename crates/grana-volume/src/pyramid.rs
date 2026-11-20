@@ -139,11 +139,7 @@ impl Pyramid {
         let channel: u64 = self
             .channels
             .iter()
-            .map(|info| match info.format() {
-                crate::VoxelFormat::U8 => 1,
-                crate::VoxelFormat::U16 => 2,
-                crate::VoxelFormat::F32 => 4,
-            })
+            .map(|info| info.format().bytes() as u64)
             .sum();
         voxels * channel
     }

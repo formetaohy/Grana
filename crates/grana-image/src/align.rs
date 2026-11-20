@@ -110,26 +110,21 @@ fn field_source(
 }
 
 pub(crate) fn resample(data: &VoxelData, plan: &Plan, ranges: &[Range<u32>; 3]) -> VoxelData {
-    match (data, plan) {
-        (VoxelData::U8(values), Plan::Shift(plan)) => {
-            VoxelData::U8(interpolate_shift(values, plan, ranges))
-        }
-        (VoxelData::U16(values), Plan::Shift(plan)) => {
-            VoxelData::U16(interpolate_shift(values, plan, ranges))
-        }
-        (VoxelData::F32(values), Plan::Shift(plan)) => {
-            VoxelData::F32(interpolate_shift(values, plan, ranges))
-        }
-        (VoxelData::U8(values), Plan::Field(plan)) => {
-            VoxelData::U8(interpolate_field(values, plan, ranges))
-        }
-        (VoxelData::U16(values), Plan::Field(plan)) => {
-            VoxelData::U16(interpolate_field(values, plan, ranges))
-        }
-        (VoxelData::F32(values), Plan::Field(plan)) => {
-            VoxelData::F32(interpolate_field(values, plan, ranges))
-        }
+    macro_rules! resample {
+        ($($variant:ident),*) => {
+            match (data, plan) {
+                $(
+                    (VoxelData::$variant(values), Plan::Shift(plan)) => {
+                        VoxelData::$variant(interpolate_shift(values, plan, ranges))
+                    }
+                    (VoxelData::$variant(values), Plan::Field(plan)) => {
+                        VoxelData::$variant(interpolate_field(values, plan, ranges))
+                    }
+                )*
+            }
+        };
     }
+    resample!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
 }
 
 pub(crate) fn zeros(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData {
@@ -137,11 +132,7 @@ pub(crate) fn zeros(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData 
         .iter()
         .map(|axis| (ranges[*axis].end - ranges[*axis].start) as usize)
         .product();
-    match format {
-        VoxelFormat::U8 => VoxelData::U8(vec![0; count]),
-        VoxelFormat::U16 => VoxelData::U16(vec![0; count]),
-        VoxelFormat::F32 => VoxelData::F32(vec![0.0; count]),
-    }
+    VoxelData::blank(format, count)
 }
 
 fn interpolate_shift<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
@@ -294,25 +285,28 @@ trait Value: Copy {
     fn encode(value: f32) -> Self;
 }
 
-impl Value for u8 {
-    fn decode(self) -> f32 {
-        f32::from(self)
-    }
+macro_rules! value {
+    ($type:ty, $minimum:expr, $maximum:expr) => {
+        impl Value for $type {
+            fn decode(self) -> f32 {
+                self as f32
+            }
 
-    fn encode(value: f32) -> Self {
-        (value + 0.5).clamp(0.0, f32::from(u8::MAX)) as Self
-    }
+            fn encode(value: f32) -> Self {
+                value.round().clamp($minimum as f32, $maximum as f32) as Self
+            }
+        }
+    };
 }
 
-impl Value for u16 {
-    fn decode(self) -> f32 {
-        f32::from(self)
-    }
-
-    fn encode(value: f32) -> Self {
-        (value + 0.5).clamp(0.0, f32::from(u16::MAX)) as Self
-    }
-}
+value!(u8, u8::MIN, u8::MAX);
+value!(u16, u16::MIN, u16::MAX);
+value!(u32, u32::MIN, u32::MAX);
+value!(u64, u64::MIN, u64::MAX);
+value!(i8, i8::MIN, i8::MAX);
+value!(i16, i16::MIN, i16::MAX);
+value!(i32, i32::MIN, i32::MAX);
+value!(i64, i64::MIN, i64::MAX);
 
 impl Value for f32 {
     fn decode(self) -> f32 {
@@ -321,5 +315,15 @@ impl Value for f32 {
 
     fn encode(value: f32) -> Self {
         value
+    }
+}
+
+impl Value for f64 {
+    fn decode(self) -> f32 {
+        self as f32
+    }
+
+    fn encode(value: f32) -> Self {
+        f64::from(value)
     }
 }

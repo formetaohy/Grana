@@ -76,16 +76,22 @@ fn element(
     pending: &mut Option<TiffData>,
 ) -> Result<(), String> {
     match start.name().local_name().as_ref() {
+        b"BinaryOnly" => {
+            ome.binary_only = true;
+            Ok(())
+        }
         b"Pixels" => pixels(start, ome),
         b"Channel" => channel(start, ome),
         b"Plane" => plane(start, ome),
         b"TiffData" => {
+            let ifd = integer_attribute(start, b"IFD")?;
             *pending = Some(TiffData {
-                ifd: integer_attribute(start, b"IFD")?.unwrap_or(0),
+                ifd: ifd.unwrap_or(0),
                 z: integer_attribute(start, b"FirstZ")?.unwrap_or(0),
                 c: integer_attribute(start, b"FirstC")?.unwrap_or(0),
                 t: integer_attribute(start, b"FirstT")?.unwrap_or(0),
-                planes: integer_attribute(start, b"PlaneCount")?.unwrap_or(1),
+                planes: integer_attribute(start, b"PlaneCount")?
+                    .unwrap_or(u32::from(ifd.is_some())),
                 file: attribute(start, b"FileName")?,
             });
             Ok(())

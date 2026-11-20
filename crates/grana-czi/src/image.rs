@@ -292,7 +292,7 @@ fn region(
     cache: &Cache,
     request: &Request<'_>,
 ) -> Result<Vec<u8>, Error> {
-    let sample = sample_bytes(request.format);
+    let sample = request.format.bytes();
     let width = (request.x.end - request.x.start) as usize;
     let height = (request.y.end - request.y.start) as usize;
     let row = width * sample;
@@ -324,7 +324,7 @@ fn blit(
     depth: u32,
     out: &mut [u8],
 ) -> Result<(), Error> {
-    let sample = sample_bytes(request.format);
+    let sample = request.format.bytes();
     let width = (request.x.end - request.x.start) as usize;
     let row = width * sample;
     for tile in plan.tiles() {
@@ -397,20 +397,8 @@ fn window(low: Option<f32>, high: Option<f32>, format: VoxelFormat) -> Option<In
     if high <= low {
         return None;
     }
-    let top = match format {
-        VoxelFormat::U8 => f32::from(u8::MAX),
-        VoxelFormat::U16 => f32::from(u16::MAX),
-        VoxelFormat::F32 => 1.0,
-    };
+    let top = format.display_maximum();
     Some(Intensity::new(low * top, high * top))
-}
-
-fn sample_bytes(format: VoxelFormat) -> usize {
-    match format {
-        VoxelFormat::U8 => 1,
-        VoxelFormat::U16 => 2,
-        VoxelFormat::F32 => 4,
-    }
 }
 
 fn probe(
@@ -439,7 +427,7 @@ fn probe(
         z: &z,
     };
     let bytes = region(store, path, &level.plans, cache, &request)?;
-    let sample = sample_bytes(format);
+    let sample = format.bytes();
     let mut range = (f32::INFINITY, f32::NEG_INFINITY);
     for line in 0..side_y as usize {
         let start = line * side_x as usize * sample;
@@ -450,61 +438,12 @@ fn probe(
 }
 
 fn samples_range(format: VoxelFormat, row: &[u8]) -> (f32, f32) {
-    match format {
-        VoxelFormat::U8 => {
-            let low = row.iter().copied().min().unwrap_or(0);
-            let high = row.iter().copied().max().unwrap_or(0);
-            (f32::from(low), f32::from(high))
-        }
-        VoxelFormat::U16 => {
-            let mut low = u16::MAX;
-            let mut high = 0;
-            let (samples, _) = row.as_chunks::<2>();
-            for sample in samples {
-                let value = u16::from_le_bytes(*sample);
-                low = low.min(value);
-                high = high.max(value);
-            }
-            (f32::from(low), f32::from(high))
-        }
-        VoxelFormat::F32 => {
-            let mut low = f32::INFINITY;
-            let mut high = f32::NEG_INFINITY;
-            let (samples, _) = row.as_chunks::<4>();
-            for sample in samples {
-                let value = f32::from_le_bytes(*sample);
-                if value.is_finite() {
-                    low = low.min(value);
-                    high = high.max(value);
-                }
-            }
-            (low, high)
-        }
-    }
+    let range = VoxelData::reinterpret(format, row).range();
+    (range.min(), range.max())
 }
 
 fn voxels(format: VoxelFormat, bytes: Vec<u8>) -> VoxelData {
-    match format {
-        VoxelFormat::U8 => VoxelData::U8(bytes),
-        VoxelFormat::U16 => {
-            let (samples, _) = bytes.as_chunks::<2>();
-            VoxelData::U16(
-                samples
-                    .iter()
-                    .map(|sample| u16::from_le_bytes(*sample))
-                    .collect(),
-            )
-        }
-        VoxelFormat::F32 => {
-            let (samples, _) = bytes.as_chunks::<4>();
-            VoxelData::F32(
-                samples
-                    .iter()
-                    .map(|sample| f32::from_le_bytes(*sample))
-                    .collect(),
-            )
-        }
-    }
+    VoxelData::reinterpret(format, &bytes)
 }
 
 pub fn dataset_name(path: &Path) -> String {

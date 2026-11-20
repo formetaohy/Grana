@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use glam::Vec3;
 use grana_archive::{Channel as WriteChannel, Fill, Format, ImageSpec};
 use grana_scene::ObjectSet;
-use grana_volume::{Extent, Intensity, Level, Region};
+use grana_volume::{Extent, Intensity, Level, Region, VoxelFormat};
 use grana_warp::Warps;
 
 use crate::channels::Channels;
@@ -283,6 +283,22 @@ pub fn write_dataset(
         image_total = total;
         progress(done, total);
     };
+    let sample = match format {
+        Format::Zarr => VoxelFormat::F32,
+        Format::Tiff => channels
+            .pyramid()
+            .channels()
+            .iter()
+            .map(|channel| channel.format())
+            .reduce(|held, format| {
+                if held == format {
+                    held
+                } else {
+                    VoxelFormat::F32
+                }
+            })
+            .unwrap_or(VoxelFormat::F32),
+    };
     let mut image = ImageSpec {
         name: &name,
         channels: &write_channels,
@@ -290,7 +306,7 @@ pub fn write_dataset(
         placement,
         frames,
         interval: Some(interval),
-        sample: grana_archive::Sample::Float,
+        sample,
         fill: Fill::EveryLevel(&fill),
         cancel,
         progress: &mut image_progress,

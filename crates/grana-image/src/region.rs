@@ -7,11 +7,7 @@ pub(crate) fn allocate(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelDa
         .iter()
         .map(|range| u64::from(range.end - range.start))
         .product::<u64>() as usize;
-    match format {
-        VoxelFormat::U8 => VoxelData::U8(vec![0; count]),
-        VoxelFormat::U16 => VoxelData::U16(vec![0; count]),
-        VoxelFormat::F32 => VoxelData::F32(vec![0.0; count]),
-    }
+    VoxelData::blank(format, count)
 }
 
 pub(crate) fn copy_intersection(
@@ -31,36 +27,25 @@ pub(crate) fn copy_intersection(
     let out_dims = dims(out_ranges);
     let source_origin = origin(source_ranges);
     let source_dims = dims(source_ranges);
-    match (out, source) {
-        (VoxelData::U8(out), VoxelData::U8(source)) => copy(
-            out,
-            out_dims,
-            out_origin,
-            source,
-            source_dims,
-            source_origin,
-            &overlap,
-        ),
-        (VoxelData::U16(out), VoxelData::U16(source)) => copy(
-            out,
-            out_dims,
-            out_origin,
-            source,
-            source_dims,
-            source_origin,
-            &overlap,
-        ),
-        (VoxelData::F32(out), VoxelData::F32(source)) => copy(
-            out,
-            out_dims,
-            out_origin,
-            source,
-            source_dims,
-            source_origin,
-            &overlap,
-        ),
-        _ => panic!("a resolved brick carries the voxel format of its level"),
+    macro_rules! copy_arms {
+        ($($variant:ident),*) => {
+            match (out, source) {
+                $(
+                    (VoxelData::$variant(out), VoxelData::$variant(source)) => copy(
+                        out,
+                        out_dims,
+                        out_origin,
+                        source,
+                        source_dims,
+                        source_origin,
+                        &overlap,
+                    ),
+                )*
+                _ => panic!("a resolved brick carries the voxel format of its level"),
+            }
+        };
     }
+    copy_arms!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
 }
 
 fn origin(ranges: &[Range<u32>; 3]) -> [u32; 3] {

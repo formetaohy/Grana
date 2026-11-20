@@ -2834,6 +2834,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
+name = "fax"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70ed8646f3993cad0585c6669ffba6f7e5440a0bfb0a1f16600cae33ce7cf307"
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4065,6 +4071,7 @@ dependencies = [
 name = "grana-tiff"
 version = "0.2.2"
 dependencies = [
+ "fax 0.3.0",
  "flate2",
  "grana-archive",
  "grana-file",
@@ -4072,6 +4079,9 @@ dependencies = [
  "grana-store",
  "grana-volume",
  "thiserror 2.0.21",
+ "weezl 0.2.1",
+ "zstd 0.13.3",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -7964,7 +7974,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b63feaf3343d35b6ca4d50483f94843803b0f51634937cc2ec519fc32232bc52"
 dependencies = [
- "fax",
+ "fax 0.2.7",
  "flate2",
  "half",
  "quick-error",

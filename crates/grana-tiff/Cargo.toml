@@ -14,6 +14,10 @@ grana-store = { workspace = true }
 flate2 = { workspace = true }
 grana-volume = { workspace = true }
 thiserror = { workspace = true }
+weezl = { workspace = true }
+fax = { workspace = true }
+zune-jpeg = { workspace = true }
+zstd = { workspace = true }
 
 [lints]
 workspace = true

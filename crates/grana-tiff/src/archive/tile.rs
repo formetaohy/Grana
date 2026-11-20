@@ -2,16 +2,12 @@ use std::io::Write;
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use grana_archive::{Filler, Sample};
-use grana_volume::Level;
+use grana_archive::Filler;
+use grana_volume::{Level, VoxelFormat};
 
 pub(crate) const SIDE: u32 = 256;
 
 const BLOCK: usize = (SIDE * SIDE) as usize;
-
-const MAXIMUM_16: f32 = u16::MAX as f32;
-
-const MAXIMUM_8: f32 = u8::MAX as f32;
 
 #[derive(Clone, Copy)]
 pub(crate) struct LevelInfo {
@@ -75,12 +71,11 @@ pub(crate) struct Tile {
 }
 
 impl Tile {
-    pub(crate) fn new(sample: Sample) -> Self {
-        let texel = bytes(sample);
+    pub(crate) fn new(sample: VoxelFormat) -> Self {
         Self {
             block: vec![0.0; BLOCK],
             scratch: vec![0.0; BLOCK],
-            raw: vec![0; BLOCK * texel],
+            raw: vec![0; BLOCK * sample.bytes()],
             compressed: Vec::new(),
         }
     }
@@ -91,7 +86,7 @@ impl Tile {
         info: LevelInfo,
         column: u32,
         row: u32,
-        sample: Sample,
+        sample: VoxelFormat,
         fill: &Filler<'_>,
     ) -> Result<u64, String> {
         let origin = [column * SIDE, row * SIDE, request.z];
@@ -129,22 +124,65 @@ impl Tile {
         Ok(self.compressed.len() as u64)
     }
 
-    fn encode_block(&mut self, sample: Sample) {
+    fn encode_block(&mut self, sample: VoxelFormat) {
         match sample {
-            Sample::Float => {
+            VoxelFormat::U8 => {
+                for (slot, value) in self.raw.iter_mut().zip(&self.block) {
+                    *slot = value.round().clamp(0.0, f32::from(u8::MAX)) as u8;
+                }
+            }
+            VoxelFormat::U16 => {
+                for (slot, value) in self.raw.as_chunks_mut::<2>().0.iter_mut().zip(&self.block) {
+                    let unit = value.round().clamp(0.0, f32::from(u16::MAX)) as u16;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            VoxelFormat::U64 => {
+                for (slot, value) in self.raw.as_chunks_mut::<8>().0.iter_mut().zip(&self.block) {
+                    let unit = value.round().clamp(0.0, u64::MAX as f32) as u64;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            VoxelFormat::I64 => {
+                for (slot, value) in self.raw.as_chunks_mut::<8>().0.iter_mut().zip(&self.block) {
+                    let unit = value.round().clamp(i64::MIN as f32, i64::MAX as f32) as i64;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            VoxelFormat::U32 => {
+                for (slot, value) in self.raw.as_chunks_mut::<4>().0.iter_mut().zip(&self.block) {
+                    let unit = value.round().clamp(0.0, u32::MAX as f32) as u32;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            VoxelFormat::I8 => {
+                for (slot, value) in self.raw.iter_mut().zip(&self.block) {
+                    *slot = value.round().clamp(f32::from(i8::MIN), f32::from(i8::MAX)) as i8 as u8;
+                }
+            }
+            VoxelFormat::I16 => {
+                for (slot, value) in self.raw.as_chunks_mut::<2>().0.iter_mut().zip(&self.block) {
+                    let unit = value
+                        .round()
+                        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+                        as i16;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            VoxelFormat::I32 => {
+                for (slot, value) in self.raw.as_chunks_mut::<4>().0.iter_mut().zip(&self.block) {
+                    let unit = value.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                    slot.copy_from_slice(&unit.to_le_bytes());
+                }
+            }
+            VoxelFormat::F32 => {
                 for (slot, value) in self.raw.as_chunks_mut::<4>().0.iter_mut().zip(&self.block) {
                     slot.copy_from_slice(&value.to_le_bytes());
                 }
             }
-            Sample::Unsigned16 => {
-                for (slot, value) in self.raw.as_chunks_mut::<2>().0.iter_mut().zip(&self.block) {
-                    let unit = (value.clamp(0.0, 1.0) * MAXIMUM_16).round() as u16;
-                    slot.copy_from_slice(&unit.to_le_bytes());
-                }
-            }
-            Sample::Unsigned8 => {
-                for (slot, value) in self.raw.iter_mut().zip(&self.block) {
-                    *slot = (value.clamp(0.0, 1.0) * MAXIMUM_8).round() as u8;
+            VoxelFormat::F64 => {
+                for (slot, value) in self.raw.as_chunks_mut::<8>().0.iter_mut().zip(&self.block) {
+                    slot.copy_from_slice(&f64::from(*value).to_le_bytes());
                 }
             }
         }
@@ -152,13 +190,5 @@ impl Tile {
 
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.compressed
-    }
-}
-
-pub(crate) fn bytes(sample: Sample) -> usize {
-    match sample {
-        Sample::Float => size_of::<f32>(),
-        Sample::Unsigned16 => size_of::<u16>(),
-        Sample::Unsigned8 => size_of::<u8>(),
     }
 }

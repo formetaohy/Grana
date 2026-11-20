@@ -64,7 +64,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             placement: [1.5, -2.0, 3.0],
             frames: 2,
             interval: Some(0.5),
-            sample: grana_archive::Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -160,11 +160,11 @@ fn exports_a_tiled_pyramid_ome_tiff() {
     let data = exported
         .read_region(0, 0, 0, 0..24, 0..16, 0..8)
         .expect("the exported channel reads");
-    let VoxelData::F32(values) = data else {
-        panic!("the exported channel stores float voxels");
+    let VoxelData::U16(values) = data else {
+        panic!("the exported channel keeps the voxel type of its dataset");
     };
     assert!(
-        values.iter().all(|value| *value == 7.0),
+        values.iter().all(|value| *value == 7),
         "the exported channel keeps its voxels"
     );
 
@@ -251,8 +251,7 @@ fn writes_a_sixteen_bit_ome_tiff() {
         for y in 0..length[1] {
             for x in 0..length[0] {
                 let index = (origin[0] + x) as usize + size[0] as usize * (origin[1] + y) as usize;
-                data[(x + length[0] * y) as usize] =
-                    f32::from(pixels[index * 3 + channel]) / f32::from(u16::MAX);
+                data[(x + length[0] * y) as usize] = f32::from(pixels[index * 3 + channel]);
             }
         }
         Ok(())
@@ -267,7 +266,7 @@ fn writes_a_sixteen_bit_ome_tiff() {
             placement: [0.0; 3],
             frames: 1,
             interval: Some(2.0),
-            sample: grana_archive::Sample::Unsigned16,
+            sample: grana_volume::VoxelFormat::U16,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -351,7 +350,7 @@ fn writes_a_sharded_ome_zarr_level() {
             placement: [0.0; 3],
             frames: 1,
             interval: Some(1.0),
-            sample: grana_archive::Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -459,7 +458,7 @@ fn write_zarr(root: &std::path::Path) {
             placement: [1.5, -2.0, 3.0],
             frames: 2,
             interval: Some(1.5),
-            sample: grana_archive::Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -638,7 +637,7 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
             placement: [0.0; 3],
             frames: 1,
             interval: Some(1.0),
-            sample: grana_archive::Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -1177,7 +1176,7 @@ fn writes_and_reads_a_label_image() {
             placement: [0.0; 3],
             frames: 2,
             interval: Some(1.0),
-            sample: grana_archive::Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: Fill::EveryLevel(&image_fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,

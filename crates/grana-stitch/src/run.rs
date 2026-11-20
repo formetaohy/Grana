@@ -106,7 +106,7 @@ pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
         placement: mosaic.placement,
         frames: mosaic.frames,
         interval: Some(mosaic.interval),
-        sample: grana_archive::Sample::Float,
+        sample: grana_volume::VoxelFormat::F32,
         fill: Fill::FinestLevel(&fill),
         cancel,
         progress: &mut progress,

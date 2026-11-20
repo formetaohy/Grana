@@ -1010,17 +1010,18 @@ pub fn masked(data: &VoxelData, ranges: &[Range<u32>; 3], mask: &Mask) -> VoxelD
     let width = (ranges[0].end - ranges[0].start).max(1);
     let height = (ranges[1].end - ranges[1].start).max(1);
     let depth = (ranges[2].end - ranges[2].start).max(1);
-    match data {
-        VoxelData::U8(values) => {
-            VoxelData::U8(mask_values(values, ranges, width, height, depth, mask))
-        }
-        VoxelData::U16(values) => {
-            VoxelData::U16(mask_values(values, ranges, width, height, depth, mask))
-        }
-        VoxelData::F32(values) => {
-            VoxelData::F32(mask_values(values, ranges, width, height, depth, mask))
-        }
+    macro_rules! mask {
+        ($($variant:ident),*) => {
+            match data {
+                $(
+                    VoxelData::$variant(values) => VoxelData::$variant(mask_values(
+                        values, ranges, width, height, depth, mask,
+                    )),
+                )*
+            }
+        };
     }
+    mask!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
 }
 
 fn mask_values<T: Copy + Default>(

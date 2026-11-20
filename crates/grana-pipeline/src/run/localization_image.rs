@@ -5,7 +5,7 @@ use grana_analysis::localization::{
     CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationDepth,
     LocalizationGeometry, LocalizationLayout, LocalizationPreview, LocalizationRenderer,
 };
-use grana_archive::{Channel, Fill, ImageSpec, Sample};
+use grana_archive::{Channel, Fill, ImageSpec};
 use grana_object::LocalizationSpec;
 use grana_raster::{Bitmap, Overlay};
 use grana_volume::{Extent, Level, Spacing};
@@ -229,7 +229,7 @@ fn write_stack(
             let start = line * extent[0] as usize;
             let values = &mut data[start..start + extent[0] as usize];
             for (column, value) in values.iter_mut().enumerate() {
-                *value = f32::from(row[(origin[0] as usize + column) * 3 + channel]) / 255.0;
+                *value = f32::from(row[(origin[0] as usize + column) * 3 + channel]);
             }
         }
         Ok(())
@@ -244,7 +244,7 @@ fn write_stack(
             placement: [0.0; 3],
             frames: 1,
             interval: None,
-            sample: Sample::Unsigned8,
+            sample: grana_volume::VoxelFormat::U8,
             fill: Fill::EveryLevel(&fill),
             cancel,
             progress: &mut progress,

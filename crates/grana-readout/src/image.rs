@@ -130,11 +130,17 @@ impl Image {
         let width = (ranges[0].end - ranges[0].start) as usize;
         let height = (ranges[1].end - ranges[1].start) as usize;
         let depth = (ranges[2].end - ranges[2].start) as usize;
-        let mut data = plane::allocate(view.format, width * height * depth);
+        let mut data = VoxelData::blank(view.format, width * height * depth);
         match &mut data {
             VoxelData::U8(values) => self.read_planes(time, level, view, &ranges, values)?,
             VoxelData::U16(values) => self.read_planes(time, level, view, &ranges, values)?,
             VoxelData::F32(values) => self.read_planes(time, level, view, &ranges, values)?,
+            _ => {
+                return Err(Error::region(
+                    &self.path,
+                    "the scene decodes a voxel type this platform cannot hold",
+                ));
+            }
         }
         Ok(data)
     }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-use grana_archive::{Channel, Fill, ImageSpec, Sample};
+use grana_archive::{Channel, Fill, ImageSpec};
 use grana_render::Pixels;
 use grana_scene::Scene;
 use grana_video::{Recorder, Sequence};
@@ -80,7 +80,7 @@ impl Sink {
                                 texel[channel * 4..channel * 4 + 4]
                                     .try_into()
                                     .expect("a picture sample spans four bytes"),
-                            );
+                            ) * f32::from(u16::MAX);
                         }
                     }
                     Ok(())
@@ -96,7 +96,7 @@ impl Sink {
                         placement: [0.0; 3],
                         frames: 1,
                         interval: Some(scene.dataset.frame_interval()),
-                        sample: Sample::Unsigned16,
+                        sample: grana_volume::VoxelFormat::U16,
                         fill: Fill::EveryLevel(&fill),
                         cancel: &cancel,
                         progress: &mut progress,

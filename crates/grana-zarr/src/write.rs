@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_archive::{Fill, Filler, ImageSpec, Sample, Written};
-use grana_volume::Level;
+use grana_archive::{Fill, Filler, ImageSpec, Written};
+use grana_volume::{Level, VoxelFormat};
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
 use zarrs::array::{Array, ArrayBuilder, ArraySubset, data_type};
@@ -39,7 +39,7 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
 pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
     assert_eq!(
         spec.sample,
-        Sample::Float,
+        VoxelFormat::F32,
         "an OME-Zarr image stores float samples"
     );
     assert!(

@@ -748,7 +748,7 @@ fn field(path: &Path, extent: Extent) {
             placement: [0.0; 3],
             frames: 1,
             interval: Some(1.0),
-            sample: grana_archive::Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: grana_archive::Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,

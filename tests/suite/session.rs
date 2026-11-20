@@ -1622,7 +1622,7 @@ fn open_path(session: &mut Session, path: std::path::PathBuf) {
 }
 
 fn rewrite_field(path: &std::path::Path, extent: Extent) {
-    use grana_archive::{Channel, Fill, ImageSpec, Sample};
+    use grana_archive::{Channel, Fill, ImageSpec};
     use grana_volume::Level;
 
     std::fs::remove_dir_all(path).expect("the field clears");
@@ -1646,7 +1646,7 @@ fn rewrite_field(path: &std::path::Path, extent: Extent) {
             placement: [0.0; 3],
             frames: 1,
             interval: Some(1.0),
-            sample: Sample::Float,
+            sample: grana_volume::VoxelFormat::F32,
             fill: Fill::EveryLevel(&fill),
             cancel: &AtomicBool::new(false),
             progress: &mut progress,

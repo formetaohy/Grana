@@ -1,4 +1,5 @@
-use grana_archive::{ImageSpec, Sample};
+use grana_archive::ImageSpec;
+use grana_volume::VoxelFormat;
 
 use super::tile::SIDE;
 
@@ -29,6 +30,7 @@ const BLACK_IS_ZERO: u16 = 1;
 const CHUNKY: u16 = 1;
 const UNSIGNED: u16 = 1;
 const FLOAT: u16 = 3;
+const SIGNED: u16 = 2;
 
 const SOFTWARE: &str = "Grana";
 const COUNT_BYTES: usize = 8;
@@ -73,7 +75,7 @@ pub(crate) fn page(
     height: u32,
     tiles: usize,
     sub_levels: usize,
-    sample: Sample,
+    sample: VoxelFormat,
     description: Option<&str>,
 ) -> (Vec<u8>, Spots) {
     block(
@@ -87,7 +89,7 @@ pub(crate) fn sub_page(
     width: u32,
     height: u32,
     tiles: usize,
-    sample: Sample,
+    sample: VoxelFormat,
 ) -> (Vec<u8>, Spots) {
     block(at, entries(width, height, tiles, 0, sample, None))
 }
@@ -97,7 +99,7 @@ fn entries(
     height: u32,
     tiles: usize,
     sub_levels: usize,
-    sample: Sample,
+    sample: VoxelFormat,
     description: Option<&str>,
 ) -> Vec<Entry> {
     let mut entries = Vec::with_capacity(15);
@@ -136,23 +138,20 @@ fn entries(
     entries.push(scalar(
         TAG_SAMPLE_FORMAT,
         KIND_SHORT,
-        u64::from(format(sample)),
+        u64::from(sample_format(sample)),
     ));
     entries
 }
 
-fn bits(sample: Sample) -> u16 {
-    match sample {
-        Sample::Float => 32,
-        Sample::Unsigned16 => 16,
-        Sample::Unsigned8 => 8,
-    }
+fn bits(sample: VoxelFormat) -> u16 {
+    (sample.bytes() * 8) as u16
 }
 
-fn format(sample: Sample) -> u16 {
+fn sample_format(sample: VoxelFormat) -> u16 {
     match sample {
-        Sample::Float => FLOAT,
-        Sample::Unsigned16 | Sample::Unsigned8 => UNSIGNED,
+        VoxelFormat::U8 | VoxelFormat::U16 | VoxelFormat::U32 | VoxelFormat::U64 => UNSIGNED,
+        VoxelFormat::I8 | VoxelFormat::I16 | VoxelFormat::I32 | VoxelFormat::I64 => SIGNED,
+        VoxelFormat::F32 | VoxelFormat::F64 => FLOAT,
     }
 }
 
@@ -320,11 +319,18 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
     xml
 }
 
-fn kind(sample: Sample) -> &'static str {
+fn kind(sample: VoxelFormat) -> &'static str {
     match sample {
-        Sample::Float => "float",
-        Sample::Unsigned16 => "uint16",
-        Sample::Unsigned8 => "uint8",
+        VoxelFormat::U8 => "uint8",
+        VoxelFormat::U16 => "uint16",
+        VoxelFormat::U32 => "uint32",
+        VoxelFormat::U64 => "uint64",
+        VoxelFormat::I8 => "int8",
+        VoxelFormat::I16 => "int16",
+        VoxelFormat::I32 => "int32",
+        VoxelFormat::I64 => "int64",
+        VoxelFormat::F32 => "float",
+        VoxelFormat::F64 => "double",
     }
 }
 

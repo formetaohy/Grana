@@ -136,11 +136,18 @@ impl Field {
             chunk.voxel_count(),
             "the chunk matches its extent"
         );
-        match data {
-            VoxelData::U8(values) => self.fold(values, chunk, offset, shift, f64::from),
-            VoxelData::U16(values) => self.fold(values, chunk, offset, shift, f64::from),
-            VoxelData::F32(values) => self.fold(values, chunk, offset, shift, f64::from),
+        macro_rules! fold {
+            ($($variant:ident),*) => {
+                match data {
+                    $(
+                        VoxelData::$variant(values) => {
+                            self.fold(values, chunk, offset, shift, |value| value as f64)
+                        }
+                    )*
+                }
+            };
         }
+        fold!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
     }
 
     fn fold<T: Copy>(
@@ -178,20 +185,37 @@ impl Field {
                 sum / f64::from(*count)
             })
             .collect::<Vec<_>>();
-        match format {
-            VoxelFormat::U8 => VoxelData::U8(
-                mean.into_iter()
-                    .map(|value| value.round().clamp(0.0, f64::from(u8::MAX)) as u8)
-                    .collect(),
-            ),
-            VoxelFormat::U16 => VoxelData::U16(
-                mean.into_iter()
-                    .map(|value| value.round().clamp(0.0, f64::from(u16::MAX)) as u16)
-                    .collect(),
-            ),
-            VoxelFormat::F32 => {
-                VoxelData::F32(mean.into_iter().map(|value| value as f32).collect())
-            }
+        macro_rules! finish {
+            ($($variant:ident => $type:ty),*) => {
+                match format {
+                    $(
+                        VoxelFormat::$variant => VoxelData::$variant(
+                            mean.into_iter()
+                                .map(|value| {
+                                    value.round().clamp(
+                                        <$type>::MIN as f64,
+                                        <$type>::MAX as f64,
+                                    ) as $type
+                                })
+                                .collect(),
+                        ),
+                    )*
+                    VoxelFormat::F32 => {
+                        VoxelData::F32(mean.into_iter().map(|value| value as f32).collect())
+                    }
+                    VoxelFormat::F64 => VoxelData::F64(mean),
+                }
+            };
         }
+        finish!(
+            U8 => u8,
+            U16 => u16,
+            U32 => u32,
+            U64 => u64,
+            I8 => i8,
+            I16 => i16,
+            I32 => i32,
+            I64 => i64
+        )
     }
 }

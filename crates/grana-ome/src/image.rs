@@ -1,6 +1,7 @@
 #[derive(Default)]
 pub struct Image {
     pub name: Option<String>,
+    pub binary_only: bool,
     pub dimension_order: Option<String>,
     pub size_x: Option<u32>,
     pub size_y: Option<u32>,

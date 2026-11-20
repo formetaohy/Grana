@@ -108,11 +108,10 @@ impl ChannelInfo {
         domains: &[Option<Intensity>],
         windows: &[Option<Intensity>],
     ) -> Self {
-        let intensity = match format {
-            VoxelFormat::U8 => Intensity::new(0.0, f32::from(u8::MAX)),
-            VoxelFormat::U16 => Intensity::new(0.0, f32::from(u16::MAX)),
-            VoxelFormat::F32 => first(domains).unwrap_or_else(fallback),
-        };
+        let intensity = format
+            .domain()
+            .or_else(|| first(domains))
+            .unwrap_or_else(fallback);
         let window = first(windows).unwrap_or(intensity);
         Self::new(name, tint, intensity, window, format)
     }

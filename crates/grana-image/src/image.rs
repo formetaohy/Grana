@@ -545,11 +545,7 @@ fn geometry(pyramid: &Pyramid) -> Vec<u8> {
     }
     for channel in pyramid.channels() {
         bytes.extend_from_slice(channel.name().as_bytes());
-        bytes.push(match channel.format() {
-            VoxelFormat::U8 => 0,
-            VoxelFormat::U16 => 1,
-            VoxelFormat::F32 => 2,
-        });
+        bytes.push(channel.format().code());
     }
     bytes
 }

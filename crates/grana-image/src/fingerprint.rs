@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use grana_volume::{Fingerprint, Level, Pyramid, VoxelData, VoxelFormat};
+use grana_volume::{Fingerprint, Level, Pyramid, VoxelData};
 
 use crate::{Error, Image};
 
@@ -55,14 +55,7 @@ fn digest_pyramid(hasher: &mut Sha256, pyramid: &Pyramid) {
         integer(hasher, u64::from(value.to_bits()));
     }
     for channel in pyramid.channels() {
-        integer(
-            hasher,
-            match channel.format() {
-                VoxelFormat::U8 => 0,
-                VoxelFormat::U16 => 1,
-                VoxelFormat::F32 => 2,
-            },
-        );
+        integer(hasher, u64::from(channel.format().code()));
     }
 }
 

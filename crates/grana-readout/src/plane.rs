@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
-use grana_volume::{VoxelData, VoxelFormat};
+use grana_volume::VoxelFormat;
 use openreadout_core::{PixelType, Plane};
 
 pub(crate) type Key = (u32, u32, u32, u32);
@@ -256,14 +256,6 @@ impl Sample for f32 {
         } else {
             plane.pixel_type.sample_f64(&plane.data[at..]) as f32
         }
-    }
-}
-
-pub(crate) fn allocate(format: VoxelFormat, voxels: usize) -> VoxelData {
-    match format {
-        VoxelFormat::U8 => VoxelData::U8(vec![0; voxels]),
-        VoxelFormat::U16 => VoxelData::U16(vec![0; voxels]),
-        VoxelFormat::F32 => VoxelData::F32(vec![0.0; voxels]),
     }
 }
 

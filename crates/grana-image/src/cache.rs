@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const MAGIC: [u8; 8] = *b"GRANATIL";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const HEADER: usize = 80;
 const TRAILER: usize = 4;
 const SUFFIX: &str = "tile";
@@ -91,9 +91,9 @@ impl Store {
             && read_u32(head, 44) == extent.x()
             && read_u32(head, 48) == extent.y()
             && read_u32(head, 52) == extent.z()
-            && head[56] == tag(shape.format)
+            && head[56] == shape.format.code()
             && read_u64(head, 64) == stamp
-            && length == extent.voxel_count() * sample_bytes(shape.format);
+            && length == extent.voxel_count() * shape.format.bytes() as u64;
         if !matches {
             return None;
         }
@@ -133,7 +133,7 @@ impl Store {
         write_u32(&mut head, 44, shape.extent.x());
         write_u32(&mut head, 48, shape.extent.y());
         write_u32(&mut head, 52, shape.extent.z());
-        head[56] = tag(shape.format);
+        head[56] = shape.format.code();
         write_u64(&mut head, 64, stamp);
         write_u64(&mut head, 72, payload.len() as u64);
         let stored = crc(update(update(CRC_SEED, &head), &payload));
@@ -371,59 +371,15 @@ fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
 }
 
 fn size(data: &VoxelData) -> u64 {
-    data.voxel_count() as u64 * sample_bytes(data.format())
-}
-
-fn sample_bytes(format: VoxelFormat) -> u64 {
-    match format {
-        VoxelFormat::U8 => 1,
-        VoxelFormat::U16 => 2,
-        VoxelFormat::F32 => 4,
-    }
-}
-
-fn tag(format: VoxelFormat) -> u8 {
-    match format {
-        VoxelFormat::U8 => 0,
-        VoxelFormat::U16 => 1,
-        VoxelFormat::F32 => 2,
-    }
+    data.bytes()
 }
 
 fn encode(data: &VoxelData) -> Vec<u8> {
-    match data {
-        VoxelData::U8(values) => values.clone(),
-        VoxelData::U16(values) => values
-            .iter()
-            .flat_map(|value| value.to_le_bytes())
-            .collect(),
-        VoxelData::F32(values) => values
-            .iter()
-            .flat_map(|value| value.to_le_bytes())
-            .collect(),
-    }
+    data.to_le_bytes()
 }
 
 fn decode(format: VoxelFormat, bytes: &[u8]) -> VoxelData {
-    match format {
-        VoxelFormat::U8 => VoxelData::U8(bytes.to_vec()),
-        VoxelFormat::U16 => VoxelData::U16(
-            bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|chunk| u16::from_le_bytes(*chunk))
-                .collect(),
-        ),
-        VoxelFormat::F32 => VoxelData::F32(
-            bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|chunk| f32::from_le_bytes(*chunk))
-                .collect(),
-        ),
-    }
+    VoxelData::from_le_bytes(format, bytes)
 }
 
 fn read_u32(bytes: &[u8], at: usize) -> u32 {

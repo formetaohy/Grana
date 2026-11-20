@@ -184,14 +184,7 @@ impl BrickData {
     }
 
     pub fn bytes(&self) -> u64 {
-        self.channels
-            .iter()
-            .map(|channel| match channel {
-                VoxelData::U8(data) => data.len() as u64,
-                VoxelData::U16(data) => 2 * data.len() as u64,
-                VoxelData::F32(data) => 4 * data.len() as u64,
-            })
-            .sum()
+        self.channels.iter().map(VoxelData::bytes).sum()
     }
 }
 
@@ -200,7 +193,14 @@ pub fn blank_brick(format: crate::VoxelFormat) -> VoxelData {
     match format {
         crate::VoxelFormat::U8 => VoxelData::U8(vec![0; voxels]),
         crate::VoxelFormat::U16 => VoxelData::U16(vec![0; voxels]),
+        crate::VoxelFormat::U32 => VoxelData::U32(vec![0; voxels]),
+        crate::VoxelFormat::U64 => VoxelData::U64(vec![0; voxels]),
+        crate::VoxelFormat::I8 => VoxelData::I8(vec![0; voxels]),
+        crate::VoxelFormat::I16 => VoxelData::I16(vec![0; voxels]),
+        crate::VoxelFormat::I32 => VoxelData::I32(vec![0; voxels]),
+        crate::VoxelFormat::I64 => VoxelData::I64(vec![0; voxels]),
         crate::VoxelFormat::F32 => VoxelData::F32(vec![0.0; voxels]),
+        crate::VoxelFormat::F64 => VoxelData::F64(vec![0.0; voxels]),
     }
 }
 
@@ -211,28 +211,28 @@ pub fn pad_brick(
     brick_origin: [u32; 3],
     volume_extent: Extent,
 ) -> VoxelData {
+    macro_rules! lifted {
+        ($variant:ident, $data:expr) => {
+            VoxelData::$variant(pad(
+                $data,
+                source_origin,
+                source_extent,
+                brick_origin,
+                volume_extent,
+            ))
+        };
+    }
     match source {
-        VoxelData::U8(data) => VoxelData::U8(pad(
-            data,
-            source_origin,
-            source_extent,
-            brick_origin,
-            volume_extent,
-        )),
-        VoxelData::U16(data) => VoxelData::U16(pad(
-            data,
-            source_origin,
-            source_extent,
-            brick_origin,
-            volume_extent,
-        )),
-        VoxelData::F32(data) => VoxelData::F32(pad(
-            data,
-            source_origin,
-            source_extent,
-            brick_origin,
-            volume_extent,
-        )),
+        VoxelData::U8(data) => lifted!(U8, data),
+        VoxelData::U16(data) => lifted!(U16, data),
+        VoxelData::U32(data) => lifted!(U32, data),
+        VoxelData::U64(data) => lifted!(U64, data),
+        VoxelData::I8(data) => lifted!(I8, data),
+        VoxelData::I16(data) => lifted!(I16, data),
+        VoxelData::I32(data) => lifted!(I32, data),
+        VoxelData::I64(data) => lifted!(I64, data),
+        VoxelData::F32(data) => lifted!(F32, data),
+        VoxelData::F64(data) => lifted!(F64, data),
     }
 }
 

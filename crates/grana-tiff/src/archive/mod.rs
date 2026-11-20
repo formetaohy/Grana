@@ -5,10 +5,10 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use grana_archive::{Fill, Filler, ImageSpec, Sample, Written};
+use grana_archive::{Fill, Filler, ImageSpec, Written};
 
 use crate::Error;
-use tile::{LevelInfo, Request, SIDE, Tile, bytes};
+use tile::{LevelInfo, Request, SIDE, Tile};
 
 const ALIGN: u64 = 8;
 const ZEROS: [u8; 8] = [0; 8];
@@ -21,6 +21,15 @@ const METADATA_OVERHEAD: u64 = 1 << 20;
 
 pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, crate::Error> {
     spec.check();
+    if matches!(
+        spec.sample,
+        grana_volume::VoxelFormat::U64 | grana_volume::VoxelFormat::I64
+    ) {
+        return Err(Error::write(
+            path,
+            "an OME-TIFF cannot carry 64-bit integer samples".to_string(),
+        ));
+    }
     validate(path, spec)?;
     let Fill::EveryLevel(fill) = spec.fill else {
         return Err(Error::write(
@@ -197,9 +206,9 @@ fn align(at: u64) -> u64 {
     at.div_ceil(ALIGN) * ALIGN
 }
 
-fn planned(planes: u64, per_plane: u64, levels: usize, sample: Sample) -> u64 {
+fn planned(planes: u64, per_plane: u64, levels: usize, sample: grana_volume::VoxelFormat) -> u64 {
     let tile =
-        u64::from(SIDE) * u64::from(SIDE) * bytes(sample) as u64 + TILE_OVERHEAD + POINTER_BYTES;
+        u64::from(SIDE) * u64::from(SIDE) * sample.bytes() as u64 + TILE_OVERHEAD + POINTER_BYTES;
     planes * (per_plane * tile + (levels as u64 + 1) * PAGE_OVERHEAD) + METADATA_OVERHEAD
 }
 
@@ -257,7 +266,7 @@ impl Sink {
         &mut self,
         request: &Request,
         info: LevelInfo,
-        sample: Sample,
+        sample: grana_volume::VoxelFormat,
         fill: &Filler<'_>,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {

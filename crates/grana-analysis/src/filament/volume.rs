@@ -44,7 +44,14 @@ pub(super) fn mask(
     match data {
         VoxelData::U8(values) => fill(values, grid, field, threshold, gate, mask),
         VoxelData::U16(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::U32(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::U64(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::I8(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::I16(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::I32(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::I64(values) => fill(values, grid, field, threshold, gate, mask),
         VoxelData::F32(values) => fill(values, grid, field, threshold, gate, mask),
+        VoxelData::F64(values) => fill(values, grid, field, threshold, gate, mask),
     }
 }
 
@@ -191,20 +198,33 @@ trait Sample: Copy {
     fn value(self) -> f32;
 }
 
-impl Sample for u8 {
-    fn value(self) -> f32 {
-        f32::from(self)
-    }
+macro_rules! sample {
+    ($type:ty) => {
+        impl Sample for $type {
+            fn value(self) -> f32 {
+                self as f32
+            }
+        }
+    };
 }
 
-impl Sample for u16 {
-    fn value(self) -> f32 {
-        f32::from(self)
-    }
-}
+sample!(u8);
+sample!(u16);
+sample!(u32);
+sample!(u64);
+sample!(i8);
+sample!(i16);
+sample!(i32);
+sample!(i64);
 
 impl Sample for f32 {
     fn value(self) -> f32 {
         self
+    }
+}
+
+impl Sample for f64 {
+    fn value(self) -> f32 {
+        self as f32
     }
 }
