@@ -10,6 +10,7 @@ use grana_ui::Key;
 
 use crate::overlay::Overlay;
 use crate::panel::Panel;
+use crate::prompt::Prompt;
 use crate::relation_panel::Body as RelationBody;
 use crate::stage::Stage;
 
@@ -250,6 +251,8 @@ pub struct Workspace {
     pub comparison_open: Option<(String, String)>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
     pub settings: Settings,
+    pub prompt: Option<Prompt>,
+    pub(crate) prompt_last: Option<Prompt>,
     pub language: grana_i18n::Language,
     pub chrome: crate::chrome::ChromeView,
     pub(crate) overlay: Overlay,
@@ -297,6 +300,8 @@ impl Default for Workspace {
             comparison_open: None,
             batch_chart: crate::batch_panel::Chart::default(),
             settings: Settings::default(),
+            prompt: None,
+            prompt_last: None,
             language: grana_i18n::Language::English,
             chrome: crate::chrome::ChromeView::default(),
             overlay: Overlay::default(),
@@ -307,6 +312,11 @@ impl Default for Workspace {
 
 impl Workspace {
     pub(crate) fn prepare(&mut self, view: &grana_session::SessionView<'_>, size: Vec2) {
+        if let Some(prompt) = self.prompt.as_ref()
+            && self.prompt_last.as_ref() != Some(prompt)
+        {
+            self.prompt_last = Some(prompt.clone());
+        }
         if let Some(scene) = view.scene {
             self.overlay.refresh(scene);
         }
@@ -366,6 +376,7 @@ impl Workspace {
         self.annotation_drag = None;
         self.remote_open = false;
         self.renaming = None;
+        self.prompt = None;
         self.expanded.clear();
         self.classifier.clear();
         self.relation = None;

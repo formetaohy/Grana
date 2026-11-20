@@ -1,19 +1,8 @@
-use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use grana_session::{Command, Effects, Held, Transfer};
 
 use super::{App, Resume};
-
-pub(super) struct Release {
-    steps: VecDeque<Step>,
-    next: Resume,
-}
-
-enum Step {
-    Save { series: usize, path: PathBuf },
-    Discard { series: usize },
-}
 
 impl App {
     pub(super) fn apply(&mut self, commands: Vec<Command>) -> bool {
@@ -24,30 +13,28 @@ impl App {
         let view = self.view_state();
         self.session.observe_view(view);
         for command in commands {
-            let resume = Resume::Command(command.clone());
-            if command.replaces_document() && !self.release_document(resume.clone()) {
-                continue;
+            if command.replaces_document()
+                && !self.release_document(Resume::Command(command.clone()))
+            {
+                return false;
             }
-            let effects = self.session.execute(command);
-            if !effects.held.is_empty() {
-                if let Some(steps) = self.ask_fields(effects.held) {
-                    self.release = Some(Release {
-                        steps,
-                        next: resume,
-                    });
-                    if let Ok(next) = self.drain_release() {
-                        self.resume = Some(next);
-                    }
-                }
-                self.request_redraw();
-                return true;
-            }
-            if self.react(effects) {
+            if self.execute(command) {
                 return true;
             }
         }
         self.validate_mask();
         false
+    }
+
+    pub(super) fn execute(&mut self, command: Command) -> bool {
+        let resume = Resume::Command(command.clone());
+        let effects = self.session.execute(command);
+        if !effects.held.is_empty() {
+            self.begin_fields(effects.held, resume);
+            self.request_redraw();
+            return true;
+        }
+        self.react(effects)
     }
 
     pub(super) fn react(&mut self, effects: Effects) -> bool {
@@ -161,181 +148,6 @@ impl App {
         if !held {
             self.workspace.mask = None;
             self.mask_path.clear();
-        }
-    }
-
-    pub(super) fn release_document(&mut self, next: Resume) -> bool {
-        if self.session.access().viewer() {
-            return true;
-        }
-        if self.resume.is_some() || self.release.is_some() {
-            return false;
-        }
-        if self.session.transferring() {
-            self.resume = Some(next);
-            return false;
-        }
-        if !next.replaces_document() {
-            return true;
-        }
-        if self.session.dirty() {
-            let language = self.workspace.language;
-            let answer = rfd::MessageDialog::new()
-                .set_title(grana_i18n::app::unsaved_analysis(language))
-                .set_description(grana_i18n::app::unsaved_detail(language))
-                .set_level(rfd::MessageLevel::Warning)
-                .set_buttons(rfd::MessageButtons::YesNoCancel)
-                .show();
-            match answer {
-                rfd::MessageDialogResult::No => {}
-                rfd::MessageDialogResult::Yes => {
-                    let view = self.view_state();
-                    let Some(path) = self.project_path(false) else {
-                        return false;
-                    };
-                    self.session.save_project(path, view);
-                    self.resume = Some(next);
-                    return false;
-                }
-                _ => return false,
-            }
-        }
-        let held = if next.replaces_dataset() {
-            self.session.held()
-        } else {
-            Vec::new()
-        };
-        if held.is_empty() {
-            return true;
-        }
-        let Some(steps) = self.ask_fields(held) else {
-            return false;
-        };
-        self.release = Some(Release { steps, next });
-        self.drain_release().is_ok()
-    }
-
-    fn ask_fields(&mut self, held: Vec<Held>) -> Option<VecDeque<Step>> {
-        let language = self.workspace.language;
-        let mut steps = VecDeque::new();
-        for field in held {
-            if !field.savable {
-                let answer = rfd::MessageDialog::new()
-                    .set_title(grana_i18n::app::unsaved_analysis(language))
-                    .set_description(grana_i18n::app::unsaved_unsavable(language, &field.name))
-                    .set_level(rfd::MessageLevel::Warning)
-                    .set_buttons(rfd::MessageButtons::OkCancel)
-                    .show();
-                if !matches!(answer, rfd::MessageDialogResult::Ok) {
-                    return None;
-                }
-                steps.push_back(Step::Discard {
-                    series: field.series,
-                });
-                continue;
-            }
-            let answer = rfd::MessageDialog::new()
-                .set_title(grana_i18n::app::unsaved_analysis(language))
-                .set_description(grana_i18n::app::unsaved_field(language, &field.name))
-                .set_level(rfd::MessageLevel::Warning)
-                .set_buttons(rfd::MessageButtons::YesNoCancel)
-                .show();
-            match answer {
-                rfd::MessageDialogResult::No => steps.push_back(Step::Discard {
-                    series: field.series,
-                }),
-                rfd::MessageDialogResult::Yes => {
-                    let path = self.field_project(&field)?;
-                    steps.push_back(Step::Save {
-                        series: field.series,
-                        path,
-                    });
-                }
-                _ => return None,
-            }
-        }
-        Some(steps)
-    }
-
-    fn field_project(&self, field: &Held) -> Option<PathBuf> {
-        if let Some(path) = field.project.as_ref() {
-            return Some(path.clone());
-        }
-        let language = self.workspace.language;
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::save_grana_project(language))
-            .set_file_name(format!(
-                "{}.{}",
-                grana_session::slug(&field.name),
-                grana_session::PROJECT_EXTENSION
-            ))
-            .add_filter(
-                grana_i18n::app::grana_project(language),
-                &[grana_session::PROJECT_EXTENSION],
-            )
-            .save_file()
-    }
-
-    fn run_step(&mut self, step: Step) -> bool {
-        match step {
-            Step::Discard { series } => {
-                if self.session.discard_field(series) {
-                    return false;
-                }
-            }
-            Step::Save { series, path } => {
-                if self.session.save_field(series, path) {
-                    return true;
-                }
-            }
-        }
-        self.release = None;
-        true
-    }
-
-    fn drain_release(&mut self) -> Result<Resume, ()> {
-        while let Some(step) = self
-            .release
-            .as_mut()
-            .and_then(|release| release.steps.pop_front())
-        {
-            if self.run_step(step) {
-                return Err(());
-            }
-        }
-        let release = self
-            .release
-            .take()
-            .expect("a drained release carries the transfer it defers");
-        Ok(release.next)
-    }
-
-    pub(super) fn follow_resume(&mut self) -> bool {
-        if self.session.transferring() {
-            return false;
-        }
-        if self.release.is_some() {
-            match self.drain_release() {
-                Ok(next) => self.resume = Some(next),
-                Err(()) => return false,
-            }
-        }
-        let Some(next) = self.resume.take() else {
-            return false;
-        };
-        if !self.release_document(next.clone()) {
-            self.request_redraw();
-            return false;
-        }
-        match next {
-            Resume::Exit => {
-                self.exiting = true;
-                true
-            }
-            Resume::Command(command) => {
-                self.apply(vec![command]);
-                false
-            }
         }
     }
 

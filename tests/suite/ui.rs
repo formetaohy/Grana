@@ -1,8 +1,10 @@
-use grana_ui::{Button, Element, Event, InputKey, Layout, Length, Size, TextStyle, Ui, Vec2};
+use grana_editor::{Message, Prompt, PromptChoice, Workspace};
+use grana_ui::{Button, Element, Event, InputKey, Layout, Length, Rect, Size, TextStyle, Ui, Vec2};
 
 use crate::support::gpu;
 
 const SIZE: Vec2 = Vec2::new(320.0, 180.0);
+const PROMPT_SIZE: Vec2 = Vec2::new(640.0, 360.0);
 
 #[test]
 fn a_press_keeps_the_control_it_went_down_on() {
@@ -124,6 +126,93 @@ fn submits_a_field_on_enter_and_commits_it_out_of_view() {
         ["removed"],
         "a field whose node disappears commits its text"
     );
+}
+
+#[test]
+fn the_unsaved_prompt_covers_the_editor_and_resolves_its_choice() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut ui: Ui<Message> = Ui::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
+    );
+    ui.update(PROMPT_SIZE, 1.0, 0.0);
+    ui.resize([PROMPT_SIZE.x as u32, PROMPT_SIZE.y as u32]);
+    let mut workspace = Workspace::default();
+    workspace.prompt = Some(Prompt::Unsaved);
+    let element = prompt_screen(&mut ui, &workspace);
+    ui.present(element);
+    for name in [
+        "prompt.title",
+        "prompt.body",
+        "prompt.cancel",
+        "prompt.discard",
+        "prompt.save",
+    ] {
+        assert!(
+            ui.bounds(name).is_some(),
+            "the drawn prompt lays out {name}"
+        );
+    }
+    let behind = ui
+        .bounds("behind")
+        .expect("the editor target is laid out")
+        .center();
+    for event in [Event::Moved(behind), Event::Down(Button::Primary)] {
+        ui.input_mut().push(event);
+    }
+    let pressed = ui.update(PROMPT_SIZE, 1.0, 0.1);
+    assert!(
+        pressed.is_empty(),
+        "the prompt scrim swallows a press meant for the editor"
+    );
+    let element = prompt_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Up(Button::Primary));
+    let released = ui.update(PROMPT_SIZE, 1.0, 0.2);
+    assert!(
+        released.is_empty(),
+        "releasing over the scrim reaches no editor control"
+    );
+    let cancel = ui
+        .bounds("prompt.cancel")
+        .expect("the prompt offers a cancel action")
+        .center();
+    for event in [Event::Moved(cancel), Event::Down(Button::Primary)] {
+        ui.input_mut().push(event);
+    }
+    assert!(ui.update(PROMPT_SIZE, 1.0, 0.3).is_empty());
+    let element = prompt_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Up(Button::Primary));
+    let resolved = ui.update(PROMPT_SIZE, 1.0, 0.4);
+    assert!(
+        matches!(
+            resolved.as_slice(),
+            [Message::ResolvePrompt(PromptChoice::Cancel)]
+        ),
+        "the drawn prompt resolves its choice instead of a native popup"
+    );
+}
+
+fn prompt_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
+    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
+    let behind = Element::new(Layout {
+        size: Size::new(Length::Fixed(120.0), Length::Fixed(48.0)),
+        ..Layout::row()
+    })
+    .named("behind")
+    .at(Rect::from_min_size(Vec2::ZERO, Vec2::new(120.0, 48.0)))
+    .press(Message::FitView);
+    let mut elements = vec![behind];
+    {
+        let mut ctx = ui.build();
+        elements.extend(grana_editor::prompt::view(&mut ctx, full, workspace));
+    }
+    grana_ui::place(full, elements)
 }
 
 fn screen() -> Element<'static, &'static str> {

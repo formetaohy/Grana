@@ -99,10 +99,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate checksums
-        run: |
-          (cd dist && sha256sum Grana-* > SHA256SUMS.txt)
-
       - name: Generate notes
         run: |
           if previous=$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null); then
@@ -110,26 +106,15 @@ jobs:
           else
             compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME"
           fi
-          {
-            echo "**Full Changelog**: $compare"
-            echo
-            echo "Windows 11 (64-bit)."
-            echo
-            echo "### Downloads"
-            echo
-            for installer in dist/Grana-*; do
-              printf -- '- %s\n' "$(basename "$installer")"
-            done
-            echo
-            echo "Checksums are listed in SHA256SUMS.txt."
-          } > notes.md
+          echo "**Full Changelog**: $compare" > notes.md
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          assets=(dist/*.msi dist/*.exe)
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag dist/*
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag "${assets[@]}"
           fi

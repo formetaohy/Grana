@@ -15,6 +15,7 @@ mod overlay;
 mod panel;
 mod plate_panel;
 mod plot;
+pub mod prompt;
 mod relation_panel;
 mod settings_panel;
 mod shell;
@@ -33,6 +34,7 @@ pub use fitting::slice_step;
 pub use grana_chart::Page as ChartPage;
 pub use message::{Message, PlotEvent};
 pub use panel::{Frame, Panel, apply, build};
+pub use prompt::{Choice as PromptChoice, Prompt};
 pub use shell::STARTUP_SIZE;
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{

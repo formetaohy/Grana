@@ -154,6 +154,7 @@ grana-animation = { workspace = true }
 grana-archive = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
+grana-editor = { workspace = true }
 grana-exec = { workspace = true }
 grana-figure = { workspace = true }
 grana-file = { workspace = true }

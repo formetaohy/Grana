@@ -6,6 +6,8 @@ labels! {
     close => "Close" / "关闭";
     done => "Done" / "完成";
     clear => "Clear" / "清除";
+    discard => "Discard" / "放弃";
+    ok => "OK" / "确定";
     remove => "Remove" / "移除";
     save => "Save" / "保存";
     open => "Open" / "打开";

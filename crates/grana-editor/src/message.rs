@@ -120,5 +120,6 @@ pub enum Message {
         side: usize,
         delta: f32,
     },
+    ResolvePrompt(crate::prompt::Choice),
     Window(WindowAction),
 }

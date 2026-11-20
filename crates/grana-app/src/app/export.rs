@@ -513,14 +513,4 @@ impl App {
     pub(super) fn set_output_message(&mut self, message: &str) {
         self.output = Some(message.to_string());
     }
-
-    pub(super) fn confirm_export_close(&self) {
-        let language = self.workspace.language;
-        rfd::MessageDialog::new()
-            .set_title(grana_i18n::app::export_running(language))
-            .set_description(grana_i18n::app::export_running_detail(language))
-            .set_level(rfd::MessageLevel::Info)
-            .set_buttons(rfd::MessageButtons::Ok)
-            .show();
-    }
 }

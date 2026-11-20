@@ -100,8 +100,17 @@ impl App {
             );
             frame
         };
-        let exited = self.apply(frame.commands);
-        self.perform_window(frame.window);
-        exited
+        let Frame {
+            commands,
+            window,
+            prompt,
+            ..
+        } = frame;
+        if let Some(choice) = prompt {
+            self.resolve_prompt(choice);
+        }
+        let exited = self.apply(commands);
+        self.perform_window(window);
+        exited || self.exiting
     }
 }

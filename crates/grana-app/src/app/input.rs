@@ -41,6 +41,15 @@ impl App {
         if event.state != ElementState::Pressed || event.repeat {
             return;
         }
+        if self.workspace.prompt.is_some() {
+            if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+                self.dispatch(grana_editor::Message::ResolvePrompt(
+                    grana_editor::PromptChoice::Cancel,
+                ));
+            }
+            self.request_redraw();
+            return;
+        }
         let key = interface_key(&event.logical_key);
         let claimed = key.is_some_and(|key| {
             self.surface

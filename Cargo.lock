@@ -3381,6 +3381,7 @@ dependencies = [
  "grana-app",
  "grana-archive",
  "grana-display",
+ "grana-editor",
  "grana-engine",
  "grana-exec",
  "grana-figure",

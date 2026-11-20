@@ -26,6 +26,7 @@ mod fail;
 mod frame;
 mod input;
 mod placement;
+mod release;
 mod surface;
 mod sync;
 mod time;
@@ -33,12 +34,12 @@ mod viewport;
 
 use self::export::Export;
 use self::placement::{Fit, Placement};
+use self::release::{Deferred, Release};
 use self::surface::Surface;
 use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
 use crate::stream::Stream;
 use crate::window;
-use command::Release;
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
 const EXPORT_POLL: Duration = Duration::from_millis(200);
@@ -115,6 +116,8 @@ pub struct App {
     export: Export,
     resume: Option<Resume>,
     release: Option<Release>,
+    deferred: Option<Deferred>,
+    dirty_released: bool,
     autosave_at: Option<Instant>,
     changed_at: Option<Instant>,
     revision: Revision,
@@ -187,6 +190,8 @@ impl App {
             export: Export::new(),
             resume: None,
             release: None,
+            deferred: None,
+            dirty_released: false,
             autosave_at: None,
             changed_at: None,
             revision: Revision::ZERO,
@@ -316,6 +321,12 @@ impl App {
             self.workspace.seed = None;
         }
         let (frame, wait) = self.run_ui(size);
+        if let Some(choice) = frame.prompt {
+            self.resolve_prompt(choice);
+            if self.exiting {
+                return;
+            }
+        }
         let animating = wait.is_some_and(|wait| wait.is_zero());
         self.place_window(&frame);
         self.animating = animating;
@@ -420,7 +431,12 @@ impl App {
             Some(STREAM_POLL)
         } else if self.export.running() {
             Some(EXPORT_POLL)
-        } else if self.capture.is_none() && self.session.access().author() && self.session.dirty() {
+        } else if self.capture.is_none()
+            && self.deferred.is_none()
+            && self.workspace.prompt.is_none()
+            && self.session.access().author()
+            && self.session.dirty()
+        {
             Some(self.autosave_wait())
         } else {
             None

@@ -141,6 +141,7 @@ impl Panel {
 pub struct Frame {
     pub commands: Vec<Command>,
     pub window: Vec<crate::chrome::WindowAction>,
+    pub prompt: Option<crate::prompt::Choice>,
     pub startup: Option<Vec2>,
 }
 
@@ -245,6 +246,7 @@ fn view_elements<'a>(
     elements.extend(stage::toast(ctx, layout, state));
     elements.extend(crate::panel::remote(ctx, full, state.workspace.remote_open));
     elements.extend(crate::settings_panel::view(ctx, full, state.workspace));
+    elements.extend(crate::prompt::view(ctx, full, state.workspace));
     elements
 }
 

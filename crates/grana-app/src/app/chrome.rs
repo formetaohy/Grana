@@ -97,8 +97,11 @@ impl App {
             event_loop.exit();
             return;
         }
+        if self.deferred.is_some() || self.workspace.prompt.is_some() {
+            return;
+        }
         if self.export.running() {
-            self.confirm_export_close();
+            self.notice_export();
             return;
         }
         if self.release_document(Resume::Exit) {

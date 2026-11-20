@@ -14,8 +14,12 @@ pub fn apply(
     frame: &mut Frame,
 ) {
     let commands = &mut frame.commands;
+    let blocked = workspace.prompt.is_some();
     let queue = std::collections::VecDeque::from(actions);
     for action in queue {
+        if blocked && !matches!(action, Message::ResolvePrompt(_)) {
+            continue;
+        }
         match action {
             Message::Noop => {}
             Message::Copy(text) => ui.copy(&text),
@@ -387,6 +391,10 @@ pub fn apply(
                     region.set_half(sizes);
                     commands.push(Command::SetRegion(region));
                 }
+            }
+            Message::ResolvePrompt(choice) => {
+                workspace.prompt = None;
+                frame.prompt = Some(choice);
             }
             Message::Window(action) => frame.window.push(action),
         }

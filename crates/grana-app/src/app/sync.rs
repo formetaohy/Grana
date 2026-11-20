@@ -65,7 +65,11 @@ impl App {
     }
 
     pub(super) fn autosave(&mut self) {
-        if self.capture.is_some() || self.session.access().viewer() {
+        if self.capture.is_some()
+            || self.deferred.is_some()
+            || self.workspace.prompt.is_some()
+            || self.session.access().viewer()
+        {
             return;
         }
         let now = Instant::now();
