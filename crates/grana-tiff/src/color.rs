@@ -143,6 +143,12 @@ impl ColorModel {
         samples: usize,
         data: &VoxelData,
     ) -> VoxelData {
+        if let Self::Palette { color_map } = self
+            && let VoxelData::U8(indices) = data
+            && format == VoxelFormat::U8
+        {
+            return color_map.expand(indices);
+        }
         let pixels = data.voxel_count() / samples;
         let count = pixels * 3;
         let scale = f64::from(maximum);
@@ -221,6 +227,19 @@ impl ColorMap {
 
     fn at(&self, index: usize) -> [f32; 3] {
         self.entries[index.min(self.entries.len() - 1)]
+    }
+
+    fn expand(&self, indices: &[u8]) -> VoxelData {
+        let scale = f64::from(u8::MAX);
+        let table = std::array::from_fn::<[u8; 3], 256, _>(|index| {
+            self.at(index)
+                .map(|component| (f64::from(component).clamp(0.0, 1.0) * scale).round() as u8)
+        });
+        let mut values = vec![0u8; indices.len() * 3];
+        for (index, color) in indices.iter().zip(values.as_chunks_mut::<3>().0) {
+            *color = table[*index as usize];
+        }
+        VoxelData::U8(values)
     }
 }
 

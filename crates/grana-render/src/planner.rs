@@ -757,10 +757,10 @@ fn hold_level(
     let Some(current) = current.filter(|current| *current < levels) else {
         return target;
     };
-    if target < current && footprint > spacing(current - 1) / LEVEL_HYSTERESIS {
+    if target < current && footprint >= spacing(current) / LEVEL_HYSTERESIS {
         return current;
     }
-    if target > current && footprint < spacing(current) * LEVEL_HYSTERESIS {
+    if target > current && footprint <= spacing(target) * LEVEL_HYSTERESIS {
         return current;
     }
     target

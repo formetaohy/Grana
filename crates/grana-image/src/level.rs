@@ -1,9 +1,8 @@
 use std::ops::Range;
 
-use grana_volume::{BRICK_SIDE, Extent, Pyramid, VoxelData, VoxelFormat};
+use grana_volume::{BRICK_SIDE, Extent, Pyramid};
 
 const RESOLVED_LIMIT: usize = 8;
-const CHUNK: u32 = 64;
 
 pub(crate) fn extended(pyramid: &Pyramid) -> Pyramid {
     let mut levels = pyramid.levels().to_vec();
@@ -29,7 +28,6 @@ pub(crate) fn extended(pyramid: &Pyramid) -> Pyramid {
 pub(crate) struct Scale {
     source: usize,
     shift: u32,
-    extent: Extent,
     source_extent: Extent,
 }
 
@@ -41,13 +39,8 @@ impl Scale {
             source: stored - 1,
             shift: u32::try_from(level - stored + 1)
                 .expect("the pyramid holds fewer than 4G levels"),
-            extent: pyramid.level(level).extent(),
             source_extent: pyramid.level(stored - 1).extent(),
         }
-    }
-
-    pub(crate) fn extent(&self) -> Extent {
-        self.extent
     }
 
     pub(crate) fn source(&self) -> usize {
@@ -66,156 +59,10 @@ impl Scale {
             clamped(&ranges[2], ratio, self.source_extent.z()),
         ]
     }
-
-    pub(crate) fn base(&self, ranges: &[Range<u32>; 3]) -> [u32; 3] {
-        [
-            ranges[0].start << self.shift,
-            ranges[1].start << self.shift,
-            ranges[2].start << self.shift,
-        ]
-    }
-
-    pub(crate) fn within(&self, ranges: &[Range<u32>; 3]) -> bool {
-        ranges[0].start < ranges[0].end
-            && ranges[0].end <= self.extent.x()
-            && ranges[1].start < ranges[1].end
-            && ranges[1].end <= self.extent.y()
-            && ranges[2].start < ranges[2].end
-            && ranges[2].end <= self.extent.z()
-    }
 }
 
 fn clamped(range: &Range<u32>, ratio: u32, limit: u32) -> Range<u32> {
     let start = (range.start * ratio).min(limit);
     let end = (range.end * ratio).min(limit);
     start..end.max(start)
-}
-
-pub(crate) fn chunks<E>(
-    ranges: &[Range<u32>; 3],
-    mut visit: impl FnMut([Range<u32>; 3]) -> Result<(), E>,
-) -> Result<(), E> {
-    let mut z = ranges[2].start;
-    while z < ranges[2].end {
-        let z_end = (z + CHUNK).min(ranges[2].end);
-        let mut y = ranges[1].start;
-        while y < ranges[1].end {
-            let y_end = (y + CHUNK).min(ranges[1].end);
-            let mut x = ranges[0].start;
-            while x < ranges[0].end {
-                let x_end = (x + CHUNK).min(ranges[0].end);
-                visit([x..x_end, y..y_end, z..z_end])?;
-                x = x_end;
-            }
-            y = y_end;
-        }
-        z = z_end;
-    }
-    Ok(())
-}
-
-pub(crate) struct Field {
-    extent: Extent,
-    sums: Vec<f64>,
-    counts: Vec<u32>,
-}
-
-impl Field {
-    pub(crate) fn new(extent: Extent) -> Self {
-        let count = extent.voxel_count() as usize;
-        Self {
-            extent,
-            sums: vec![0.0; count],
-            counts: vec![0; count],
-        }
-    }
-
-    pub(crate) fn add(&mut self, data: &VoxelData, chunk: Extent, offset: [u32; 3], shift: u32) {
-        assert_eq!(
-            data.voxel_count() as u64,
-            chunk.voxel_count(),
-            "the chunk matches its extent"
-        );
-        macro_rules! fold {
-            ($($variant:ident),*) => {
-                match data {
-                    $(
-                        VoxelData::$variant(values) => {
-                            self.fold(values, chunk, offset, shift, |value| value as f64)
-                        }
-                    )*
-                }
-            };
-        }
-        fold!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
-    }
-
-    fn fold<T: Copy>(
-        &mut self,
-        values: &[T],
-        chunk: Extent,
-        offset: [u32; 3],
-        shift: u32,
-        cast: fn(T) -> f64,
-    ) {
-        assert!(shift > 0, "a resolved level halves the stored level");
-        let width = chunk.x() as usize;
-        let plane = width * chunk.y() as usize;
-        for z in 0..chunk.z() as usize {
-            let row = ((offset[2] as usize + z) >> shift) as u32;
-            for y in 0..chunk.y() as usize {
-                let column = ((offset[1] as usize + y) >> shift) as u32;
-                let base = self.extent.index(0, column, row) as usize;
-                for x in 0..width {
-                    let index = base + ((offset[0] as usize + x) >> shift);
-                    self.sums[index] += cast(values[z * plane + y * width + x]);
-                    self.counts[index] += 1;
-                }
-            }
-        }
-    }
-
-    pub(crate) fn finish(self, format: VoxelFormat) -> VoxelData {
-        let mean = self
-            .sums
-            .iter()
-            .zip(&self.counts)
-            .map(|(sum, count)| {
-                assert!(*count > 0, "every resolved voxel averages a stored voxel");
-                sum / f64::from(*count)
-            })
-            .collect::<Vec<_>>();
-        macro_rules! finish {
-            ($($variant:ident => $type:ty),*) => {
-                match format {
-                    $(
-                        VoxelFormat::$variant => VoxelData::$variant(
-                            mean.into_iter()
-                                .map(|value| {
-                                    value.round().clamp(
-                                        <$type>::MIN as f64,
-                                        <$type>::MAX as f64,
-                                    ) as $type
-                                })
-                                .collect(),
-                        ),
-                    )*
-                    VoxelFormat::F32 => {
-                        VoxelData::F32(mean.into_iter().map(|value| value as f32).collect())
-                    }
-                    VoxelFormat::F64 => VoxelData::F64(mean),
-                }
-            };
-        }
-        finish!(
-            U8 => u8,
-            U16 => u16,
-            U32 => u32,
-            U64 => u64,
-            I8 => i8,
-            I16 => i16,
-            I32 => i32,
-            I64 => i64
-        )
-    }
 }

@@ -822,7 +822,22 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
         window: Intensity::new(0.0, 255.0),
     }];
     let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
-        Ok(VoxelData::F32(vec![value; block.voxels()]))
+        let mut values = Vec::with_capacity(block.voxels());
+        for z in 0..block.extent[2] {
+            for y in 0..block.extent[1] {
+                for x in 0..block.extent[0] {
+                    values.push(gradient(
+                        value,
+                        [
+                            block.origin[0] + x,
+                            block.origin[1] + y,
+                            block.origin[2] + z,
+                        ],
+                    ));
+                }
+            }
+        }
+        Ok(VoxelData::F32(values))
     };
     let mut progress = |_, _| {};
     write_image(
@@ -851,6 +866,14 @@ fn derived_values(image: &Image, ranges: &[std::ops::Range<u32>; 3]) -> Vec<f32>
         panic!("the fixture stores float voxels");
     };
     values
+}
+
+fn gradient(value: f32, index: [u32; 3]) -> f32 {
+    value + (index[0] * 3 + index[1] * 5 + index[2] * 7) as f32
+}
+
+fn derived_gradient(value: f32, index: [u32; 3]) -> f32 {
+    value + (index[0] * 6 + index[1] * 10 + index[2] * 14) as f32 + 7.5
 }
 
 #[test]
@@ -886,12 +909,7 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
     let source = Source::remote(server.url().to_string());
     let first =
         Image::open_with_cache(&source, Some(cache.clone())).expect("the remote image opens");
-    assert!(
-        derived_values(&first, &ranges)
-            .iter()
-            .all(|value| *value == 64.0),
-        "the derived level averages the stored voxels"
-    );
+    assert_derived(&first, &ranges, 64.0);
     assert!(
         server.downloads() > 0,
         "the first read downloads the stored shards"
@@ -900,12 +918,7 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
     server.reset();
     let cached =
         Image::open_with_cache(&source, Some(cache.clone())).expect("the remote image reopens");
-    assert!(
-        derived_values(&cached, &ranges)
-            .iter()
-            .all(|value| *value == 64.0),
-        "a reopened image reads its derived level"
-    );
+    assert_derived(&cached, &ranges, 64.0);
     assert_eq!(
         server.downloads(),
         0,
@@ -916,16 +929,34 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
     server.reset();
     let rewritten =
         Image::open_with_cache(&source, Some(cache)).expect("the rewritten image opens");
-    assert!(
-        derived_values(&rewritten, &ranges)
-            .iter()
-            .all(|value| *value == 200.0),
-        "a rewritten shard restamps the derived level"
-    );
+    assert_derived(&rewritten, &ranges, 200.0);
     assert!(
         server.downloads() > 0,
         "a rewritten shard invalidates the disk cache"
     );
+}
+
+fn assert_derived(image: &Image, ranges: &[std::ops::Range<u32>; 3], value: f32) {
+    let read = derived_values(image, ranges);
+    let derived = image.pyramid().level(1).extent();
+    assert_eq!(
+        read.len() as u64,
+        derived.voxel_count(),
+        "the derived level holds its extent"
+    );
+    for z in ranges[2].clone() {
+        for y in ranges[1].clone() {
+            for x in ranges[0].clone() {
+                let index = x + derived.x() * (y + derived.y() * z);
+                let expected = derived_gradient(value, [x, y, z]);
+                assert!(
+                    (read[index as usize] - expected).abs() < 1.0e-3,
+                    "the derived voxel {x} {y} {z} averages its block: {} against {expected}",
+                    read[index as usize]
+                );
+            }
+        }
+    }
 }
 
 fn chunk_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {

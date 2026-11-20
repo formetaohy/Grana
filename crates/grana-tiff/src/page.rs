@@ -252,11 +252,6 @@ impl Page {
             .layout
             .covering(&region, self.width, self.height, sample)
         {
-            let held = self.block(plane, sample, &block)?;
-            let pixels = block.width as usize * block.rows as usize;
-            let channels = (held.voxel_count() / pixels) as u32;
-            let index = plane.channel.min(channels - 1);
-            let extracted = held.gather(index as usize, channels as usize, pixels);
             let left = block.origin.0.max(plane.x.0);
             let right = (block.origin.0 + block.width).min(plane.x.1);
             let top = block.origin.1.max(plane.y.0);
@@ -264,11 +259,24 @@ impl Page {
             if left >= right || top >= bottom {
                 continue;
             }
+            let held = self.block(plane, sample, &block)?;
+            let pixels = block.width as usize * block.rows as usize;
+            let channels = (held.voxel_count() / pixels) as u32;
+            let index = plane.channel.min(channels - 1);
+            let width = right - left;
+            let extracted = extract(
+                &held,
+                block.width as usize,
+                channels as usize,
+                index as usize,
+                left - block.origin.0..right - block.origin.0,
+                top - block.origin.1..bottom - block.origin.1,
+            );
             out.blit(
                 &extracted,
-                Placement::new(block.width, [left - block.origin.0, top - block.origin.1]),
+                Placement::new(width, [0, 0]),
                 Placement::new(plane.x.1 - plane.x.0, [left - plane.x.0, top - plane.y.0]),
-                right - left,
+                width,
                 bottom - top,
             );
         }
@@ -477,6 +485,53 @@ impl Page {
             VoxelData::F64(values) => values.iter_mut().for_each(|value| *value = 1.0 - *value),
         }
     }
+}
+
+fn extract(
+    data: &VoxelData,
+    width: usize,
+    channels: usize,
+    index: usize,
+    x: std::ops::Range<u32>,
+    y: std::ops::Range<u32>,
+) -> VoxelData {
+    macro_rules! arms {
+        ($($variant:ident),*) => {
+            match data {
+                $(VoxelData::$variant(values) => VoxelData::$variant(extract_values(
+                    values, width, channels, index, &x, &y,
+                )),)*
+            }
+        };
+    }
+    arms!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+}
+
+fn extract_values<T: Copy>(
+    values: &[T],
+    width: usize,
+    channels: usize,
+    index: usize,
+    x: &std::ops::Range<u32>,
+    y: &std::ops::Range<u32>,
+) -> Vec<T> {
+    assert!(
+        index < channels,
+        "the extracted sample belongs to the block"
+    );
+    assert!(
+        values.len() >= width * channels * y.end as usize,
+        "the extracted window lies inside the block"
+    );
+    let span = (x.end - x.start) as usize;
+    let mut extracted = Vec::with_capacity(span * (y.end - y.start) as usize);
+    for row in y.start as usize..y.end as usize {
+        let start = (row * width + x.start as usize) * channels + index;
+        for column in 0..span {
+            extracted.push(values[start + column * channels]);
+        }
+    }
+    extracted
 }
 
 fn unpack(
