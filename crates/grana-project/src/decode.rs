@@ -2249,6 +2249,7 @@ impl Decode for ColocCost {
 impl Decode for ColocFrame {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let moments = ColocMoments::decode(reader)?;
+        let raw = ColocMoments::decode(reader)?;
         let a_by_b = Vec::<f64>::decode(reader)?;
         let b_by_a = Vec::<f64>::decode(reader)?;
         if a_by_b.is_empty() || a_by_b.len() != b_by_a.len() || a_by_b.len() > COLOC_BINS_MAX {
@@ -2261,7 +2262,10 @@ impl Decode for ColocFrame {
         {
             return Err(FAULT_VALUE);
         }
-        Ok(Self::from_parts(moments, a_by_b, b_by_a))
+        if moments.voxels() != raw.voxels() {
+            return Err(FAULT_SHAPE);
+        }
+        Ok(Self::from_parts(moments, raw, a_by_b, b_by_a))
     }
 }
 

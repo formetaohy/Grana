@@ -290,6 +290,34 @@ impl ColocCost {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColocSample {
+    raw: f32,
+    unit: f32,
+}
+
+impl ColocSample {
+    pub fn new(raw: f32, unit: f32) -> Self {
+        assert!(
+            raw.is_finite(),
+            "a colocalization sample reads a finite intensity"
+        );
+        assert!(
+            unit.is_finite() && (0.0..=1.0).contains(&unit),
+            "a colocalization sample lies inside its intensity window"
+        );
+        Self { raw, unit }
+    }
+
+    pub fn raw(self) -> f32 {
+        self.raw
+    }
+
+    pub fn unit(self) -> f32 {
+        self.unit
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ColocMoments {
     correlation: Pearson,
@@ -462,6 +490,7 @@ impl ColocJoint {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ColocFrame {
     moments: ColocMoments,
+    raw: ColocMoments,
     a_by_b: Vec<f64>,
     b_by_a: Vec<f64>,
 }
@@ -471,18 +500,29 @@ impl ColocFrame {
         assert!(bins > 0, "a colocalization frame holds intensity bins");
         Self {
             moments: ColocMoments::default(),
+            raw: ColocMoments::default(),
             a_by_b: vec![0.0; bins],
             b_by_a: vec![0.0; bins],
         }
     }
 
-    pub fn from_parts(moments: ColocMoments, a_by_b: Vec<f64>, b_by_a: Vec<f64>) -> Self {
+    pub fn from_parts(
+        moments: ColocMoments,
+        raw: ColocMoments,
+        a_by_b: Vec<f64>,
+        b_by_a: Vec<f64>,
+    ) -> Self {
         assert!(
             !a_by_b.is_empty() && a_by_b.len() == b_by_a.len(),
             "a colocalization frame carries one sum per intensity bin and channel"
         );
+        assert!(
+            moments.voxels() == raw.voxels(),
+            "a colocalization frame counts its voxels in both intensity spaces"
+        );
         Self {
             moments,
+            raw,
             a_by_b,
             b_by_a,
         }
@@ -496,6 +536,10 @@ impl ColocFrame {
         self.moments
     }
 
+    pub fn raw(&self) -> ColocMoments {
+        self.raw
+    }
+
     pub fn a_by_b(&self) -> &[f64] {
         &self.a_by_b
     }
@@ -504,13 +548,14 @@ impl ColocFrame {
         &self.b_by_a
     }
 
-    pub fn push(&mut self, a: f32, b: f32) {
+    pub fn push(&mut self, a: ColocSample, b: ColocSample) {
         let bins = self.bins();
-        let bin_a = bin(a, bins);
-        let bin_b = bin(b, bins);
-        self.moments.push(f64::from(a), f64::from(b));
-        self.a_by_b[bin_b] += f64::from(a);
-        self.b_by_a[bin_a] += f64::from(b);
+        let bin_a = bin(a.unit(), bins);
+        let bin_b = bin(b.unit(), bins);
+        self.moments.push(f64::from(a.unit()), f64::from(b.unit()));
+        self.raw.push(f64::from(a.raw()), f64::from(b.raw()));
+        self.a_by_b[bin_b] += f64::from(a.raw());
+        self.b_by_a[bin_a] += f64::from(b.raw());
     }
 
     pub fn merge(&mut self, other: &Self) {
@@ -519,6 +564,7 @@ impl ColocFrame {
             "colocalization frames merge at one bin resolution"
         );
         self.moments.merge(&other.moments);
+        self.raw.merge(&other.raw);
         for (target, source) in self.a_by_b.iter_mut().zip(&other.a_by_b) {
             *target += source;
         }
@@ -529,13 +575,13 @@ impl ColocFrame {
 
     pub fn statistics(&self, thresholds: ColocThresholds) -> ColocStatistics {
         let [cut_a, cut_b] = thresholds.cuts(self.bins());
-        let [a_mass, b_mass, ..] = self.moments.sums();
+        let [a_mass, b_mass, ..] = self.raw.sums();
         let first = (a_mass > 0.0).then(|| (above(&self.a_by_b, cut_b) / a_mass).clamp(0.0, 1.0));
         let second = (b_mass > 0.0).then(|| (above(&self.b_by_a, cut_a) / b_mass).clamp(0.0, 1.0));
         ColocStatistics {
-            voxels: self.moments.voxels(),
-            pearson: self.moments.pearson(),
-            overlap: self.moments.overlap(),
+            voxels: self.raw.voxels(),
+            pearson: self.raw.pearson(),
+            overlap: self.raw.overlap(),
             manders: [first, second],
             significance: None,
         }

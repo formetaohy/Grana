@@ -3,9 +3,9 @@ use std::ops::Range;
 
 use grana_measure::{ColocPair, ObjectColocValue};
 use grana_object::ObjectAnchor;
-use grana_volume::{Intensity, Level, Region};
+use grana_volume::{Level, Region};
 
-use crate::coloc::{ColocRead, scale, unit};
+use crate::coloc::ColocRead;
 use crate::schedule;
 use crate::work;
 
@@ -43,7 +43,6 @@ pub struct ObjectColocScan {
     pair: ColocPair,
     level: usize,
     tiles: Vec<[Range<u32>; 3]>,
-    scales: [[f32; 2]; 2],
     objects: usize,
 }
 
@@ -53,7 +52,6 @@ impl ObjectColocScan {
         level: usize,
         info: Level,
         region: Region,
-        intensities: [Intensity; 2],
         objects: usize,
         anchors: &[ObjectAnchor],
     ) -> Self {
@@ -61,16 +59,11 @@ impl ObjectColocScan {
             objects > 0,
             "an object colocalization measures at least one object"
         );
-        assert!(
-            intensities.iter().all(|intensity| intensity.span() > 0.0),
-            "an object colocalization selects channels with an intensity range"
-        );
         let tiles = object_coloc_tiles(info, region, anchors);
         Self {
             pair,
             level,
             tiles,
-            scales: intensities.map(scale),
             objects,
         }
     }
@@ -107,7 +100,6 @@ impl ObjectColocScan {
                         read,
                         time,
                         pair: self.pair,
-                        scales: self.scales,
                         objects: self.objects,
                     },
                 )
@@ -203,7 +195,6 @@ struct TileContext<'a> {
     read: &'a ColocRead<'a>,
     time: u32,
     pair: ColocPair,
-    scales: [[f32; 2]; 2],
     objects: usize,
 }
 
@@ -230,7 +221,6 @@ impl Tile {
             read,
             time,
             pair,
-            scales,
             objects,
         } = *context;
         if self.sums.is_empty() {
@@ -271,9 +261,8 @@ impl Tile {
             if self.sums[base] == 0.0 {
                 self.touched.push(*label);
             }
-            let first = unit(scales[0], a.value(index));
-            let second = unit(scales[1], b.value(index));
-            let [first, second] = [first, second].map(f64::from);
+            let first = f64::from(a.value(index));
+            let second = f64::from(b.value(index));
             self.sums[base] += 1.0;
             self.sums[base + 1] += first;
             self.sums[base + 2] += second;

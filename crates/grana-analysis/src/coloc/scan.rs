@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, ColocCell, ColocCost, ColocFrame, ColocJoint, ColocPair,
-    ColocSeries, ColocSeriesInfo, ColocSignificance,
+    ColocSample, ColocSeries, ColocSeriesInfo, ColocSignificance,
 };
 use grana_volume::{Intensity, Level, Region, VoxelData};
 
@@ -384,15 +384,20 @@ impl ColocWorker {
                     let compact = compact_x
                         + compact_dims[0] as usize
                             * (compact_y + compact_dims[1] as usize * compact_z);
-                    let first = unit(scales[0], a.value(voxel));
-                    let second = unit(scales[1], b.value(voxel));
+                    let raw_a = a.value(voxel);
+                    let raw_b = b.value(voxel);
+                    let first = unit(scales[0], raw_a);
+                    let second = unit(scales[1], raw_b);
                     let compact = u32::try_from(compact)
                         .expect("a colocalization sample grid fits the u32 index");
                     self.indices.push(compact);
-                    self.a.push(first);
-                    self.b.push(second);
+                    self.a.push(raw_a);
+                    self.b.push(raw_b);
                     if mask.is_none_or(|mask| mask.contains_cell(global)) {
-                        frame.push(first, second);
+                        frame.push(
+                            ColocSample::new(raw_a, first),
+                            ColocSample::new(raw_b, second),
+                        );
                         let bin = working_bin(first) + WORKING_BINS * working_bin(second);
                         if self.counts[bin] == 0 {
                             self.touched.push(bin as u32);
@@ -456,7 +461,7 @@ fn aggregate(frame: &ColocFrame, bins: usize) -> ColocFrame {
     for (index, value) in frame.b_by_a().iter().enumerate() {
         b_by_a[index * bins / WORKING_BINS] += value;
     }
-    ColocFrame::from_parts(frame.moments(), a_by_b, b_by_a)
+    ColocFrame::from_parts(frame.moments(), frame.raw(), a_by_b, b_by_a)
 }
 
 fn aggregate_cells(cells: &BTreeMap<u32, u64>, bins: usize) -> Vec<ColocCell> {

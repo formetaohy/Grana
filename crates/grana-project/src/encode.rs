@@ -1405,6 +1405,7 @@ impl Encode for ColocCost {
 impl Encode for ColocFrame {
     fn encode(&self, writer: &mut Encoder<'_>) {
         self.moments().encode(writer);
+        self.raw().encode(writer);
         self.a_by_b().encode(writer);
         self.b_by_a().encode(writer);
     }

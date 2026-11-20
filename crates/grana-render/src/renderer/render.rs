@@ -238,12 +238,6 @@ impl Renderer {
                 Ok(ray) => ray,
                 Err(detail) => return Err(Halt::Fail(detail)),
             };
-        let reserved = residence.reserve(outlook.replan);
-        if shot.awaits && !outlook.ready && reserved.is_none() {
-            info.rebuilt = false;
-            info.fading = false;
-            return Err(Halt::Hold(*info));
-        }
         let layers = shot.translucent.then_some(crate::fragment::LAYERS);
         if let Err(detail) = allocate::targets(
             device,
@@ -260,6 +254,12 @@ impl Renderer {
             },
         ) {
             return Err(Halt::Fail(detail));
+        }
+        let reserved = residence.reserve(outlook.replan);
+        if shot.awaits && !outlook.ready && reserved.is_none() {
+            info.rebuilt = false;
+            info.fading = false;
+            return Err(Halt::Hold(*info));
         }
         let planned = plan::shadow(plan::ShadowFrame {
             scene,

@@ -23,5 +23,6 @@ pub(crate) const TAG_SUB_IFDS: u16 = 330;
 pub(crate) const TAG_EXTRA_SAMPLES: u16 = 338;
 pub(crate) const TAG_SAMPLE_FORMAT: u16 = 339;
 pub(crate) const TAG_JPEG_TABLES: u16 = 347;
+pub(crate) const TAG_NEW_SUBFILE_TYPE: u16 = 254;
 pub(crate) const TAG_YCBCR_COEFFICIENTS: u16 = 529;
 pub(crate) const TAG_YCBCR_SUBSAMPLING: u16 = 530;

@@ -68,6 +68,8 @@ pub(super) fn levels(
         ceiling as u64,
         first as u64,
         u64::from(u32::from(measured)),
+        level_key(current),
+        level_key(rejected),
     ]);
     let (fit, overflowed) = if measured {
         fit_measured(fit_view, measure, rejected)
@@ -93,6 +95,10 @@ pub(super) fn levels(
         levels: Levels { ladder, capacity },
         overflowed,
     }
+}
+
+fn level_key(level: Option<usize>) -> u64 {
+    level.map_or(u64::MAX, |level| level as u64)
 }
 
 pub(super) struct Tables<'a> {

@@ -42,9 +42,7 @@ pub(crate) struct Residence {
     style: Option<u64>,
     content: u32,
     generation: u64,
-    pin: u64,
     prefetched: HashSet<BrickRequest>,
-    observed: HashSet<(usize, u32)>,
     prefetch_key: Option<u64>,
     prefetch_issued: Vec<BrickRequest>,
     refreshes: HashSet<BrickRequest>,
@@ -66,18 +64,28 @@ pub(crate) struct Residence {
 #[derive(Default)]
 struct Missing {
     time: Option<u32>,
-    demanded: HashMap<usize, Vec<u64>>,
+    epoch: u32,
+    demanded: HashMap<usize, Stamped>,
     entries: BTreeMap<(u32, usize, u32), (usize, BrickRequest)>,
     shown: HashMap<(usize, u32), u32>,
     absent: [usize; BAND],
 }
 
+#[derive(Clone, Copy, Default)]
+struct Word {
+    epoch: u32,
+    bits: u64,
+}
+
+#[derive(Default)]
+struct Stamped {
+    words: Vec<Word>,
+}
+
 impl Missing {
     fn begin(&mut self, time: u32) {
         self.time = Some(time);
-        for bits in self.demanded.values_mut() {
-            bits.fill(0);
-        }
+        self.epoch = self.epoch.wrapping_add(1);
         self.entries.clear();
         self.shown.clear();
         self.absent = [0; BAND];
@@ -93,19 +101,27 @@ impl Missing {
 
     fn demands(&mut self, level: usize, index: u32) {
         let word = index as usize / u64::BITS as usize;
-        let bits = self.demanded.entry(level).or_default();
+        let bits = &mut self.demanded.entry(level).or_default().words;
         let fitted = word + 1;
         if bits.len() < fitted {
-            bits.resize(fitted, 0);
+            bits.resize(fitted, Word::default());
         }
-        bits[word] |= 1 << (index % u64::BITS);
+        let stamp = &mut bits[word];
+        if stamp.epoch != self.epoch {
+            *stamp = Word {
+                epoch: self.epoch,
+                bits: 0,
+            };
+        }
+        stamp.bits |= 1 << (index % u64::BITS);
     }
 
     fn demanded(&self, level: usize, index: u32) -> bool {
         let word = index as usize / u64::BITS as usize;
         self.demanded.get(&level).is_some_and(|bits| {
-            bits.get(word)
-                .is_some_and(|bits| bits & (1 << (index % u64::BITS)) != 0)
+            bits.words.get(word).is_some_and(|stamp| {
+                stamp.epoch == self.epoch && stamp.bits & (1 << (index % u64::BITS)) != 0
+            })
         })
     }
 
@@ -168,9 +184,7 @@ impl Residence {
             style: None,
             content: 0,
             generation: 0,
-            pin: 0,
             prefetched: HashSet::new(),
-            observed: HashSet::new(),
             prefetch_key: None,
             prefetch_issued: Vec::new(),
             refreshes: HashSet::new(),
@@ -210,7 +224,6 @@ impl Residence {
         self.style = None;
         self.content = 0;
         self.generation = 0;
-        self.pin = 0;
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_issued.clear();
@@ -283,10 +296,6 @@ impl Residence {
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation
-    }
-
-    pub(crate) fn pin(&self) -> u64 {
-        self.pin
     }
 
     pub(crate) fn epoch(&self) -> u64 {
@@ -474,7 +483,7 @@ impl Residence {
         prefetch: bool,
     ) -> Result<Option<Requests>, String> {
         while let Some((key, bands)) = self.decode(device, pyramid, planner)? {
-            self.accept(key, bands, pyramid, atlas);
+            self.accept(key, bands, atlas);
         }
         Ok(self.emit(pyramid, atlas, time, prefetch))
     }
@@ -503,20 +512,22 @@ impl Residence {
         Ok(decoded.flatten())
     }
 
-    fn accept(&mut self, key: ViewKey, bands: Vec<Demand>, pyramid: &Pyramid, atlas: &mut Atlas) {
+    fn accept(&mut self, key: ViewKey, bands: Vec<Demand>, atlas: &mut Atlas) {
         if key.epoch != self.epoch {
             return;
         }
-        self.pin += 1;
-        let pin = self.pin;
         atlas.clear_holds();
         for band in &bands {
             if let Some(slot) = self.measure.get_mut(band.info.level) {
                 *slot = Some(band.info.visible);
             }
-            atlas.touch(key.time, band.info.level, band.indices.iter().copied(), pin);
+            atlas.touch(key.time, band.info.level, band.indices.iter().copied());
         }
-        self.observe(&key, &bands, pyramid);
+        let view = view_key(&key);
+        if self.prefetch_key != Some(view) {
+            self.prefetch_key = Some(view);
+            self.prefetched.clear();
+        }
         self.settled = bands
             .iter()
             .all(|band| demands_complete(band, key.assured))
@@ -525,31 +536,19 @@ impl Residence {
         self.stale = true;
     }
 
-    fn observe(&mut self, key: &ViewKey, bands: &[Demand], pyramid: &Pyramid) {
-        let view = view_key(key);
-        if self.prefetch_key != Some(view) {
-            self.prefetch_key = Some(view);
-            self.prefetched.clear();
-        }
+    fn observe(&mut self, pyramid: &Pyramid, time: u32) {
         if !self.prefetch_issued.is_empty() {
-            self.observed.clear();
-            for (level, index) in bands.iter().flat_map(|band| {
-                band.indices
-                    .iter()
-                    .map(move |index| (band.info.level, *index))
-            }) {
-                self.observed.insert((level, index));
-            }
             let mut issued = 0;
             let mut hit = 0;
             for request in &self.prefetch_issued {
-                if request.time != key.time {
+                if request.time != time {
                     continue;
                 }
                 issued += 1;
+                let grid = BrickGrid::new(pyramid.level(request.level).extent());
                 if self
-                    .observed
-                    .contains(&(request.level, index_of(request, pyramid)))
+                    .missing
+                    .demanded(request.level, grid.index(request.coord) as u32)
                 {
                     hit += 1;
                 }
@@ -560,7 +559,10 @@ impl Residence {
             }
             self.prefetch_issued.clear();
         }
-        for band in bands {
+        let Some(demand) = self.demand.as_ref() else {
+            return;
+        };
+        for band in &demand.bands {
             for request in &band.requests {
                 self.prefetched.remove(request);
             }
@@ -584,6 +586,7 @@ impl Residence {
         if self.stale {
             self.rebuild(pyramid, atlas);
         }
+        self.observe(pyramid, time);
         let demand = self.demand.as_ref().expect("the demand is staged");
         let mut requests = Requests {
             time: demand.key.time,
@@ -697,11 +700,6 @@ fn demands_complete(demand: &Demand, assured: bool) -> bool {
     demand.requests.is_empty()
         && demand.info.resident == demand.info.demand
         && (!assured || demand.info.visible == demand.info.demand)
-}
-
-fn index_of(request: &BrickRequest, pyramid: &Pyramid) -> u32 {
-    let grid = BrickGrid::new(pyramid.level(request.level).extent());
-    grid.index(request.coord) as u32
 }
 
 fn view_key(meta: &ViewKey) -> u64 {

@@ -897,7 +897,8 @@ fn sample(source: &[f32], dims: [usize; 3], at: [f32; 3]) -> f32 {
 fn measures_correlated_channels() {
     let extent = Extent::new(48, 32, 8);
     let first = ramp(extent);
-    let series = coloc_series(extent, &first, &first);
+    let range = Intensity::new(0.0, f32::from(HIGH));
+    let series = coloc_series(extent, &first, &first, [range; 2]);
     let statistics = series.statistics(ColocThresholds::new(0.5, 0.5));
     assert_eq!(statistics.voxels(), extent.voxel_count());
     assert!(
@@ -929,7 +930,7 @@ fn measures_correlated_channels() {
         "a perfectly correlated pair tests significant"
     );
     let zeros = VoxelData::U16(vec![0; extent.voxel_count() as usize]);
-    let unthresholded = coloc_series(extent, &first, &zeros)
+    let unthresholded = coloc_series(extent, &first, &zeros, [range; 2])
         .statistics(ColocThresholds::new(0.0, 0.0))
         .manders()[0]
         .expect("the first channel carries mass");
@@ -937,6 +938,40 @@ fn measures_correlated_channels() {
         (unthresholded - 1.0).abs() < 1.0e-9,
         "a zero threshold keeps the first channel mass {unthresholded}"
     );
+    let (low, high) = halves(extent);
+    let weighted = coloc_series(
+        extent,
+        &low,
+        &high,
+        [Intensity::new(10.0, 20.0), Intensity::new(1.0, 3.0)],
+    )
+    .statistics(ColocThresholds::new(0.5, 0.5));
+    let overlap = weighted.overlap().expect("the channels share mass");
+    assert!(
+        (overlap - 280.0 / 80_000f64.sqrt()).abs() < 1.0e-6,
+        "the overlap coefficient weights raw intensities {overlap}"
+    );
+    let manders = weighted.manders()[0].expect("the first channel carries mass");
+    assert!(
+        (manders - 2.0 / 3.0).abs() < 1.0e-6,
+        "manders weighs the raw intensity of the first channel {manders}"
+    );
+}
+
+fn halves(extent: Extent) -> (VoxelData, VoxelData) {
+    let half = extent.x() / 2;
+    let mut low = Vec::with_capacity(extent.voxel_count() as usize);
+    let mut high = Vec::with_capacity(extent.voxel_count() as usize);
+    for _z in 0..extent.z() {
+        for _y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let left = x < half;
+                low.push(if left { 10 } else { 20 });
+                high.push(if left { 1 } else { 3 });
+            }
+        }
+    }
+    (VoxelData::U16(low), VoxelData::U16(high))
 }
 
 fn ramp(extent: Extent) -> VoxelData {
@@ -951,17 +986,23 @@ fn ramp(extent: Extent) -> VoxelData {
     VoxelData::U16(values)
 }
 
-fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocSeries {
+fn coloc_series(
+    extent: Extent,
+    first: &VoxelData,
+    second: &VoxelData,
+    intensities: [Intensity; 2],
+) -> ColocSeries {
     let spacing = Spacing::new(0.1, 0.1, 0.3);
     let level = Level::new(extent, spacing);
-    let intensity = Intensity::new(0.0, f32::from(HIGH));
-    let channels = (0..2)
-        .map(|channel| {
+    let channels = intensities
+        .iter()
+        .enumerate()
+        .map(|(channel, intensity)| {
             ChannelInfo::new(
                 format!("Channel {channel}"),
                 [1.0, 1.0, 1.0],
-                intensity,
-                intensity,
+                *intensity,
+                *intensity,
                 VoxelFormat::U16,
             )
         })
@@ -976,7 +1017,6 @@ fn coloc_series(extent: Extent, first: &VoxelData, second: &VoxelData) -> ColocS
     );
     let info = pyramid.level(sampling.level());
     let pair = ColocPair::new(0, 1);
-    let intensities = [intensity, intensity];
     let mut scan = ColocScan::new(
         info,
         sampling,

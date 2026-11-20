@@ -451,15 +451,7 @@ pub fn object_coloc(
                 return Ok(None);
             }
             let anchors = frame.anchors();
-            let scan = ObjectColocScan::new(
-                pair,
-                level_index,
-                info,
-                region,
-                intensities,
-                objects,
-                &anchors,
-            );
+            let scan = ObjectColocScan::new(pair, level_index, info, region, objects, &anchors);
             let shape = frame.shape().map_err(|error| error.to_string())?;
             let raster = LabelRaster::new(&shape, info);
             let labels = |ranges: &[std::ops::Range<u32>; 3]| -> Result<Vec<u32>, String> {

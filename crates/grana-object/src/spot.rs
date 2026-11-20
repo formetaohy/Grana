@@ -84,6 +84,7 @@ impl Spot {
 pub struct SpotSet {
     level: usize,
     spots: Arc<[Spot]>,
+    quality: Option<f32>,
     intensities: IntensityTable,
 }
 
@@ -94,9 +95,12 @@ impl SpotSet {
             spots.len(),
             "every spot is measured in every channel"
         );
+        let quality = (!spots.is_empty())
+            .then(|| spots.iter().map(|spot| spot.quality).sum::<f32>() / spots.len() as f32);
         Self {
             level,
             spots: spots.into(),
+            quality,
             intensities,
         }
     }
@@ -126,11 +130,7 @@ impl SpotSet {
     }
 
     pub fn mean_quality(&self) -> Option<f32> {
-        if self.spots.is_empty() {
-            return None;
-        }
-        let total: f32 = self.spots.iter().map(|spot| spot.quality).sum();
-        Some(total / self.spots.len() as f32)
+        self.quality
     }
 
     pub fn without(&self, object: usize) -> Option<Self> {

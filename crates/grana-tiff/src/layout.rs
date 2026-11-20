@@ -212,7 +212,7 @@ fn check(
         ));
     }
     for (index, (offset, count)) in offsets.iter().zip(counts).enumerate() {
-        if *offset == 0 || *count == 0 {
+        if *offset == 0 && *count != 0 {
             return Err(Error::read(
                 path,
                 format!("the TIFF page leaves {noun} {index} without pixel data"),

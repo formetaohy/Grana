@@ -255,7 +255,6 @@ impl Resources {
             ..
         } = self;
         let content = residence.content();
-        let pin = residence.pin();
         let mut generation = residence.generation();
         let mut supplied = Vec::new();
         let mut released = Vec::new();
@@ -334,7 +333,7 @@ impl Resources {
                     continue;
                 }
                 let demand = !prefetched.contains(request);
-                let Some((slot, evicted)) = atlas.allocate(pin, time, held, demand) else {
+                let Some((slot, evicted)) = atlas.allocate(time, held) else {
                     continue;
                 };
                 if let Some(brick) = evicted {
@@ -358,7 +357,6 @@ impl Resources {
                         level,
                         index,
                     },
-                    pin,
                     demand,
                 );
                 if publish {

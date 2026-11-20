@@ -27,6 +27,56 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
+fn reads_a_tiled_slide_with_shared_jpeg_tables() {
+    let image = grana_tiff::Image::open(&fixture("slide.tif"), 0).expect("the slide opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.level_count(), 3);
+    assert_eq!(pyramid.channel_count(), 3);
+    assert_eq!(pyramid.level(0).extent(), Extent::new(100, 70, 1));
+    assert_eq!(pyramid.level(1).extent(), Extent::new(50, 35, 1));
+    assert_eq!(pyramid.level(2).extent(), Extent::new(25, 18, 1));
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 0.5));
+    let read = |level: usize, width: u32, height: u32| {
+        let VoxelData::U8(values) = image
+            .read_region(0, level, 0, 0..width, 0..height, 0..1)
+            .expect("a slide level reads")
+        else {
+            panic!("a JPEG page stores bytes");
+        };
+        values
+    };
+    let base = read(0, 100, 70);
+    for (x, y) in [
+        (3u32, 3u32),
+        (63, 0),
+        (64, 0),
+        (99, 63),
+        (0, 63),
+        (5, 68),
+        (62, 69),
+    ] {
+        let index = (y * 100 + x) as usize;
+        let wanted = (x * 2) % 251;
+        let held = u32::from(base[index]);
+        assert!(
+            held.abs_diff(wanted) <= 12,
+            "the tile at {x},{y} reads {held} instead of {wanted}"
+        );
+    }
+    assert_eq!(
+        base[(66 * 100 + 80) as usize],
+        0,
+        "a zero length tile reads blank instead of failing the slide"
+    );
+    let second = read(1, 50, 35);
+    let held = u32::from(second[(10 * 50 + 20) as usize]);
+    assert!(held.abs_diff(48) <= 12, "the chained level reads {held}");
+    let third = read(2, 25, 18);
+    let held = u32::from(third[(4 * 25 + 6) as usize]);
+    assert!(held.abs_diff(28) <= 12, "the coarsest level reads {held}");
+}
+
+#[test]
 fn exports_a_tiled_pyramid_ome_tiff() {
     let temp = Temp::new("suite-ome-tiff-archive");
     let levels = [

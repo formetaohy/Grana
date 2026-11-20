@@ -27,6 +27,10 @@ const RED: [f32; 3] = [1.0, 0.0, 0.0];
 const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
 const BLUE: [f32; 3] = [0.0, 0.0, 1.0];
 
+const MASK: u64 = 4;
+
+const MPP: &str = "MPP";
+
 type PageCache = grana_store::LruCache<(usize, usize), Page>;
 type LayoutCache = grana_store::LruCache<(usize, usize), Layout>;
 
@@ -89,6 +93,7 @@ struct LevelPages {
     extent: Extent,
     planes: Planes,
     slots: Vec<Slot>,
+    depth: usize,
     format: VoxelFormat,
 }
 
@@ -225,7 +230,8 @@ impl Image {
         }
         let mut files = vec![Arc::new(first)];
         let positions = siblings(&mut files, path, ome)?;
-        let page = selected_page(&files, path, ome, &positions)?;
+        let (base_file, base_page) = selected_page(&files, path, ome, &positions)?;
+        let page = files[base_file].page(base_page, 0)?;
         let chunky = page.channels() > 1;
         let format = page.format();
         let samples = page.channels();
@@ -260,13 +266,30 @@ impl Image {
             .map(|slot| files[slot.file].pages[slot.page].sub_ifds.len())
             .min()
             .unwrap_or(0);
+        let chained = if ome.is_none() && files.len() == 1 && planes.count() == 1 {
+            chained_levels(&files[0], base_page, format, path)?
+        } else {
+            Vec::new()
+        };
+        if deepest > 0 && !chained.is_empty() {
+            return Err(Error::metadata(
+                path,
+                "the TIFF image keeps resolution levels both after the base page and in its sub-IFDs",
+            ));
+        }
         let mut levels = vec![gather(&files, &planes, &placed, format, 0, path)?];
+        for page in &chained {
+            levels.push(level_page(&files[0], *page, &planes, format, path)?);
+        }
         for level in 1..=deepest {
             let deeper = gather(&files, &planes, &placed, format, level, path)?;
-            let previous = levels.last().expect("the base level is present");
-            if deeper.extent.x() >= previous.extent.x()
-                || deeper.extent.y() >= previous.extent.y()
-                || deeper.extent.z() > previous.extent.z()
+            levels.push(deeper);
+        }
+        for (level, held) in levels.iter().enumerate().skip(1) {
+            let previous = &levels[level - 1];
+            if held.extent.x() >= previous.extent.x()
+                || held.extent.y() >= previous.extent.y()
+                || held.extent.z() > previous.extent.z()
             {
                 return Err(Error::metadata(
                     path,
@@ -276,7 +299,6 @@ impl Image {
                     ),
                 ));
             }
-            levels.push(deeper);
         }
         let base = levels[0].extent;
         let (spacing, axial) = spacing(ome, &files[0], path, sizes[2])?;
@@ -411,9 +433,9 @@ fn selected_page(
     path: &Path,
     ome: Option<&OmeImage>,
     positions: &HashMap<String, usize>,
-) -> Result<Arc<Page>, Error> {
+) -> Result<(usize, usize), Error> {
     let Some(block) = ome.and_then(|ome| ome.tiff_data.first()) else {
-        return files[0].page(0, 0);
+        return Ok((0, 0));
     };
     let index = match block.file.as_deref() {
         None => 0,
@@ -425,7 +447,80 @@ fn selected_page(
             )
         })?,
     };
-    files[index].page(block.ifd as usize, 0)
+    files[index].page(block.ifd as usize, 0)?;
+    Ok((index, block.ifd as usize))
+}
+
+fn chained_levels(
+    volume: &File,
+    base: usize,
+    format: VoxelFormat,
+    path: &Path,
+) -> Result<Vec<usize>, Error> {
+    let Some(first) = volume.pages.get(base) else {
+        return Err(Error::metadata(path, "the TIFF series holds no page"));
+    };
+    if !first.tiled {
+        return Ok(Vec::new());
+    }
+    let mut levels = Vec::new();
+    let mut previous = first;
+    for (index, page) in volume.pages.iter().enumerate().skip(base + 1) {
+        if page.subfile & MASK != 0 || !page.tiled {
+            continue;
+        }
+        if page.format() != format
+            || page.samples != previous.samples
+            || page.planar != previous.planar
+            || page.compression != previous.compression
+        {
+            return Err(Error::unsupported(
+                path,
+                format!(
+                    "the TIFF page {index} disagrees on its sample layout with the level before it"
+                ),
+            ));
+        }
+        if page.width >= previous.width || page.height >= previous.height {
+            return Err(Error::metadata(
+                path,
+                format!(
+                    "the TIFF page {index} does not hold fewer pixels than the level before it"
+                ),
+            ));
+        }
+        levels.push(index);
+        previous = page;
+    }
+    Ok(levels)
+}
+
+fn level_page(
+    volume: &File,
+    page: usize,
+    planes: &Planes,
+    format: VoxelFormat,
+    path: &Path,
+) -> Result<LevelPages, Error> {
+    let held = volume.page(page, 0)?;
+    if held.format() != format {
+        return Err(Error::unsupported(
+            path,
+            "the resolution levels disagree on the voxel type",
+        ));
+    }
+    let slots = vec![
+        Slot { file: 0, page };
+        usize::try_from(planes.count())
+            .expect("a plane count fits this platform's addresses")
+    ];
+    Ok(LevelPages {
+        extent: Extent::new(held.width, held.height, planes.depth()),
+        planes: planes.clone(),
+        slots,
+        depth: 0,
+        format,
+    })
 }
 
 fn named(path: &Path, file: &str) -> bool {
@@ -564,6 +659,7 @@ fn gather(
         extent,
         planes: planes.clone(),
         slots,
+        depth: level,
         format,
     })
 }
@@ -608,11 +704,11 @@ fn spacing(
     let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
     let x = match physical[0] {
         Some(value) => value,
-        None => resolution(volume, TAG_X_RESOLUTION, path)?.unwrap_or(1.0),
+        None => scale(volume, TAG_X_RESOLUTION, path)?.unwrap_or(1.0),
     };
     let y = match physical[1] {
         Some(value) => value,
-        None => resolution(volume, TAG_Y_RESOLUTION, path)?.unwrap_or(x),
+        None => scale(volume, TAG_Y_RESOLUTION, path)?.unwrap_or(x),
     };
     let Some(z) = physical[2] else {
         if depth <= 1 {
@@ -692,6 +788,33 @@ fn placement(
         *slot = value as f32;
     }
     Ok(placed)
+}
+
+fn scale(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
+    Ok(mpp(volume, path)?.or(resolution(volume, tag, path)?))
+}
+
+fn mpp(volume: &File, path: &Path) -> Result<Option<f32>, Error> {
+    let Some(text) = volume
+        .directory()?
+        .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?
+    else {
+        return Ok(None);
+    };
+    let Some(field) = text
+        .split('|')
+        .find_map(|field| field.trim().strip_prefix(MPP))
+    else {
+        return Ok(None);
+    };
+    let value = field
+        .trim_start()
+        .strip_prefix('=')
+        .map(str::trim)
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| Error::metadata(path, "the TIFF image description carries no usable MPP"))?;
+    Ok(Some(value))
 }
 
 fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
@@ -843,8 +966,8 @@ fn region(
             detail: "the series holds no such plane".to_string(),
         })?;
         let volume = &files[slot.file];
-        let page = volume.page(slot.page, request.level)?;
-        let layout = volume.layout(slot.page, request.level)?;
+        let page = volume.page(slot.page, level.depth)?;
+        let layout = volume.layout(slot.page, level.depth)?;
         let source = PageSource {
             store: &volume.store,
             cache,

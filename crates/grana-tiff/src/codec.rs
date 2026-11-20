@@ -1,9 +1,12 @@
 use std::io::Read;
+use std::path::Path;
 
 use flate2::read::{DeflateDecoder, ZlibDecoder};
 use grana_volume::VoxelFormat;
 use weezl::BitOrder;
 use weezl::decode::Decoder as LzwDecoder;
+
+use crate::error::Error;
 
 const COMPRESSION_NONE: u16 = 1;
 const COMPRESSION_LZW: u16 = 5;
@@ -17,6 +20,10 @@ const COMPRESSION_ZSTD: u16 = 50000;
 
 const JPEG_START: [u8; 2] = [0xff, 0xd8];
 const JPEG_END: [u8; 2] = [0xff, 0xd9];
+const JPEG_QUANTIZATION: u8 = 0xdb;
+const JPEG_HUFFMAN: u8 = 0xc4;
+const JPEG_RESTART: u8 = 0xdd;
+const JPEG_SCAN: u8 = 0xda;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Compression {
@@ -56,7 +63,7 @@ impl Compression {
             Self::Fax { group } => fax(input, block, group),
             Self::Deflate => deflate(input, block.expected),
             Self::PackBits => packbits(input, block.expected),
-            Self::Jpeg => jpeg(input, block.tables),
+            Self::Jpeg => jpeg(input, block),
             Self::Zstd => zstd(input),
             Self::Other(code) => Err(format!(
                 "the TIFF compression {code} is not supported; Grana reads uncompressed, LZW, Deflate, PackBits, JPEG, ZSTD and CCITT Group 4 blocks"
@@ -119,23 +126,108 @@ fn packbits(input: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
-fn jpeg(input: &[u8], tables: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let stream = jpeg_stream(input, tables);
+fn jpeg(input: &[u8], block: &Block<'_>) -> Result<Vec<u8>, String> {
+    let stream = jpeg_stream(input, block.tables);
     let mut decoder = zune_jpeg::JpegDecoder::new(std::io::Cursor::new(stream));
-    decoder
+    let mut pixels = decoder
         .decode()
-        .map_err(|error| format!("the TIFF JPEG stream is invalid: {error}"))
+        .map_err(|error| format!("the TIFF JPEG stream is invalid: {error}"))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| "the TIFF JPEG stream carries no frame header".to_string())?;
+    if u32::from(info.width) != block.width {
+        return Err(format!(
+            "the TIFF JPEG block measures {} pixels across instead of its declared {}",
+            info.width, block.width
+        ));
+    }
+    let decoded = block.width as usize * usize::from(info.height);
+    if decoded == 0 || !pixels.len().is_multiple_of(decoded) {
+        return Err("the TIFF JPEG block does not cover whole pixels".to_string());
+    }
+    if u32::from(info.height) < block.rows {
+        return Err(format!(
+            "the TIFF JPEG block measures {} rows instead of its declared {}",
+            info.height, block.rows
+        ));
+    }
+    let channels = pixels.len() / decoded;
+    let visible = block.width as usize * block.rows as usize * channels;
+    pixels.truncate(visible);
+    Ok(pixels)
 }
 
 fn jpeg_stream(input: &[u8], tables: Option<&[u8]>) -> Vec<u8> {
-    let Some(tables) = tables else {
-        return input.to_vec();
-    };
-    let mut stream = Vec::with_capacity(tables.len() + input.len());
-    let tables = tables.strip_suffix(&JPEG_END).unwrap_or(tables);
-    stream.extend_from_slice(tables);
-    stream.extend_from_slice(input.strip_prefix(&JPEG_START).unwrap_or(input));
+    let mut stream = Vec::with_capacity(tables.map_or(0, <[u8]>::len) + input.len() + 2);
+    match tables {
+        Some(tables) => {
+            stream.extend_from_slice(tables);
+            stream.extend_from_slice(input.strip_prefix(&JPEG_START).unwrap_or(input));
+        }
+        None => {
+            if !input.starts_with(&JPEG_START) {
+                stream.extend_from_slice(&JPEG_START);
+            }
+            stream.extend_from_slice(input);
+        }
+    }
     stream
+}
+
+pub(crate) fn tables(bytes: &[u8], path: &Path) -> Result<Vec<u8>, Error> {
+    let mut header = JPEG_START.to_vec();
+    let mut found = 0;
+    for (marker, segment) in segments(bytes, path)? {
+        if marker == JPEG_QUANTIZATION || marker == JPEG_HUFFMAN || marker == JPEG_RESTART {
+            header.extend_from_slice(segment);
+            found += 1;
+        }
+    }
+    if found == 0 {
+        return Err(Error::metadata(
+            path,
+            "the TIFF JPEG tables hold no quantization or Huffman table",
+        ));
+    }
+    Ok(header)
+}
+
+fn segments<'a>(bytes: &'a [u8], path: &Path) -> Result<Vec<(u8, &'a [u8])>, Error> {
+    let body = bytes.strip_prefix(&JPEG_START).unwrap_or(bytes);
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index + 1 < body.len() {
+        if body[index] != 0xff {
+            return Err(Error::metadata(
+                path,
+                "the TIFF JPEG tables are not a marker stream",
+            ));
+        }
+        let marker = body[index + 1];
+        if marker == JPEG_END[1] || marker == 0x00 || (0xd0..=0xd7).contains(&marker) {
+            index += 2;
+            continue;
+        }
+        if index + 4 > body.len() {
+            return Err(Error::metadata(
+                path,
+                "the TIFF JPEG tables end inside a marker",
+            ));
+        }
+        let length = u16::from_be_bytes([body[index + 2], body[index + 3]]) as usize;
+        if length < 2 || index + 2 + length > body.len() {
+            return Err(Error::metadata(
+                path,
+                "the TIFF JPEG tables carry a truncated marker",
+            ));
+        }
+        if marker == JPEG_SCAN {
+            break;
+        }
+        found.push((marker, &body[index..index + 2 + length]));
+        index += 2 + length;
+    }
+    Ok(found)
 }
 
 pub(crate) fn swap(format: VoxelFormat, data: &mut [u8]) {

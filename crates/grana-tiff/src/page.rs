@@ -13,9 +13,9 @@ use crate::sample::SampleType;
 use crate::store::Store;
 use crate::tag::{
     TAG_BITS_PER_SAMPLE, TAG_COLOR_MAP, TAG_COMPRESSION, TAG_EXTRA_SAMPLES, TAG_FILL_ORDER,
-    TAG_IMAGE_LENGTH, TAG_IMAGE_WIDTH, TAG_JPEG_TABLES, TAG_PHOTOMETRIC, TAG_PLANAR_CONFIGURATION,
-    TAG_PREDICTOR, TAG_SAMPLE_FORMAT, TAG_SAMPLES_PER_PIXEL, TAG_SUB_IFDS, TAG_YCBCR_COEFFICIENTS,
-    TAG_YCBCR_SUBSAMPLING,
+    TAG_IMAGE_LENGTH, TAG_IMAGE_WIDTH, TAG_JPEG_TABLES, TAG_NEW_SUBFILE_TYPE, TAG_PHOTOMETRIC,
+    TAG_PLANAR_CONFIGURATION, TAG_PREDICTOR, TAG_SAMPLE_FORMAT, TAG_SAMPLES_PER_PIXEL,
+    TAG_SUB_IFDS, TAG_TILE_LENGTH, TAG_TILE_WIDTH, TAG_YCBCR_COEFFICIENTS, TAG_YCBCR_SUBSAMPLING,
 };
 
 const PREDICTOR_NONE: u64 = 1;
@@ -40,6 +40,8 @@ pub(crate) struct Page {
     pub height: u32,
     pub samples: u32,
     pub planar: bool,
+    pub tiled: bool,
+    pub subfile: u64,
     pub sample_type: SampleType,
     components: u32,
     pub color: ColorModel,
@@ -193,13 +195,23 @@ impl Page {
             ));
         }
         let sub_ifds = directory.integers(store, TAG_SUB_IFDS, path)?;
-        let tables = directory.bytes(store, TAG_JPEG_TABLES, path)?;
+        let tiled = directory.integer(store, TAG_TILE_WIDTH, path)?.is_some()
+            || directory.integer(store, TAG_TILE_LENGTH, path)?.is_some();
+        let subfile = directory
+            .integer(store, TAG_NEW_SUBFILE_TYPE, path)?
+            .unwrap_or(0);
+        let tables = directory
+            .bytes(store, TAG_JPEG_TABLES, path)?
+            .map(|bytes| crate::codec::tables(&bytes, path))
+            .transpose()?;
         Ok(Self {
             width,
             height,
             samples,
             components: sample_type.components(),
             planar,
+            tiled,
+            subfile,
             sample_type,
             color,
             compression,
@@ -290,12 +302,15 @@ impl Page {
     fn decode(&self, source: &Source<'_>, block: &Block) -> Result<VoxelData, Error> {
         let path = source.path;
         let pixels = block.width as usize * block.rows as usize;
-        let raw = source.store.read(block.offset, block.count as usize)?;
         let samples = if self.planar {
             1
         } else {
             self.samples as usize
         } * self.components as usize;
+        if block.count == 0 {
+            return Ok(self.missing(pixels, samples));
+        }
+        let raw = source.store.read(block.offset, block.count as usize)?;
         let expected = if self.sample_type.packed() {
             (block.width as usize * samples * self.sample_type.bits as usize).div_ceil(8)
                 * block.rows as usize
@@ -408,6 +423,15 @@ impl Page {
         } else {
             Ok(reinterpreted)
         }
+    }
+
+    fn missing(&self, pixels: usize, samples: usize) -> VoxelData {
+        let count = if self.compression.stores_rgb_samples() {
+            pixels * self.channels() as usize
+        } else {
+            pixels * samples
+        };
+        VoxelData::blank(self.format, count)
     }
 
     fn invert(&self, data: &mut VoxelData) {

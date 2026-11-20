@@ -27,9 +27,9 @@ pub use cluster::{ClusterSample, ClusteredWelch};
 pub use coloc::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_DEFAULT, COLOC_BLOCK_MAX,
     COLOC_PERMUTATIONS_DEFAULT, COLOC_PERMUTATIONS_MAX, ColocCell, ColocCost, ColocFrame,
-    ColocJoint, ColocMetric, ColocMoments, ColocPair, ColocPrecision, ColocSeries, ColocSeriesInfo,
-    ColocSettings, ColocSignificance, ColocStatistics, ColocThresholdRange, ColocThresholds,
-    ObjectColoc, ObjectColocValue,
+    ColocJoint, ColocMetric, ColocMoments, ColocPair, ColocPrecision, ColocSample, ColocSeries,
+    ColocSeriesInfo, ColocSettings, ColocSignificance, ColocStatistics, ColocThresholdRange,
+    ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 pub use column::{Column, Unit};
 pub use filter::Filter;
