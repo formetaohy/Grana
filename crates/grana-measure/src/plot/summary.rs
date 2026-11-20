@@ -1,3 +1,4 @@
+use crate::measured::Measured;
 use crate::sample::Sample;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -60,8 +61,8 @@ impl Moments {
         Self { values: Vec::new() }
     }
 
-    pub(crate) fn push(&mut self, value: f32) {
-        if value.is_finite() {
+    pub(crate) fn push(&mut self, value: Measured) {
+        if let Some(value) = value.present() {
             self.values.push(value);
         }
     }

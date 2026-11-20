@@ -63,8 +63,8 @@ impl Table {
         let bins = bins::histogram(self, column, high - low);
         let values = self.materialize(column);
         let mut total = vec![0u64; bins];
-        for row in 0..self.rows() {
-            if let Some(bin) = bins::index(values[row], low, high, bins) {
+        for value in values.iter() {
+            if let Some(bin) = bins::index(*value, low, high, bins) {
                 total[bin] += 1;
             }
         }

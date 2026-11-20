@@ -169,8 +169,7 @@ impl Table {
         let values = self.materialize(column);
         let mut totals = BTreeMap::<u32, Vec<f64>>::new();
         for row in 0..self.rows() {
-            let value = values[row];
-            if value.is_finite() {
+            if let Some(value) = values[row].present() {
                 totals
                     .entry(distribution_key(self, row, split))
                     .or_default()
@@ -181,8 +180,7 @@ impl Table {
         let mut gated_values = BTreeMap::<u32, Vec<f64>>::new();
         if gating {
             for row in gated.iter() {
-                let value = values[row];
-                if value.is_finite() {
+                if let Some(value) = values[row].present() {
                     gated_values
                         .entry(distribution_key(self, row, split))
                         .or_default()

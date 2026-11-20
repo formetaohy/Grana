@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use grana_measure::{
-    Aggregate, ColumnValues, Filter, Group, Lasso, Mask, MeasureView, Nearest, Plot, PlotAxis,
-    Scope, Table, Window,
+    Aggregate, ColumnValues, Filter, Group, Lasso, Mask, MeasureView, Measured, Nearest, Plot,
+    PlotAxis, Scope, Table, Window,
 };
 
 use grana_volume::Region;
@@ -1069,7 +1069,7 @@ impl Measure {
         self.relayout();
     }
 
-    pub fn value(&self, row: usize, column: usize) -> Option<f32> {
+    pub fn value(&self, row: usize, column: usize) -> Option<Measured> {
         self.table.as_deref()?.cached_value(row, column)
     }
 

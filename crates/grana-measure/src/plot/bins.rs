@@ -1,3 +1,4 @@
+use crate::measured::Measured;
 use crate::sample::Sample;
 use crate::table::Table;
 
@@ -26,10 +27,8 @@ pub(crate) fn scatter(
     )
 }
 
-pub(crate) fn index(value: f32, low: f32, high: f32, bins: usize) -> Option<usize> {
-    if !value.is_finite() {
-        return None;
-    }
+pub(crate) fn index(value: Measured, low: f32, high: f32, bins: usize) -> Option<usize> {
+    let value = value.present()?;
     let span = high - low;
     if span <= 0.0 {
         return Some(0);
@@ -49,7 +48,8 @@ fn sample(table: &Table, column: usize) -> Option<Sample> {
     Sample::new(
         (0..take)
             .map(|index| index * span / (take - 1).max(1))
-            .map(|row| f64::from(values[row]))
+            .filter_map(|row| values[row].present())
+            .map(f64::from)
             .collect(),
     )
 }

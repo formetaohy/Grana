@@ -279,7 +279,8 @@ fn summary(table: &Table, rows: &[u32], column: usize) -> Option<Summary> {
     let values = table.materialize(column);
     let values = rows
         .iter()
-        .map(|row| f64::from(values[*row as usize]))
+        .filter_map(|row| values[*row as usize].present())
+        .map(f64::from)
         .collect::<Vec<_>>();
     Summary::of(&values)
 }
@@ -344,9 +345,10 @@ fn frame_counts(table: &Table, gated: &Mask) -> BTreeMap<u32, u64> {
         let (Some(starts), Some(ends)) = (starts.as_ref(), ends.as_ref()) else {
             continue;
         };
-        let start = starts[row];
-        let end = ends[row];
-        if !(start.is_finite() && end.is_finite() && start >= 1.0 && end >= start) {
+        let (Some(start), Some(end)) = (starts[row].present(), ends[row].present()) else {
+            continue;
+        };
+        if !(start >= 1.0 && end >= start) {
             continue;
         }
         for time in (start as u32 - 1)..=(end as u32 - 1) {

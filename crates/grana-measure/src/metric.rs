@@ -359,6 +359,7 @@ impl Measurement {
             self.unit(),
             self.decimals(),
         )
+        .possibly_absent()
     }
 
     pub(crate) fn aggregate_column(
@@ -373,6 +374,7 @@ impl Measurement {
             self.unit(),
             self.decimals(),
         )
+        .possibly_absent()
     }
 
     fn tail(channels: usize, measurements: &[Self]) -> Vec<Self> {

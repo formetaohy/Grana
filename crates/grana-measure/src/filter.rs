@@ -1,3 +1,5 @@
+use crate::measured::Measured;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Filter {
     column: usize,
@@ -31,7 +33,7 @@ impl Filter {
         self.maximum
     }
 
-    pub fn contains(self, value: f32) -> bool {
-        self.minimum <= value && value <= self.maximum
+    pub fn admits(self, value: Measured) -> bool {
+        value.is_present_and(|value| self.minimum <= value && value <= self.maximum)
     }
 }

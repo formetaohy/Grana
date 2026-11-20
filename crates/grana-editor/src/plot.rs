@@ -4,8 +4,8 @@ use grana_chart::{
 };
 use grana_i18n::Language;
 use grana_measure::{
-    Distribution, Filter, Histogram, Lasso, MeasureView, Observation, Plot, Ripley, Scatter, Table,
-    Trend,
+    Distribution, Filter, Histogram, Lasso, MeasureView, Measured, Observation, Plot, Ripley,
+    Scatter, Table, Trend,
 };
 use grana_scene::{Item, Measure, ObjectSetId, Selection};
 use grana_session::Command;
@@ -96,15 +96,20 @@ impl PlotView<'_> {
         let row = self.selection?;
         match self.plot {
             Plot::Histogram(histogram) => Some(Highlight::Value(
-                self.table.cached_value(row, histogram.column())?,
+                self.table
+                    .cached_value(row, histogram.column())?
+                    .present()?,
             )),
             Plot::Scatter(scatter) => Some(Highlight::Point(Vec2::new(
-                self.table.cached_value(row, scatter.x())?,
-                self.table.cached_value(row, scatter.y())?,
+                self.table.cached_value(row, scatter.x())?.present()?,
+                self.table.cached_value(row, scatter.y())?.present()?,
             ))),
             Plot::Distribution(distribution) => {
                 let observation = self.table.observation(row);
-                let value = self.table.cached_value(row, distribution.column())?;
+                let value = self
+                    .table
+                    .cached_value(row, distribution.column())?
+                    .present()?;
                 group_index(distribution, observation)
                     .map(|index| Highlight::Group { index, value })
             }
@@ -112,7 +117,7 @@ impl PlotView<'_> {
                 let time = self.table.observation(row).time()?;
                 Some(Highlight::Point(Vec2::new(
                     time as f32 + 1.0,
-                    self.table.cached_value(row, trend.column())?,
+                    self.table.cached_value(row, trend.column())?.present()?,
                 )))
             }
             Plot::Ripley(_) => None,
@@ -595,8 +600,12 @@ fn scatter_readout(
         .map(|row| row as usize)
         .filter(|row| {
             let (Some(x_value), Some(y_value)) = (
-                table.cached_value(*row, scatter.x()),
-                table.cached_value(*row, scatter.y()),
+                table
+                    .cached_value(*row, scatter.x())
+                    .and_then(Measured::present),
+                table
+                    .cached_value(*row, scatter.y())
+                    .and_then(Measured::present),
             ) else {
                 return false;
             };
@@ -1021,12 +1030,12 @@ fn nearest_trend_row(
         if table.observation(*row as usize).time() != Some(time) {
             continue;
         }
-        let Some(current) = table.cached_value(*row as usize, column) else {
+        let Some(current) = table
+            .cached_value(*row as usize, column)
+            .and_then(Measured::present)
+        else {
             continue;
         };
-        if !current.is_finite() {
-            continue;
-        }
         let distance = (current - value).abs();
         if distance < closest {
             closest = distance;
@@ -1065,12 +1074,12 @@ fn nearest_group_row(
         if split && table.observation(*row as usize).time() != target {
             continue;
         }
-        let Some(current) = table.cached_value(*row as usize, column) else {
+        let Some(current) = table
+            .cached_value(*row as usize, column)
+            .and_then(Measured::present)
+        else {
             continue;
         };
-        if !current.is_finite() {
-            continue;
-        }
         let distance = (current - value).abs();
         if distance < closest {
             closest = distance;

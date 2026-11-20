@@ -20,10 +20,14 @@ use crate::spatial;
 pub const NEIGHBOUR_KEY: &str = "nearest_distance_um";
 pub const NEIGHBOUR_LABEL: &str = "nearest neighbour";
 
-pub type ColumnValues = Vec<(usize, Arc<Vec<f32>>)>;
+pub type ColumnValues = Vec<(usize, Arc<Vec<Measured>>)>;
 
-pub(crate) fn stored(measured: Measured) -> f32 {
-    measured.present().unwrap_or(f32::NAN)
+pub(crate) fn read(value: f32) -> Measured {
+    if value.is_finite() {
+        Measured::new(value, 1)
+    } else {
+        Measured::Absent
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -447,7 +451,7 @@ enum Plan {
     MoleculeRelation { index: usize, field: RelationField },
     Neighbour { x: usize, y: usize, z: usize },
     BasisAggregate(usize),
-    Explicit(Arc<Vec<f32>>),
+    Explicit(Arc<Vec<Measured>>),
 }
 
 enum Lookup {
@@ -524,7 +528,7 @@ impl Lookup {
 }
 
 struct Store {
-    values: Vec<Option<Arc<Vec<f32>>>>,
+    values: Vec<Option<Arc<Vec<Measured>>>>,
     extents: Vec<Option<(f32, f32)>>,
     pinned: Vec<bool>,
 }
@@ -668,7 +672,7 @@ impl Table {
         }
     }
 
-    pub fn with_column(mut self, column: Column, values: Vec<f32>) -> Self {
+    pub fn with_column(mut self, column: Column, values: Vec<Measured>) -> Self {
         assert_eq!(
             values.len(),
             self.rows(),
@@ -707,7 +711,8 @@ impl Table {
         ) else {
             return;
         };
-        let column = Column::new(NEIGHBOUR_LABEL, NEIGHBOUR_KEY, Unit::Micrometer, 3);
+        let column =
+            Column::new(NEIGHBOUR_LABEL, NEIGHBOUR_KEY, Unit::Micrometer, 3).possibly_absent();
         self.append(column, Plan::Neighbour { x, y, z }, None);
     }
 
@@ -725,7 +730,7 @@ impl Table {
         self.basis = Some(basis);
     }
 
-    pub fn materialize(&self, column: usize) -> Arc<Vec<f32>> {
+    pub fn materialize(&self, column: usize) -> Arc<Vec<Measured>> {
         assert!(
             column < self.columns.len(),
             "a column lies inside its table"
@@ -852,11 +857,11 @@ impl Table {
             .collect()
     }
 
-    fn track_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
+    fn track_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<Measured>> {
         let Some(tracks) = self.tracks.as_deref() else {
             return entries
                 .iter()
-                .map(|_| vec![f32::NAN; self.rows()])
+                .map(|_| vec![Measured::ABSENT; self.rows()])
                 .collect();
         };
         let mut collected = vec![vec![Vec::<f32>::new(); self.rows()]; entries.len()];
@@ -880,7 +885,7 @@ impl Table {
             .collect()
     }
 
-    fn time_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
+    fn time_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<Measured>> {
         let mut rows = std::collections::HashMap::with_capacity(self.rows());
         for (row, observation) in self.observations.iter().enumerate() {
             if let Some(time) = observation.time() {
@@ -904,13 +909,13 @@ impl Table {
             .into_iter()
             .map(|rows| {
                 rows.iter()
-                    .map(|values| stored(self.aggregate.apply(values)))
+                    .map(|values| self.aggregate.apply(values))
                     .collect()
             })
             .collect()
     }
 
-    fn molecule_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<f32>> {
+    fn molecule_block(&self, entries: &[(usize, Value)]) -> Vec<Vec<Measured>> {
         let mut collected = vec![vec![Vec::<f32>::new(); self.rows()]; entries.len()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
             let Some(spots) = frame.objects().spots() else {
@@ -955,7 +960,7 @@ impl Table {
         }
     }
 
-    pub fn cached_value(&self, row: usize, column: usize) -> Option<f32> {
+    pub fn cached_value(&self, row: usize, column: usize) -> Option<Measured> {
         assert!(
             row < self.rows() && column < self.columns.len(),
             "the cell lies inside the table"
@@ -1006,7 +1011,7 @@ impl Table {
         self.store.read().expect("a table store reads").values[column].is_some()
     }
 
-    fn compute(&self, column: usize) -> Arc<Vec<f32>> {
+    fn compute(&self, column: usize) -> Arc<Vec<Measured>> {
         match &self.plan[column] {
             Plan::Object(cell) => Arc::new(self.object_values(cell)),
             Plan::TrackIdentity(field) => Arc::new(self.track_identity_values(*field)),
@@ -1036,8 +1041,8 @@ impl Table {
         }
     }
 
-    fn object_values(&self, cell: &ObjectCell) -> Vec<f32> {
-        let mut values = vec![f32::NAN; self.rows()];
+    fn object_values(&self, cell: &ObjectCell) -> Vec<Measured> {
+        let mut values = vec![Measured::ABSENT; self.rows()];
         let mut row = 0usize;
         let tracks = self.tracks.as_deref();
         self.source.visit_all(&mut |frame: Frame<'_>| {
@@ -1051,13 +1056,13 @@ impl Table {
                 let child = &frame.children()[*index];
                 let columns = child.columns(parents);
                 for value in columns[*field].iter().take(parents) {
-                    values[row] = *value;
+                    values[row] = read(*value);
                     row += 1;
                 }
                 return;
             }
             for object in 0..parents {
-                values[row] = cell.value(&frame, object, tracks, self.frame_interval);
+                values[row] = read(cell.value(&frame, object, tracks, self.frame_interval));
                 row += 1;
             }
         });
@@ -1069,10 +1074,10 @@ impl Table {
         values
     }
 
-    fn object_block(&self, columns: &[usize]) -> Vec<Vec<f32>> {
+    fn object_block(&self, columns: &[usize]) -> Vec<Vec<Measured>> {
         let mut values = columns
             .iter()
-            .map(|_| vec![f32::NAN; self.rows()])
+            .map(|_| vec![Measured::ABSENT; self.rows()])
             .collect::<Vec<_>>();
         let tracks = self.tracks.as_deref();
         let mut row = 0usize;
@@ -1096,10 +1101,9 @@ impl Table {
                     values[slot][row] = match &self.plan[*column] {
                         Plan::Object(ObjectCell::Child { index, field }) => children[index][*field]
                             .get(object)
-                            .copied()
-                            .unwrap_or(f32::NAN),
+                            .map_or(Measured::ABSENT, |value| read(*value)),
                         Plan::Object(cell) => {
-                            cell.value(&frame, object, tracks, self.frame_interval)
+                            read(cell.value(&frame, object, tracks, self.frame_interval))
                         }
                         _ => unreachable!("an object block holds object columns"),
                     };
@@ -1115,9 +1119,9 @@ impl Table {
         values
     }
 
-    fn track_identity_values(&self, field: TrackMeasurement) -> Vec<f32> {
+    fn track_identity_values(&self, field: TrackMeasurement) -> Vec<Measured> {
         let Some(tracks) = self.tracks.as_deref() else {
-            return vec![f32::NAN; self.rows()];
+            return vec![Measured::ABSENT; self.rows()];
         };
         self.observations
             .iter()
@@ -1125,14 +1129,14 @@ impl Table {
                 observation
                     .track()
                     .filter(|track| *track < tracks.len())
-                    .map_or(f32::NAN, |track| field.value(track, tracks))
+                    .map_or(Measured::ABSENT, |track| read(field.value(track, tracks)))
             })
             .collect()
     }
 
-    fn track_aggregate_values(&self, measurement: Measurement) -> Vec<f32> {
+    fn track_aggregate_values(&self, measurement: Measurement) -> Vec<Measured> {
         let Some(tracks) = self.tracks.as_deref() else {
-            return vec![f32::NAN; self.rows()];
+            return vec![Measured::ABSENT; self.rows()];
         };
         let mut collected = vec![Vec::<f32>::new(); self.rows()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
@@ -1149,9 +1153,9 @@ impl Table {
         self.aggregate_columns(collected)
     }
 
-    fn track_relation_values(&self, index: usize, field: RelationField) -> Vec<f32> {
+    fn track_relation_values(&self, index: usize, field: RelationField) -> Vec<Measured> {
         let Some(tracks) = self.tracks.as_deref() else {
-            return vec![f32::NAN; self.rows()];
+            return vec![Measured::ABSENT; self.rows()];
         };
         let mut collected = vec![Vec::<f32>::new(); self.rows()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
@@ -1168,14 +1172,14 @@ impl Table {
         self.aggregate_columns(collected)
     }
 
-    fn aggregate_columns(&self, collected: Vec<Vec<f32>>) -> Vec<f32> {
+    fn aggregate_columns(&self, collected: Vec<Vec<f32>>) -> Vec<Measured> {
         collected
             .iter()
-            .map(|values| stored(self.aggregate.apply(values)))
+            .map(|values| self.aggregate.apply(values))
             .collect()
     }
 
-    fn time_field_values(&self, field: TimeField) -> Vec<f32> {
+    fn time_field_values(&self, field: TimeField) -> Vec<Measured> {
         match field {
             TimeField::Frame => self
                 .observations
@@ -1183,23 +1187,23 @@ impl Table {
                 .map(|observation| {
                     observation
                         .time()
-                        .map_or(f32::NAN, |time| (time + 1) as f32)
+                        .map_or(Measured::ABSENT, |time| Measured::new((time + 1) as f32, 1))
                 })
                 .collect(),
             TimeField::Time => self
                 .observations
                 .iter()
                 .map(|observation| {
-                    observation
-                        .time()
-                        .map_or(f32::NAN, |time| time as f32 * self.frame_interval)
+                    observation.time().map_or(Measured::ABSENT, |time| {
+                        Measured::new(time as f32 * self.frame_interval, 1)
+                    })
                 })
                 .collect(),
             TimeField::Objects => {
-                let mut values = vec![f32::NAN; self.rows()];
+                let mut values = vec![Measured::ABSENT; self.rows()];
                 self.source.visit_all(&mut |frame: Frame<'_>| {
                     if let Some(row) = self.row_of_time(frame.time()) {
-                        values[row as usize] = frame.objects().count() as f32;
+                        values[row as usize] = Measured::new(frame.objects().count() as f32, 1);
                     }
                 });
                 values
@@ -1207,14 +1211,14 @@ impl Table {
         }
     }
 
-    fn time_aggregate_values(&self, measurement: Measurement) -> Vec<f32> {
-        let mut aggregated = BTreeMap::<u32, f32>::new();
+    fn time_aggregate_values(&self, measurement: Measurement) -> Vec<Measured> {
+        let mut aggregated = BTreeMap::<u32, Measured>::new();
         self.source.visit_all(&mut |frame: Frame<'_>| {
             let mut collected = Vec::with_capacity(frame.objects().count());
             for object in 0..frame.objects().count() {
                 collected.push(measurement.value(frame.objects(), object));
             }
-            aggregated.insert(frame.time(), stored(self.aggregate.apply(&collected)));
+            aggregated.insert(frame.time(), self.aggregate.apply(&collected));
         });
         self.observations
             .iter()
@@ -1223,19 +1227,19 @@ impl Table {
                     .time()
                     .and_then(|time| aggregated.get(&time))
                     .copied()
-                    .unwrap_or(f32::NAN)
+                    .unwrap_or(Measured::ABSENT)
             })
             .collect()
     }
 
-    fn time_relation_values(&self, index: usize, field: RelationField) -> Vec<f32> {
-        let mut aggregated = BTreeMap::<u32, f32>::new();
+    fn time_relation_values(&self, index: usize, field: RelationField) -> Vec<Measured> {
+        let mut aggregated = BTreeMap::<u32, Measured>::new();
         self.source.visit_all(&mut |frame: Frame<'_>| {
             let mut collected = Vec::with_capacity(frame.objects().count());
             for object in 0..frame.objects().count() {
                 collected.push(field.value(frame.relations()[index], object));
             }
-            aggregated.insert(frame.time(), stored(self.aggregate.apply(&collected)));
+            aggregated.insert(frame.time(), self.aggregate.apply(&collected));
         });
         self.observations
             .iter()
@@ -1244,50 +1248,55 @@ impl Table {
                     .time()
                     .and_then(|time| aggregated.get(&time))
                     .copied()
-                    .unwrap_or(f32::NAN)
+                    .unwrap_or(Measured::ABSENT)
             })
             .collect()
     }
 
-    fn molecule_field_values(&self, field: MoleculeField) -> Vec<f32> {
+    fn molecule_field_values(&self, field: MoleculeField) -> Vec<Measured> {
         let molecules = self
             .molecules
             .as_deref()
             .expect("a molecule table keeps its localizations");
         molecules
             .iter()
-            .map(|molecule| match field {
-                MoleculeField::Molecule => molecule.group as f32,
-                MoleculeField::Localizations => molecule.localizations as f32,
-                MoleculeField::First => (molecule.first + 1) as f32,
-                MoleculeField::Last => (molecule.last + 1) as f32,
+            .map(|molecule| {
+                Measured::new(
+                    match field {
+                        MoleculeField::Molecule => molecule.group as f32,
+                        MoleculeField::Localizations => molecule.localizations as f32,
+                        MoleculeField::First => (molecule.first + 1) as f32,
+                        MoleculeField::Last => (molecule.last + 1) as f32,
+                    },
+                    1,
+                )
             })
             .collect()
     }
 
-    fn molecule_position_values(&self, axis: usize) -> Vec<f32> {
+    fn molecule_position_values(&self, axis: usize) -> Vec<Measured> {
         let molecules = self
             .molecules
             .as_deref()
             .expect("a molecule table keeps its localizations");
         molecules
             .iter()
-            .map(|molecule| molecule.centroid(axis))
+            .map(|molecule| read(molecule.centroid(axis)))
             .collect()
     }
 
-    fn molecule_spread_values(&self, axis: usize) -> Vec<f32> {
+    fn molecule_spread_values(&self, axis: usize) -> Vec<Measured> {
         let molecules = self
             .molecules
             .as_deref()
             .expect("a molecule table keeps its localizations");
         molecules
             .iter()
-            .map(|molecule| molecule.spread(axis))
+            .map(|molecule| read(molecule.spread(axis)))
             .collect()
     }
 
-    fn molecule_aggregate_values(&self, measurement: Measurement) -> Vec<f32> {
+    fn molecule_aggregate_values(&self, measurement: Measurement) -> Vec<Measured> {
         let mut collected = vec![Vec::<f32>::new(); self.rows()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
             let Some(spots) = frame.objects().spots() else {
@@ -1306,7 +1315,7 @@ impl Table {
         self.aggregate_columns(collected)
     }
 
-    fn molecule_relation_values(&self, index: usize, field: RelationField) -> Vec<f32> {
+    fn molecule_relation_values(&self, index: usize, field: RelationField) -> Vec<Measured> {
         let mut collected = vec![Vec::<f32>::new(); self.rows()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
             let Some(spots) = frame.objects().spots() else {
@@ -1325,27 +1334,28 @@ impl Table {
         self.aggregate_columns(collected)
     }
 
-    fn neighbour_values(&self, x: usize, y: usize, z: usize) -> Vec<f32> {
+    fn neighbour_values(&self, x: usize, y: usize, z: usize) -> Vec<Measured> {
         let xs = self.materialize(x);
         let ys = self.materialize(y);
         let zs = self.materialize(z);
-        let mut values = vec![f32::NAN; self.rows()];
+        let mut values = vec![Measured::ABSENT; self.rows()];
         let mut frames = BTreeMap::<u32, Vec<(usize, [f32; 3])>>::new();
         for row in 0..self.rows() {
-            let point = [xs[row], ys[row], zs[row]];
-            if point.iter().any(|value| !value.is_finite()) {
+            let (Some(x), Some(y), Some(z)) =
+                (xs[row].present(), ys[row].present(), zs[row].present())
+            else {
                 continue;
-            }
+            };
             let Some(key) = self.bucket(self.observations[row]) else {
                 continue;
             };
-            frames.entry(key).or_default().push((row, point));
+            frames.entry(key).or_default().push((row, [x, y, z]));
         }
         for members in frames.into_values() {
             let points = members.iter().map(|(_, point)| *point).collect::<Vec<_>>();
             let distances = spatial::neighbour_distances(&points);
             for ((row, _), distance) in members.iter().zip(distances) {
-                values[*row] = distance;
+                values[*row] = Measured::new(distance, 1);
             }
         }
         values
@@ -1360,17 +1370,16 @@ impl Table {
         }
     }
 
-    fn basis_aggregate_values(&self, source: usize) -> Vec<f32> {
+    fn basis_aggregate_values(&self, source: usize) -> Vec<Measured> {
         let Some(basis) = self.basis.as_deref() else {
-            return vec![f32::NAN; self.rows()];
+            return vec![Measured::ABSENT; self.rows()];
         };
         let values = basis.materialize(source);
         let mut buckets = BTreeMap::<u32, Vec<f32>>::new();
         for row in 0..basis.rows() {
-            let value = values[row];
-            if !value.is_finite() {
+            let Some(value) = values[row].present() else {
                 continue;
-            }
+            };
             let Some(key) = self.key(basis.observation(row)) else {
                 continue;
             };
@@ -1381,7 +1390,7 @@ impl Table {
             .map(|observation| {
                 self.key(*observation)
                     .and_then(|key| buckets.get(&key))
-                    .map_or(f32::NAN, |values| stored(self.aggregate.apply(values)))
+                    .map_or(Measured::ABSENT, |values| self.aggregate.apply(values))
             })
             .collect()
     }
@@ -1431,21 +1440,12 @@ impl Table {
         self.observations.len()
     }
 
-    pub fn value(&self, row: usize, column: usize) -> f32 {
+    pub fn value(&self, row: usize, column: usize) -> Measured {
         assert!(
             row < self.rows() && column < self.columns.len(),
             "the cell lies inside the table"
         );
         self.materialize(column)[row]
-    }
-
-    pub fn measured(&self, row: usize, column: usize) -> Measured {
-        let value = self.value(row, column);
-        if value.is_finite() {
-            Measured::new(value, 1)
-        } else {
-            Measured::Absent
-        }
     }
 
     pub fn observation(&self, row: usize) -> Observation {
@@ -1455,7 +1455,10 @@ impl Table {
 
     pub fn position(&self, row: usize) -> Option<[f32; 3]> {
         assert!(row < self.rows(), "the row lies inside the table");
-        let axis = |key: &str| self.column(key).map(|column| self.materialize(column)[row]);
+        let axis = |key: &str| {
+            self.column(key)
+                .and_then(|column| self.materialize(column)[row].present())
+        };
         Some([axis("x_um")?, axis("y_um")?, axis("z_um")?])
     }
 
@@ -1572,14 +1575,15 @@ impl Table {
             if !admitted {
                 continue;
             }
-            let point = [xs[row], ys[row], zs[row]];
-            if point.iter().any(|value| !value.is_finite()) {
+            let (Some(x), Some(y), Some(z)) =
+                (xs[row].present(), ys[row].present(), zs[row].present())
+            else {
                 continue;
-            }
+            };
             let Some(time) = basis.observation(row).time() else {
                 continue;
             };
-            slots.entry(time).or_default().push(point);
+            slots.entry(time).or_default().push([x, y, z]);
         }
         slots.into_values().collect()
     }
@@ -1615,7 +1619,7 @@ impl Table {
             "a filter names a column of its table"
         );
         let values = self.materialize(filter.column());
-        Mask::of(self.rows(), |row| filter.contains(values[row]))
+        Mask::of(self.rows(), |row| filter.admits(values[row]))
     }
 
     pub fn lasso_mask(&self, lasso: &Lasso) -> Mask {
@@ -1625,7 +1629,7 @@ impl Table {
         );
         let x = self.materialize(lasso.x());
         let y = self.materialize(lasso.y());
-        Mask::of(self.rows(), |row| lasso.contains(x[row], y[row]))
+        Mask::of(self.rows(), |row| lasso.admits(x[row], y[row]))
     }
 
     pub fn count(&self, frame: Option<u32>) -> usize {
@@ -1678,17 +1682,16 @@ impl Table {
         for row in rows {
             let row = *row as usize;
             let mut distance = 0.0;
-            let mut finite = true;
+            let mut present = true;
             for (index, _) in axes.iter().enumerate() {
-                let value = values[index][row];
-                if !value.is_finite() {
-                    finite = false;
+                let Some(value) = values[index][row].present() else {
+                    present = false;
                     break;
-                }
+                };
                 let delta = (value - target[index]) * scales[index];
                 distance += delta * delta;
             }
-            if finite && distance < closest {
+            if present && distance < closest {
                 closest = distance;
                 nearest = Some(row as u32);
             }
@@ -1699,7 +1702,7 @@ impl Table {
     pub fn sort(&self, rows: &mut [u32], column: usize, descending: bool) {
         let values = self.materialize(column);
         rows.sort_by(|left, right| {
-            let ordering = values[*left as usize].total_cmp(&values[*right as usize]);
+            let ordering = values[*left as usize].total_cmp(values[*right as usize]);
             if descending {
                 ordering.reverse()
             } else {
@@ -2192,11 +2195,10 @@ pub(crate) fn sanitize(name: &str) -> String {
     key.trim_matches('_').to_string()
 }
 
-fn span(values: &[f32]) -> Option<(f32, f32)> {
+fn span(values: &[Measured]) -> Option<(f32, f32)> {
     values
         .iter()
-        .copied()
-        .filter(|value| value.is_finite())
+        .filter_map(|value| value.present())
         .fold(None, |range, value| {
             Some(match range {
                 None => (value, value),

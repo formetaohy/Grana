@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use glam::Vec2;
 use grana_i18n::Language;
-use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, PlotAxis, Scope};
+use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, Measured, PlotAxis, Scope};
 use grana_scene::{Item, ObjectSetId, Selection};
 use grana_session::Command;
 use grana_ui::{
@@ -902,7 +902,8 @@ fn table<'a>(
                             value: state
                                 .measure
                                 .value(index as usize, *column_index)
-                                .and_then(|value| (value.is_finite()).then(|| f32::to_bits(value))),
+                                .and_then(Measured::present)
+                                .map(f32::to_bits),
                         })
                         .collect::<Vec<_>>();
                     children.push(

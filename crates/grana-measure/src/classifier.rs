@@ -1,4 +1,5 @@
 use crate::column::{Column, Unit};
+use crate::measured::Measured;
 use crate::metric::Measurement;
 use crate::table::{Objects, Table};
 
@@ -70,11 +71,10 @@ impl Classifier {
             let mut sample = Vec::with_capacity(columns.len());
             let mut finite = true;
             for column in &columns {
-                let value = column[row];
-                if !value.is_finite() {
+                let Some(value) = column[row].present() else {
                     finite = false;
                     break;
-                }
+                };
                 sample.push(f64::from(value));
             }
             if finite {
@@ -192,14 +192,14 @@ impl Classifier {
         sigmoid(logit) as f32
     }
 
-    pub fn scores(&self, table: &Table, keys: &[String]) -> Vec<f32> {
+    pub fn scores(&self, table: &Table, keys: &[String]) -> Vec<Measured> {
         let columns = self
             .features
             .iter()
             .map(|feature| table.column(&feature.key(keys)))
             .collect::<Option<Vec<_>>>();
         let Some(columns) = columns else {
-            return vec![f32::NAN; table.rows()];
+            return vec![Measured::ABSENT; table.rows()];
         };
         let values = columns
             .iter()
@@ -209,13 +209,13 @@ impl Classifier {
             .map(|row| {
                 let mut logit = self.bias;
                 for (slot, column) in values.iter().enumerate() {
-                    let value = f64::from(column[row]);
-                    if !value.is_finite() {
-                        return f32::NAN;
-                    }
-                    logit += self.weights[slot] * (value - self.mean[slot]) / self.scale[slot];
+                    let Some(value) = column[row].present() else {
+                        return Measured::Absent;
+                    };
+                    logit += self.weights[slot] * (f64::from(value) - self.mean[slot])
+                        / self.scale[slot];
                 }
-                sigmoid(logit) as f32
+                Measured::new(sigmoid(logit) as f32, 1)
             })
             .collect()
     }

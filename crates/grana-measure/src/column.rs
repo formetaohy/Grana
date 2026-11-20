@@ -26,12 +26,19 @@ impl Unit {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Completeness {
+    Always,
+    Possibly,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Column {
     label: String,
     key: String,
     unit: Unit,
     decimals: u8,
+    completeness: Completeness,
 }
 
 impl Column {
@@ -47,7 +54,21 @@ impl Column {
             key: key.into(),
             unit,
             decimals,
+            completeness: Completeness::Always,
         }
+    }
+
+    pub(crate) fn possibly_absent(mut self) -> Self {
+        self.completeness = Completeness::Possibly;
+        self
+    }
+
+    pub fn completeness(&self) -> Completeness {
+        self.completeness
+    }
+
+    pub fn complete(&self) -> bool {
+        self.completeness == Completeness::Always
     }
 
     pub fn label(&self) -> &str {

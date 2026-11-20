@@ -232,12 +232,11 @@ fn statistics(page: &mut String, table: &Table, name: &str) {
         .filter(|(_, column)| !POSITION.contains(&column.key()))
         .filter_map(|(index, column)| {
             let values = table.materialize(index);
-            let values = values
+            let present = values
                 .iter()
-                .copied()
-                .filter(|value| value.is_finite())
+                .filter_map(|value| value.present())
                 .collect::<Vec<_>>();
-            (!values.is_empty()).then_some((column, values))
+            (!present.is_empty()).then_some((column, present, values.len()))
         })
         .collect::<Vec<_>>();
     if columns.is_empty() {
@@ -253,7 +252,7 @@ fn statistics(page: &mut String, table: &Table, name: &str) {
         let _ = write!(page, "<th>{label}</th>");
     }
     page.push_str("<th>n</th></tr></thead>\n<tbody>\n");
-    for (column, values) in columns {
+    for (column, values, rows) in columns {
         let decimals = column.decimals();
         let _ = write!(page, "<tr><td>{}</td>", escape(column.label()));
         let _ = write!(
@@ -262,16 +261,28 @@ fn statistics(page: &mut String, table: &Table, name: &str) {
             escape(column.unit().suffix())
         );
         for (_, aggregate) in &aggregates {
-            let value = aggregate.apply(&values).present().unwrap_or(f32::NAN);
-            let _ = write!(page, "<td>{}</td>", number(value, decimals));
+            let measured = aggregate.apply(&values);
+            let _ = write!(
+                page,
+                "<td>{}</td>",
+                number(measured.present().unwrap_or(f32::NAN), decimals)
+            );
         }
-        let _ = writeln!(page, "<td>{}</td></tr>", values.len());
+        let _ = writeln!(page, "<td>{}</td></tr>", support(values.len(), rows));
     }
     let _ = write!(
         page,
         "</tbody>\n</table>\n</details>\n<p class=\"note\">statistics over every frame of {}</p>\n",
         escape(name)
     );
+}
+
+fn support(present: usize, rows: usize) -> String {
+    if present == rows {
+        rows.to_string()
+    } else {
+        format!("{present} of {rows}")
+    }
 }
 
 fn aggregates() -> [(&'static str, Aggregate); STATISTICS] {

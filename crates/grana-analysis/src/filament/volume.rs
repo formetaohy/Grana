@@ -69,6 +69,69 @@ fn weights(grid: &Grid, unit: f32) -> [Chamfer; 13] {
     })
 }
 
+pub(super) fn nearest(tube: &[u8], grid: &Grid, owner: &mut [u32], reach: &mut [u32]) {
+    let weights = weights(grid, grid.unit());
+    let forward = weights.map(|(offset, weight)| (offset.map(|value| -value), weight));
+    sweep_owner(tube, grid, owner, reach, &forward, false);
+    sweep_owner(tube, grid, owner, reach, &weights, true);
+}
+
+fn sweep_owner(
+    tube: &[u8],
+    grid: &Grid,
+    owner: &mut [u32],
+    reach: &mut [u32],
+    offsets: &[Chamfer; 13],
+    reverse: bool,
+) {
+    let dims = grid.dims;
+    let stride = grid.stride;
+    for step_z in 0..dims[2] {
+        let z = if reverse {
+            dims[2] - 1 - step_z
+        } else {
+            step_z
+        };
+        for step_y in 0..dims[1] {
+            let y = if reverse {
+                dims[1] - 1 - step_y
+            } else {
+                step_y
+            };
+            for step_x in 0..dims[0] {
+                let x = if reverse {
+                    dims[0] - 1 - step_x
+                } else {
+                    step_x
+                };
+                let index =
+                    stride[2] * (z as usize + 1) + stride[1] * (y as usize + 1) + x as usize + 1;
+                if tube[index] == 0 {
+                    continue;
+                }
+                let mut best = reach[index];
+                let mut label = owner[index];
+                for (offset, weight) in offsets {
+                    let target = (index as isize
+                        + offset[0] * stride[0] as isize
+                        + offset[1] * stride[1] as isize
+                        + offset[2] * stride[2] as isize) as usize;
+                    if tube[target] == 0 {
+                        continue;
+                    }
+                    let candidate = reach[target].saturating_add(u32::from(*weight));
+                    if candidate < best {
+                        best = candidate;
+                        label = owner[target];
+                    }
+                }
+                reach[index] = best;
+                owner[index] = label;
+            }
+        }
+    }
+}
+
 fn fill<T: Sample>(
     values: &[T],
     grid: &Grid,

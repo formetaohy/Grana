@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use crate::Column;
+use crate::Measured;
 
 const BLOCK: usize = 4096;
 
@@ -37,7 +38,7 @@ pub(crate) fn write(
     writer: &mut impl Write,
     columns: &[Column],
     rows: &[u32],
-    values: impl Fn(usize) -> std::sync::Arc<Vec<f32>>,
+    values: impl Fn(usize) -> std::sync::Arc<Vec<Measured>>,
     report: &mut dyn FnMut(usize, usize),
 ) -> io::Result<()> {
     let total = rows.len();
@@ -64,8 +65,7 @@ pub(crate) fn write(
                 if index > 0 {
                     text.push(',');
                 }
-                let value = block[index][row];
-                if value.is_finite() {
+                if let Some(value) = block[index][row].present() {
                     write!(text, "{:.*}", column.decimals() as usize, value)
                         .expect("a csv field writes into a string");
                 }

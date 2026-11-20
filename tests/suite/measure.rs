@@ -61,6 +61,24 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(per_frame.rows(), 2);
     assert_eq!(value(&per_frame, 0, "objects"), 2.0);
     assert_eq!(value(&per_frame, 0, "diameter_um_sum"), 2.0);
+    let aggregated = per_frame
+        .column("diameter_um_sum")
+        .expect("the aggregate names its measurement");
+    assert_eq!(
+        per_frame.value(0, aggregated).support(),
+        2,
+        "an aggregate reports the samples it rests on rather than a bare number"
+    );
+    assert!(
+        !per_frame.columns()[aggregated].complete(),
+        "a measured column declares that it may be absent"
+    );
+    assert!(
+        per_frame
+            .column("frame")
+            .is_some_and(|column| per_frame.columns()[column].complete()),
+        "an identity column never goes absent"
+    );
     let basis = Arc::new(
         Table::build(
             Arc::clone(&frames),
@@ -150,8 +168,8 @@ fn materialises_measurement_columns_on_demand() {
         .column("diameter_um")
         .expect("the spots measure their diameter");
     let frame = table.column("frame").expect("the table numbers its frames");
-    assert_eq!(table.value(0, diameter), 1.0);
-    assert_eq!(table.value(0, frame), 1.0);
+    assert_eq!(table.value(0, diameter).present(), Some(1.0));
+    assert_eq!(table.value(0, frame).present(), Some(1.0));
     assert!(table.cached(diameter) && table.cached(frame));
     table.retain([frame]);
     assert!(table.cached(frame), "a retained column stays resident");
@@ -159,7 +177,7 @@ fn materialises_measurement_columns_on_demand() {
         !table.cached(diameter),
         "a released column leaves the table"
     );
-    assert_eq!(table.value(0, diameter), 1.0);
+    assert_eq!(table.value(0, diameter).present(), Some(1.0));
     assert!(table.cached(diameter));
     let radii = [3.0f32, 1.0, 1.0];
     let anisotropic = Spot::gaussian(
@@ -281,7 +299,7 @@ fn value(table: &Table, row: usize, key: &str) -> f32 {
         .iter()
         .position(|column| column.key() == key)
         .unwrap_or_else(|| panic!("the {key} column exists"));
-    table.value(row, column)
+    table.value(row, column).present().unwrap_or(f32::NAN)
 }
 
 fn csv_of(table: &Table, rows: &[u32]) -> String {

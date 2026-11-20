@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use grana_measure::{
-    Aggregate, Child, ChildField, ColocMetric, Frame, FrameSource, Group, Kind, ObjectColoc,
-    Objects, RelationRow, Table, channel_keys,
+    Aggregate, Child, ChildField, ColocMetric, Frame, FrameSource, Group, Kind, Measured,
+    ObjectColoc, Objects, RelationRow, Table, channel_keys,
 };
 use grana_object::{RelationFrame, TrackSet};
 
@@ -300,11 +300,11 @@ impl TableRequest {
                             let (Some(time), Some(object)) =
                                 (observation.time(), observation.object())
                             else {
-                                return f32::NAN;
+                                return Measured::ABSENT;
                             };
                             coloc
                                 .metric(time, object, metric)
-                                .map_or(f32::NAN, |value| value as f32)
+                                .map_or(Measured::ABSENT, |value| Measured::new(value as f32, 1))
                         })
                         .collect(),
                     Group::Track | Group::Timepoint | Group::Molecule => aggregate_coloc(
@@ -341,7 +341,7 @@ fn aggregate_scores(
     group: Group,
     table: &Table,
     classifier: &grana_measure::Classifier,
-) -> Vec<f32> {
+) -> Vec<Measured> {
     match group {
         Group::Object => Vec::new(),
         Group::Track => {
@@ -359,7 +359,7 @@ fn aggregate_scores(
             });
             collected
                 .iter()
-                .map(|values| aggregate.apply(values).present().unwrap_or(f32::NAN))
+                .map(|values| aggregate.apply(values))
                 .collect()
         }
         Group::Timepoint => {
@@ -378,7 +378,7 @@ fn aggregate_scores(
             });
             collected
                 .iter()
-                .map(|values| aggregate.apply(values).present().unwrap_or(f32::NAN))
+                .map(|values| aggregate.apply(values))
                 .collect()
         }
         Group::Molecule => aggregate_members(source, aggregate, table, |_, objects, index| {
@@ -395,7 +395,7 @@ fn aggregate_coloc(
     table: &Table,
     coloc: &ObjectColoc,
     metric: ColocMetric,
-) -> Vec<f32> {
+) -> Vec<Measured> {
     match group {
         Group::Object => Vec::new(),
         Group::Track => {
@@ -405,10 +405,10 @@ fn aggregate_coloc(
             (0..table.rows())
                 .map(|row| {
                     let Some(track) = table.observation(row).track() else {
-                        return f32::NAN;
+                        return Measured::ABSENT;
                     };
                     let Some(track) = tracks.track(track) else {
-                        return f32::NAN;
+                        return Measured::ABSENT;
                     };
                     let values = track
                         .nodes()
@@ -419,21 +419,21 @@ fn aggregate_coloc(
                                 .map(|v| v as f32)
                         })
                         .collect::<Vec<_>>();
-                    aggregate.apply(&values).present().unwrap_or(f32::NAN)
+                    aggregate.apply(&values)
                 })
                 .collect()
         }
         Group::Timepoint => (0..table.rows())
             .map(|row| {
                 let Some(time) = table.observation(row).time() else {
-                    return f32::NAN;
+                    return Measured::ABSENT;
                 };
                 let values = coloc.objects(time).unwrap_or_default();
                 let collected = values
                     .iter()
                     .filter_map(|value| value.metric(metric).map(|value| value as f32))
                     .collect::<Vec<_>>();
-                aggregate.apply(&collected).present().unwrap_or(f32::NAN)
+                aggregate.apply(&collected)
             })
             .collect(),
         Group::Molecule => aggregate_members(source, aggregate, table, |time, _, index| {
@@ -447,7 +447,7 @@ fn aggregate_members(
     aggregate: Aggregate,
     table: &Table,
     value: impl Fn(u32, Objects<'_>, usize) -> Option<f32>,
-) -> Vec<f32> {
+) -> Vec<Measured> {
     let mut rows = HashMap::with_capacity(table.rows());
     for row in 0..table.rows() {
         if let Some(molecule) = table.observation(row).molecule() {
@@ -471,7 +471,7 @@ fn aggregate_members(
     });
     collected
         .iter()
-        .map(|values| aggregate.apply(values).present().unwrap_or(f32::NAN))
+        .map(|values| aggregate.apply(values))
         .collect()
 }
 

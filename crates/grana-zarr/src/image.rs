@@ -505,26 +505,22 @@ fn channels(
             let omero_window = metadata
                 .and_then(|metadata| metadata.window)
                 .and_then(valid);
-            let declared = data_range.or(omero_window);
-            if let Some(intensity) = declared {
-                return Ok(ChannelInfo::new(
-                    name,
-                    tint,
-                    Statistics::declared(intensity, semantics),
-                    format,
-                ));
-            }
-            let sampled = sample_range(levels, index as usize, frames)?;
-            let sampled = sampled.ok_or_else(|| Error::Metadata {
-                path: origin.to_string(),
-                detail: format!("the channel {index} exposes no voxel to census"),
-            })?;
-            Ok(ChannelInfo::new(
-                name,
-                tint,
-                Statistics::declared(sampled.intensity(), semantics),
-                format,
-            ))
+            let statistics = match data_range {
+                Some(data) => Statistics::declared(data, semantics),
+                None => {
+                    let sampled = sample_range(levels, index as usize, frames)?;
+                    let sampled = sampled.ok_or_else(|| Error::Metadata {
+                        path: origin.to_string(),
+                        detail: format!("the channel {index} exposes no voxel to census"),
+                    })?;
+                    Statistics::declared(sampled.intensity(), semantics)
+                }
+            };
+            let info = ChannelInfo::new(name, tint, statistics, format);
+            Ok(match omero_window {
+                Some(window) => info.with_window(window),
+                None => info,
+            })
         })
         .collect()
 }

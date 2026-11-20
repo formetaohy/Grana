@@ -101,6 +101,7 @@ pub struct FilamentScan {
     tube: Vec<u8>,
     distance: Vec<u16>,
     owner: Vec<u32>,
+    reach: Vec<u32>,
 }
 
 impl FilamentScan {
@@ -162,6 +163,7 @@ impl FilamentScan {
             tube: vec![0; voxel_count as usize],
             distance: vec![0; voxel_count as usize],
             owner: vec![0; voxel_count as usize],
+            reach: vec![0; voxel_count as usize],
         }
     }
 
@@ -286,35 +288,16 @@ impl FilamentScan {
         for (cell, value) in self.tube.iter().enumerate() {
             if *value != 0 {
                 self.owner[cell] = 0;
+                self.reach[cell] = u32::MAX;
             }
         }
-        let mut frontier = Vec::new();
         for (slot, filament) in traced.iter().enumerate() {
             for node in &filament.nodes {
                 self.owner[*node] = slot as u32 + 1;
-                frontier.push(*node as u32);
+                self.reach[*node] = 0;
             }
         }
-        let stride = self.grid.stride;
-        let offsets = neighbour::OFFSET.map(|offset| {
-            offset[0] * stride[0] as isize
-                + offset[1] * stride[1] as isize
-                + offset[2] * stride[2] as isize
-        });
-        let mut head = 0;
-        while head < frontier.len() {
-            let cell = frontier[head];
-            head += 1;
-            let label = self.owner[cell as usize];
-            for offset in offsets {
-                let target = (cell as isize + offset) as usize;
-                if self.tube[target] == 0 || self.owner[target] != 0 {
-                    continue;
-                }
-                self.owner[target] = label;
-                frontier.push(target as u32);
-            }
-        }
+        volume::nearest(&self.tube, &self.grid, &mut self.owner, &mut self.reach);
     }
 
     fn measure(&self, data: &VoxelData, cell: usize, accumulator: &mut SampleAccumulator) {

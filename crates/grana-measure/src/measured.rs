@@ -35,6 +35,25 @@ impl Measured {
         matches!(self, Self::Value { .. })
     }
 
+    pub fn is_present_and(self, test: impl FnOnce(f32) -> bool) -> bool {
+        match self {
+            Self::Value { value, .. } => test(value),
+            Self::Absent => false,
+        }
+    }
+
+    pub fn total_cmp(self, other: Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (Self::Value { value: left, .. }, Self::Value { value: right, .. }) => {
+                left.total_cmp(&right)
+            }
+            (Self::Absent, Self::Absent) => Ordering::Equal,
+            (Self::Absent, Self::Value { .. }) => Ordering::Greater,
+            (Self::Value { .. }, Self::Absent) => Ordering::Less,
+        }
+    }
+
     pub fn map(self, apply: impl FnOnce(f32) -> f32) -> Self {
         match self {
             Self::Value { value, support } => Self::new(apply(value), support),

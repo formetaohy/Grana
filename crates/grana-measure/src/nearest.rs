@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
+use crate::measured::Measured;
 use crate::table::Table;
 
 const MIN_SIDE: usize = 16;
 const MAX_SIDE: usize = 512;
 
 pub struct Nearest {
-    x: Arc<Vec<f32>>,
-    y: Arc<Vec<f32>>,
+    x: Arc<Vec<Measured>>,
+    y: Arc<Vec<Measured>>,
     extent: [(f32, f32); 2],
     side: usize,
     starts: Vec<u32>,
@@ -33,7 +34,11 @@ impl Nearest {
         let cells = side * side;
         let mut counts = vec![0u32; cells];
         for row in rows {
-            if let Some(cell) = cell(extent, side, x[*row as usize], y[*row as usize]) {
+            let (Some(x), Some(y)) = (x[*row as usize].present(), y[*row as usize].present())
+            else {
+                continue;
+            };
+            if let Some(cell) = cell(extent, side, x, y) {
                 counts[cell] += 1;
             }
         }
@@ -47,7 +52,11 @@ impl Nearest {
         let mut ids = vec![0u32; total];
         let mut cursors = starts.clone();
         for row in rows {
-            if let Some(cell) = cell(extent, side, x[*row as usize], y[*row as usize]) {
+            let (Some(x), Some(y)) = (x[*row as usize].present(), y[*row as usize].present())
+            else {
+                continue;
+            };
+            if let Some(cell) = cell(extent, side, x, y) {
                 ids[cursors[cell] as usize] = *row;
                 cursors[cell] += 1;
             }
@@ -93,11 +102,9 @@ impl Nearest {
                 let end = self.starts[cell + 1] as usize;
                 for id in &self.ids[start..end] {
                     let row = *id as usize;
-                    let x = self.x[row];
-                    let y = self.y[row];
-                    if !(x.is_finite() && y.is_finite()) {
+                    let (Some(x), Some(y)) = (self.x[row].present(), self.y[row].present()) else {
                         continue;
-                    }
+                    };
                     let dx = (x - target[0]) / spans[0] * pixels[0];
                     let dy = (y - target[1]) / spans[1] * pixels[1];
                     let distance = dx * dx + dy * dy;

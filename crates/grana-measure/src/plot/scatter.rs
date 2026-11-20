@@ -3,6 +3,7 @@ use super::extent;
 use super::summary::{Moments, Summary};
 use crate::correlation::Pearson;
 use crate::mask::Mask;
+use crate::measured::Measured;
 use crate::table::Table;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -106,7 +107,7 @@ impl Grid {
         }
     }
 
-    fn cell(self, values: (&[f32], &[f32]), row: usize) -> Option<usize> {
+    fn cell(self, values: (&[Measured], &[Measured]), row: usize) -> Option<usize> {
         let column = bins::index(values.0[row], self.x_low, self.x_high, self.x_bins)?;
         let line = bins::index(values.1[row], self.y_low, self.y_high, self.y_bins)?;
         Some(line * self.x_bins + column)
@@ -137,7 +138,7 @@ impl Table {
             }
             x_moments.push(first);
             y_moments.push(second);
-            if first.is_finite() && second.is_finite() {
+            if let (Some(first), Some(second)) = (first.present(), second.present()) {
                 correlation.push(f64::from(first), f64::from(second));
             }
         }

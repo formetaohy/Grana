@@ -251,7 +251,10 @@ fn mask_of(region: Region, table: &Table) -> Mask {
     let ys = table.materialize(y);
     let zs = table.materialize(z);
     Mask::of(count, |row| {
-        let position = Vec3::new(xs[row], ys[row], zs[row]);
-        region.contains(position)
+        let (Some(x), Some(y), Some(z)) = (xs[row].present(), ys[row].present(), zs[row].present())
+        else {
+            return false;
+        };
+        region.contains(Vec3::new(x, y, z))
     })
 }

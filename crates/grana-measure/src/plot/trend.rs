@@ -169,10 +169,9 @@ impl Table {
                 continue;
             };
             span = span.max(time + 1);
-            let value = values[row];
-            if !value.is_finite() {
+            let Some(value) = values[row].present() else {
                 continue;
-            }
+            };
             total += 1;
             let admitted = match self.group() {
                 Group::Object => true,
@@ -204,13 +203,13 @@ impl Table {
         let mut total = 0u64;
         let mut span = 0u32;
         for row in 0..self.rows() {
-            let value = values[row];
-            if !value.is_finite() {
+            let Some(value) = values[row].present() else {
                 continue;
-            }
-            let start = first[row];
-            let end = last[row];
-            if !(start.is_finite() && end.is_finite() && start >= 1.0 && end >= start) {
+            };
+            let (Some(start), Some(end)) = (first[row].present(), last[row].present()) else {
+                continue;
+            };
+            if !(start >= 1.0 && end >= start) {
                 continue;
             }
             let start = start as u32 - 1;
@@ -237,10 +236,9 @@ impl Table {
                 continue;
             };
             span = span.max(time + 1);
-            let value = values[row];
-            if !value.is_finite() {
+            let Some(value) = values[row].present() else {
                 continue;
-            }
+            };
             total += 1;
             if gated.contains(row) {
                 buckets.entry(time).or_default().push(f64::from(value));

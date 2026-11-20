@@ -651,14 +651,14 @@ fn write_zarr(root: &std::path::Path) {
         WriteChannel {
             name: "DAPI",
             tint: [0.0, 0.0, 1.0],
-            data: Intensity::new(0.0, 2048.0),
+            data: Intensity::new(0.0, 4096.0),
             window: Intensity::new(0.0, 2048.0),
         },
         WriteChannel {
             name: "GFP",
             tint: [0.0, 1.0, 0.0],
             data: Intensity::new(0.0, 1024.0),
-            window: Intensity::new(0.0, 1024.0),
+            window: Intensity::new(64.0, 768.0),
         },
     ];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
@@ -717,6 +717,16 @@ fn writes_and_reads_a_tiny_ome_zarr() {
     .expect("the group metadata parses");
     let ome = &metadata["attributes"]["ome"];
     assert_eq!(
+        ome["omero"]["channels"][1]["window"],
+        serde_json::json!({
+            "min": 0.0,
+            "max": 1024.0,
+            "start": 64.0,
+            "end": 768.0,
+        }),
+        "the writer keeps the intensity range and the display window apart"
+    );
+    assert_eq!(
         ome["version"],
         serde_json::json!("0.5"),
         "an axis aligned image declares the released schema"
@@ -772,7 +782,16 @@ fn writes_and_reads_a_tiny_ome_zarr() {
     assert_eq!(pyramid.channels()[0].tint(), [0.0, 0.0, 1.0]);
     assert_eq!(
         pyramid.channels()[0].intensity(),
-        Intensity::new(0.0, 2048.0)
+        Intensity::new(0.0, 4096.0)
+    );
+    assert_eq!(
+        pyramid.channels()[1].window(),
+        Some(Intensity::new(64.0, 768.0)),
+        "the display window reads back beside the intensity range it was written with"
+    );
+    assert_eq!(
+        pyramid.channels()[1].intensity(),
+        Intensity::new(0.0, 1024.0)
     );
     assert_eq!(pyramid.level(0).extent(), Extent::new(24, 16, 8));
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 1.0));

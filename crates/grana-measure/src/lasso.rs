@@ -1,3 +1,5 @@
+use crate::measured::Measured;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lasso {
     x: usize,
@@ -33,6 +35,13 @@ impl Lasso {
 
     pub fn points(&self) -> &[[f32; 2]] {
         &self.points
+    }
+
+    pub fn admits(&self, x: Measured, y: Measured) -> bool {
+        match (x.present(), y.present()) {
+            (Some(x), Some(y)) => self.contains(x, y),
+            _ => false,
+        }
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
