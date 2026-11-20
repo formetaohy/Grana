@@ -865,6 +865,7 @@ pub(super) fn toast<'a>(
             .named("stage.toast")
             .at(rect)
             .background(surface)
-            .layer(Layer::Hud),
+            .layer(Layer::Hud)
+            .blocks_pointer(),
     ]
 }

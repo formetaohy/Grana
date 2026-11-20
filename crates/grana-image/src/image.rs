@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
-    pad_brick,
+    BrickCoord, BrickData, BrickGrid, Extent, Placement, Pyramid, VolumeSeries, VoxelData,
+    VoxelFormat, pad_brick,
 };
 use grana_warp::{Warp, Warps};
 use grana_zarr::{Labels, Plate};
@@ -476,22 +476,35 @@ impl Image {
         let parent = level - 1;
         let source = self.level_extent(parent)?;
         let width = extent.x() as usize;
-        let voxels = width * extent.y() as usize;
-        let mut sums = plane::blank_sums(channels, voxels);
+        let height = extent.y() as usize;
         let start = z * 2;
         let end = ((z + 1) * 2).min(source.z());
+        let mut held = Vec::with_capacity((end - start) as usize);
         for source_z in start..end {
-            let held = self.plane(time, parent, source_z)?;
-            for (channel, sum) in sums.iter_mut().enumerate() {
-                plane::add(held.channel(channel), source, 2, width, sum);
-            }
+            held.push(self.plane(time, parent, source_z)?);
         }
-        let mut counts = plane::blank_counts(voxels);
-        plane::cover(source, 2, width, &mut counts);
-        counts.iter_mut().for_each(|count| *count *= end - start);
         let mut planes = Vec::with_capacity(channels);
-        for (channel, sum) in sums.iter().enumerate() {
-            planes.push(plane::finish(self.channel_format(channel)?, sum, &counts));
+        for channel in 0..channels {
+            let format = self.channel_format(channel)?;
+            let sources = held
+                .iter()
+                .map(|plane| plane.channel(channel))
+                .collect::<Vec<_>>();
+            let mut output = VoxelData::blank(format, width * height);
+            let mut row = 0;
+            while row < height {
+                let next = (row + plane::STRIP_ROWS).min(height);
+                let strip = plane::reduce(format, source, width, row..next, &sources);
+                output.blit(
+                    &strip,
+                    Placement::new(width as u32, [0, 0]),
+                    Placement::new(width as u32, [0, row as u32]),
+                    width as u32,
+                    (next - row) as u32,
+                );
+                row = next;
+            }
+            planes.push(output);
         }
         Ok(plane::Plane::new(planes))
     }

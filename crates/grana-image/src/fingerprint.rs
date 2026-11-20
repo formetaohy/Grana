@@ -11,7 +11,7 @@ const SAMPLE_LEVELS: usize = 2;
 const PATCH_SIDE: u32 = 64;
 
 pub const FINGERPRINT_COVERAGE: &str =
-    "two levels, four channels, three frames and centered 64×64 patches at two depths";
+    "two stored levels, four channels, three frames and centered 64×64 patches at two depths";
 
 impl Image {
     pub fn fingerprint(&self) -> Result<Fingerprint, Error> {
@@ -108,7 +108,7 @@ fn depths(level: Level) -> Vec<u32> {
 }
 
 fn sampled_levels(pyramid: &Pyramid) -> Vec<usize> {
-    (0..pyramid.level_count().min(SAMPLE_LEVELS)).collect()
+    (0..pyramid.stored().min(SAMPLE_LEVELS)).collect()
 }
 
 fn sampled_channels(count: usize) -> Vec<usize> {

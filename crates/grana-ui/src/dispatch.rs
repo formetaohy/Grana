@@ -202,12 +202,13 @@ impl<A: Clone> Ui<A> {
         &self,
         pointer: Vec2,
     ) -> Option<(NodeId, crate::scroll::Bar, crate::scroll::ScrollState)> {
+        let top = hit::top(&self.hits, pointer).map_or(0, |hit| hit.layer);
         self.tree
             .scrolls
             .iter()
             .filter_map(|id| {
                 let node = self.tree.nodes.get(*id)?;
-                if !node.visible || node.rect.is_empty() {
+                if !node.visible || node.rect.is_empty() || node.layer.index() < top {
                     return None;
                 }
                 let scroll = node.scroll?;

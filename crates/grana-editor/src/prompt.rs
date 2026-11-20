@@ -215,7 +215,8 @@ pub fn view<'a>(
         .named("prompt")
         .background(surface)
         .children([title_element, body_element, actions])
-        .layer(Layer::Hud);
+        .layer(Layer::Hud)
+        .blocks_pointer();
     vec![backdrop, dialog]
 }
 

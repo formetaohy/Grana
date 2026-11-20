@@ -315,26 +315,37 @@ impl Image {
             }
             fallback.push(Level::new(*extent, held));
         }
-        let (pyramid_levels, calibration) = match ome {
+        let (pyramid_levels, placement, calibration) = match ome {
             Some(ome) => {
                 let lookup = |key: &str| ome.annotation(key);
-                let described = grana_archive::spacings_from(lookup, &extents)
-                    .map_err(|detail| Error::metadata(path, detail))?;
                 let calibration = grana_archive::calibration_from(lookup)
+                    .map_err(|detail| Error::metadata(path, detail))?
+                    .unwrap_or(derived);
+                let placed = grana_archive::levels_from(lookup, &extents)
                     .map_err(|detail| Error::metadata(path, detail))?;
-                match described {
-                    Some(spacings) => (
-                        extents
-                            .iter()
-                            .zip(spacings)
-                            .map(|(extent, spacing)| Level::new(*extent, spacing))
-                            .collect::<Vec<_>>(),
-                        calibration.unwrap_or(derived),
+                match placed {
+                    Some(geometry) => (
+                        geometry.levels().to_vec(),
+                        geometry.placement(),
+                        calibration,
                     ),
-                    None => (fallback, derived),
+                    None => {
+                        let described = grana_archive::spacings_from(lookup, &extents)
+                            .map_err(|detail| Error::metadata(path, detail))?;
+                        let levels = match described {
+                            Some(spacings) => extents
+                                .iter()
+                                .zip(spacings)
+                                .map(|(extent, spacing)| Level::new(*extent, spacing))
+                                .collect::<Vec<_>>(),
+                            None => fallback,
+                        };
+                        let placement = placement(Some(ome), levels[0], sizes[2], path)?;
+                        (levels, placement, calibration)
+                    }
                 }
             }
-            None => (fallback, derived),
+            None => (fallback, [0.0; 3], derived),
         };
         let cache = crate::cache(CACHE_BYTES);
         let mut channels = Vec::with_capacity(sizes[1] as usize);
@@ -361,7 +372,6 @@ impl Image {
             .and_then(|ome| ome.name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
-        let placement = placement(ome, pyramid_levels[0], sizes[2], path)?;
         let stored = pyramid_levels.len();
         Ok(Self {
             path: path.to_path_buf(),

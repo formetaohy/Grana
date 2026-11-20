@@ -1,9 +1,11 @@
-use grana_volume::{Calibration, Extent, Level, Spacing};
+use grana_volume::{Basis, Calibration, Extent, Level, Spacing};
 
 pub const ANNOTATION: &str = "grana";
 pub const MARKER: &str = "1";
 
 const LABELS: [&str; 4] = ["recorded", "inferred", "assumed", "uncalibrated"];
+const BASIS_LENGTH: usize = 9;
+const ALIGNMENT_TOLERANCE: f32 = 1.0e-6;
 
 pub fn calibration_name(calibration: Calibration) -> &'static str {
     LABELS[calibration.index() as usize]
@@ -16,7 +18,11 @@ pub fn calibration_of(name: &str) -> Option<Calibration> {
         .and_then(|index| Calibration::from_index(index as u8))
 }
 
-pub fn annotations(levels: &[Level], calibration: Calibration) -> Vec<(String, String)> {
+pub fn annotations(
+    levels: &[Level],
+    placement: [f32; 3],
+    calibration: Calibration,
+) -> Vec<(String, String)> {
     let mut entries = vec![
         (ANNOTATION.to_string(), MARKER.to_string()),
         (
@@ -24,17 +30,45 @@ pub fn annotations(levels: &[Level], calibration: Calibration) -> Vec<(String, S
             calibration_name(calibration).to_string(),
         ),
         ("levels".to_string(), levels.len().to_string()),
+        (
+            "placement".to_string(),
+            placement
+                .iter()
+                .map(f32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
     ];
     for (index, level) in levels.iter().enumerate() {
         let extent = level.extent();
-        let spacing = level.spacing();
         entries.push((
             format!("level.{index}.extent"),
             format!("{},{},{}", extent.x(), extent.y(), extent.z()),
         ));
+        let spacing = level.spacing();
         entries.push((
             format!("level.{index}.spacing"),
             format!("{},{},{}", spacing.x(), spacing.y(), spacing.z()),
+        ));
+        let basis = level.basis();
+        let columns = [0, 1, 2].map(|axis| basis.column(axis));
+        entries.push((
+            format!("level.{index}.basis"),
+            columns
+                .iter()
+                .flatten()
+                .map(f32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        ));
+        entries.push((
+            format!("level.{index}.origin"),
+            level
+                .origin()
+                .iter()
+                .map(f32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
         ));
     }
     entries
@@ -51,22 +85,72 @@ pub fn calibration_from<'a>(
         .ok_or_else(|| format!("the archive names the unknown calibration `{name}`"))
 }
 
+pub struct Geometry {
+    levels: Vec<Level>,
+    placement: [f32; 3],
+}
+
+impl Geometry {
+    pub fn levels(&self) -> &[Level] {
+        &self.levels
+    }
+
+    pub fn placement(&self) -> [f32; 3] {
+        self.placement
+    }
+}
+
+pub fn levels_from<'a>(
+    lookup: impl Fn(&str) -> Option<&'a str>,
+    resolved: &[Extent],
+) -> Result<Option<Geometry>, String> {
+    let Some(count) = level_count(&lookup, resolved.len())? else {
+        return Ok(None);
+    };
+    if lookup("level.0.basis").is_none() {
+        return Ok(None);
+    }
+    let placement = values(&lookup, "placement", 3)?;
+    let placement = [placement[0], placement[1], placement[2]];
+    let mut levels = Vec::with_capacity(count);
+    for (index, held) in resolved.iter().enumerate() {
+        let extent = counts(&lookup, &format!("level.{index}.extent"))?;
+        let extent = Extent::new(extent[0], extent[1], extent[2]);
+        if extent != *held {
+            return Err(format!(
+                "the archive level {index} holds {}x{}x{} and its pages hold {}x{}x{}",
+                extent.x(),
+                extent.y(),
+                extent.z(),
+                held.x(),
+                held.y(),
+                held.z()
+            ));
+        }
+        let basis = values(&lookup, &format!("level.{index}.basis"), BASIS_LENGTH)?;
+        let origin = values(&lookup, &format!("level.{index}.origin"), 3)?;
+        let columns = [
+            [basis[0], basis[1], basis[2]],
+            [basis[3], basis[4], basis[5]],
+            [basis[6], basis[7], basis[8]],
+        ];
+        check_basis(index, &columns)?;
+        levels.push(Level::placed(
+            extent,
+            Basis::new(columns),
+            [origin[0], origin[1], origin[2]],
+        ));
+    }
+    Ok(Some(Geometry { levels, placement }))
+}
+
 pub fn spacings_from<'a>(
     lookup: impl Fn(&str) -> Option<&'a str>,
     resolved: &[Extent],
 ) -> Result<Option<Vec<Spacing>>, String> {
-    let Some(count) = lookup("levels") else {
+    let Some(count) = level_count(&lookup, resolved.len())? else {
         return Ok(None);
     };
-    let count = count
-        .parse::<usize>()
-        .map_err(|error| format!("the archive levels are invalid: {error}"))?;
-    if count != resolved.len() {
-        return Err(format!(
-            "the archive describes {count} levels and its pages hold {}",
-            resolved.len()
-        ));
-    }
     let mut spacings = Vec::with_capacity(count);
     for (index, held) in resolved.iter().enumerate() {
         let extent = counts(&lookup, &format!("level.{index}.extent"))?;
@@ -82,7 +166,7 @@ pub fn spacings_from<'a>(
                 held.z()
             ));
         }
-        let spacing = numbers(&lookup, &format!("level.{index}.spacing"))?;
+        let spacing = values(&lookup, &format!("level.{index}.spacing"), 3)?;
         if !spacing.iter().all(|value| *value > 0.0) {
             return Err(format!(
                 "the archive level {index} carries a spacing that is not positive"
@@ -91,6 +175,56 @@ pub fn spacings_from<'a>(
         spacings.push(Spacing::new(spacing[0], spacing[1], spacing[2]));
     }
     Ok(Some(spacings))
+}
+
+fn level_count<'a>(
+    lookup: &impl Fn(&str) -> Option<&'a str>,
+    levels: usize,
+) -> Result<Option<usize>, String> {
+    let Some(count) = lookup("levels") else {
+        return Ok(None);
+    };
+    let count = count
+        .parse::<usize>()
+        .map_err(|error| format!("the archive levels are invalid: {error}"))?;
+    if count != levels {
+        return Err(format!(
+            "the archive describes {count} levels and its pages hold {levels}"
+        ));
+    }
+    Ok(Some(count))
+}
+
+fn check_basis(index: usize, columns: &[[f32; 3]; 3]) -> Result<(), String> {
+    if columns.iter().flatten().any(|value| !value.is_finite()) {
+        return Err(format!(
+            "the archive level {index} carries a basis that is not finite"
+        ));
+    }
+    let cross = |left: [f32; 3], right: [f32; 3]| {
+        [
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0],
+        ]
+    };
+    let normal = cross(columns[1], columns[2]);
+    let determinant =
+        columns[0][0] * normal[0] + columns[0][1] * normal[1] + columns[0][2] * normal[2];
+    let length = |column: [f32; 3]| {
+        (column[0] * column[0] + column[1] * column[1] + column[2] * column[2]).sqrt()
+    };
+    let volume = length(columns[0]) * length(columns[1]) * length(columns[2]);
+    if !(determinant.is_finite()
+        && volume.is_finite()
+        && volume > 0.0
+        && determinant.abs() > ALIGNMENT_TOLERANCE * volume)
+    {
+        return Err(format!(
+            "the archive level {index} carries a basis that does not map voxels bijectively"
+        ));
+    }
+    Ok(())
 }
 
 fn counts<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Result<[u32; 3], String> {
@@ -109,7 +243,11 @@ fn counts<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Result<[u
         .map_err(|_| format!("the archive {key} holds the wrong number of axes"))
 }
 
-fn numbers<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Result<[f32; 3], String> {
+fn values<'a>(
+    lookup: &impl Fn(&str) -> Option<&'a str>,
+    key: &str,
+    count: usize,
+) -> Result<Vec<f32>, String> {
     let text = lookup(key).ok_or_else(|| format!("the archive holds no {key}"))?;
     let values = text
         .split(',')
@@ -120,10 +258,12 @@ fn numbers<'a>(lookup: &impl Fn(&str) -> Option<&'a str>, key: &str) -> Result<[
                 .map_err(|error| format!("the archive {key} is invalid: {error}"))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let values: [f32; 3] = values
-        .try_into()
-        .map_err(|_| format!("the archive {key} holds the wrong number of axes"))?;
-    if !values.iter().all(|value| value.is_finite()) {
+    if values.len() != count {
+        return Err(format!(
+            "the archive {key} holds the wrong number of values"
+        ));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
         return Err(format!("the archive {key} is not finite"));
     }
     Ok(values)

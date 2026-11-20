@@ -331,7 +331,7 @@ fn annotations(spec: &ImageSpec<'_>) -> String {
     let mut xml = String::from(
         " <StructuredAnnotations>\n  <MapAnnotation ID=\"Annotation:grana\" Namespace=\"urn:grana:archive\">\n",
     );
-    for (key, value) in grana_archive::annotations(spec.levels, spec.calibration) {
+    for (key, value) in grana_archive::annotations(spec.levels, spec.placement, spec.calibration) {
         xml.push_str(&format!(
             "   <Value><M>{}</M><S>{}</S></Value>\n",
             escape(&key),

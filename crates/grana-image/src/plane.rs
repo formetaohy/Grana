@@ -1,10 +1,16 @@
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const SOURCE_BUDGET: u64 = 512 << 20;
 const TOTAL_BUDGET: u64 = 1536 << 20;
 const MINIMUM_BUDGET: u64 = 48 << 20;
+
+const RATIO: u32 = 2;
+
+pub(crate) const STRIP_ROWS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
@@ -34,13 +40,13 @@ impl Plane {
 }
 
 pub(crate) struct Caches {
-    levels: Vec<std::sync::Mutex<Inner>>,
+    levels: Vec<Mutex<Inner>>,
     budgets: Vec<u64>,
 }
 
 struct Inner {
-    entries: std::collections::HashMap<u32, Arc<Plane>>,
-    order: std::collections::VecDeque<u32>,
+    entries: HashMap<Key, Arc<Plane>>,
+    order: VecDeque<Key>,
     bytes: u64,
 }
 
@@ -75,9 +81,9 @@ impl Caches {
                 .levels()
                 .iter()
                 .map(|_| {
-                    std::sync::Mutex::new(Inner {
-                        entries: std::collections::HashMap::new(),
-                        order: std::collections::VecDeque::new(),
+                    Mutex::new(Inner {
+                        entries: HashMap::new(),
+                        order: VecDeque::new(),
                         bytes: 0,
                     })
                 })
@@ -88,19 +94,21 @@ impl Caches {
 
     pub(crate) fn fetch(&self, key: Key) -> Option<Arc<Plane>> {
         let mut inner = self.lock(key.level as usize);
-        let plane = inner.entries.get(&key.z).cloned()?;
-        inner.order.retain(|held| *held != key.z);
-        inner.order.push_back(key.z);
+        let plane = inner.entries.get(&key).cloned()?;
+        inner.order.retain(|held| *held != key);
+        inner.order.push_back(key);
         Some(plane)
     }
 
     pub(crate) fn insert(&self, key: Key, plane: Arc<Plane>) {
         let budget = self.budgets[key.level as usize];
         let mut inner = self.lock(key.level as usize);
-        if inner.entries.insert(key.z, Arc::clone(&plane)).is_none() {
-            inner.bytes += plane.bytes();
+        if let Some(held) = inner.entries.insert(key, plane) {
+            inner.bytes = inner.bytes.saturating_sub(held.bytes());
         }
-        inner.order.push_back(key.z);
+        inner.order.retain(|held| *held != key);
+        inner.order.push_back(key);
+        inner.bytes += inner.entries[&key].bytes();
         while inner.bytes > budget {
             let Some(victim) = inner.order.pop_front() else {
                 break;
@@ -111,30 +119,46 @@ impl Caches {
         }
     }
 
-    fn lock(&self, level: usize) -> std::sync::MutexGuard<'_, Inner> {
+    fn lock(&self, level: usize) -> MutexGuard<'_, Inner> {
         self.levels[level]
             .lock()
             .unwrap_or_else(|error| error.into_inner())
     }
 }
 
-pub(crate) fn blank_sums(channels: usize, voxels: usize) -> Vec<Vec<f64>> {
-    (0..channels).map(|_| vec![0.0; voxels]).collect()
+pub(crate) fn reduce(
+    format: VoxelFormat,
+    extent: Extent,
+    width: usize,
+    rows: Range<usize>,
+    sources: &[&VoxelData],
+) -> VoxelData {
+    assert!(
+        !sources.is_empty(),
+        "a reduced plane averages at least one source plane"
+    );
+    let height = rows.end - rows.start;
+    let voxels = width * height;
+    let mut sums = vec![0.0f64; voxels];
+    for source in sources {
+        add(source, extent, width, rows.clone(), &mut sums);
+    }
+    let mut counts = vec![0u32; voxels];
+    cover(extent, width, rows, &mut counts);
+    let depths = u32::try_from(sources.len()).expect("a plane stack counts fewer than 4G planes");
+    counts.iter_mut().for_each(|count| *count *= depths);
+    finish(format, sums, counts)
 }
 
-pub(crate) fn blank_counts(voxels: usize) -> Vec<u32> {
-    vec![0; voxels]
-}
-
-pub(crate) fn add(data: &VoxelData, extent: Extent, ratio: u32, width: usize, sums: &mut [f64]) {
+fn add(source: &VoxelData, extent: Extent, width: usize, rows: Range<usize>, sums: &mut [f64]) {
     macro_rules! arm {
         ($values:expr, $cast:expr) => {
-            blocks($values, extent, ratio, width, $cast, |index, total| {
+            blocks($values, extent, width, rows, $cast, |index, total| {
                 sums[index] += total
             })
         };
     }
-    match data {
+    match source {
         VoxelData::U8(values) => arm!(values, |value: u8| f64::from(value)),
         VoxelData::U16(values) => arm!(values, |value: u16| f64::from(value)),
         VoxelData::U32(values) => arm!(values, |value: u32| f64::from(value)),
@@ -148,11 +172,13 @@ pub(crate) fn add(data: &VoxelData, extent: Extent, ratio: u32, width: usize, su
     }
 }
 
-pub(crate) fn cover(extent: Extent, ratio: u32, width: usize, counts: &mut [u32]) {
+fn cover(extent: Extent, width: usize, rows: Range<usize>, counts: &mut [u32]) {
     let source_width = extent.x() as usize;
-    let ratio = ratio as usize;
-    for y in 0..extent.y() as usize {
-        let line = (y / ratio) * width;
+    let ratio = RATIO as usize;
+    let first = rows.start * ratio;
+    let last = (rows.end * ratio).min(extent.y() as usize);
+    for y in first..last {
+        let line = (y / ratio - rows.start) * width;
         for x in 0..width {
             let start = (x * ratio).min(source_width);
             let end = (start + ratio).min(source_width);
@@ -161,7 +187,7 @@ pub(crate) fn cover(extent: Extent, ratio: u32, width: usize, counts: &mut [u32]
     }
 }
 
-pub(crate) fn finish(format: VoxelFormat, sums: &[f64], counts: &[u32]) -> VoxelData {
+fn finish(format: VoxelFormat, sums: Vec<f64>, counts: Vec<u32>) -> VoxelData {
     assert!(
         counts.iter().all(|count| *count > 0),
         "every resolved voxel averages a stored voxel"
@@ -177,20 +203,22 @@ pub(crate) fn finish(format: VoxelFormat, sums: &[f64], counts: &[u32]) -> Voxel
 fn blocks<T: Copy>(
     values: &[T],
     extent: Extent,
-    ratio: u32,
     width: usize,
+    rows: Range<usize>,
     cast: fn(T) -> f64,
     mut add: impl FnMut(usize, f64),
 ) {
     let source_width = extent.x() as usize;
-    let ratio = ratio as usize;
+    let ratio = RATIO as usize;
     assert!(
         values.len() >= source_width * extent.y() as usize,
         "the source plane spans its extent"
     );
-    for y in 0..extent.y() as usize {
+    let first = rows.start * ratio;
+    let last = (rows.end * ratio).min(extent.y() as usize);
+    for y in first..last {
         let row = &values[y * source_width..(y + 1) * source_width];
-        let line = (y / ratio) * width;
+        let line = (y / ratio - rows.start) * width;
         for x in 0..width {
             let start = (x * ratio).min(source_width);
             let end = (start + ratio).min(source_width);

@@ -288,17 +288,13 @@ fn exports_a_tiled_pyramid_ome_tiff() {
     let expected = [0, 1, 2].map(|axis| {
         0.5 * (source.corner([4.0, 2.0, 1.0])[axis] + source.corner([12.0, 10.0, 5.0])[axis])
     });
-    for (axis, value) in reopened.pyramid().placement().into_iter().enumerate() {
-        assert!(
-            (value - expected[axis]).abs() <= 1.0e-3,
-            "the cropped archive keeps the world centre of its box on axis {axis}: {value} against {}",
-            expected[axis]
-        );
-    }
+    let placement = reopened.pyramid().placement();
     for (axis, value) in reopened.pyramid().level(0).center().into_iter().enumerate() {
+        let world = value + placement[axis];
         assert!(
-            value.abs() <= 1.0e-3,
-            "the cropped archive places its centre at the world origin on axis {axis}: {value}"
+            (world - expected[axis]).abs() <= 1.0e-3,
+            "the cropped archive keeps the world centre of its box on axis {axis}: {world} against {}",
+            expected[axis]
         );
     }
 
@@ -308,7 +304,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         [0.0; 3],
     );
     let mut progress = |_, _| {};
-    let refused = grana_pipeline::write_dataset(
+    let mirrored = grana_pipeline::write_dataset(
         DatasetSpec {
             path: temp.path().join("flipped.ome.tif"),
             name: "flipped".to_string(),
@@ -331,10 +327,12 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         &Channels::stored(Arc::clone(&image)),
         &AtomicBool::new(false),
         &mut progress,
-    );
+    )
+    .expect("a mirrored basis writes an OME-TIFF");
+    let mirrored = grana_tiff::Image::open(mirrored.path(), 0).expect("the mirrored archive opens");
     assert!(
-        refused.is_err_and(|detail| detail.contains("flips")),
-        "an OME-TIFF refuses a level whose basis mirrors the volume"
+        mirrored.pyramid().level(0).basis().column(0)[0] < 0.0,
+        "an OME-TIFF carries a mirrored axis in its grana annotation"
     );
 
     let shallow = [
@@ -699,9 +697,9 @@ fn sample(channel: usize, frame: u32, position: [u32; 3]) -> u32 {
 }
 
 #[test]
-fn writes_the_released_ome_zarr_schema() {
-    let temp = Temp::new("suite-zarr-schema");
-    let path = temp.path().join("released.ome.zarr");
+fn writes_and_reads_a_tiny_ome_zarr() {
+    let temp = Temp::new("suite-zarr");
+    let path = temp.path().join("tiny.ome.zarr");
     write_zarr(&path);
     let metadata = serde_json::from_slice::<serde_json::Value>(
         &std::fs::read(path.join("zarr.json")).expect("the group metadata reads"),
@@ -753,13 +751,7 @@ fn writes_the_released_ome_zarr_schema() {
                 .is_some_and(|values| values.len() == 5)
         }));
     }
-}
 
-#[test]
-fn writes_and_reads_a_tiny_ome_zarr() {
-    let temp = Temp::new("suite-zarr");
-    let path = temp.path().join("tiny.ome.zarr");
-    write_zarr(&path);
     let image = grana_zarr::Image::open(&path).expect("the written image opens");
     let pyramid = image.pyramid();
     assert_eq!(pyramid.channel_count(), 2);
@@ -837,6 +829,136 @@ fn writes_and_reads_a_tiny_ome_zarr() {
         stamps,
         "a rewritten chunk restamps every tile composed from it"
     );
+
+    let frames = temp.path().join("frames.ome.zarr");
+    let extent = Extent::new(64, 64, 4);
+    let levels = [Level::new(extent, Spacing::new(0.5, 0.5, 1.0))];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [1.0, 1.0, 1.0],
+        intensity: Intensity::new(0.0, 255.0),
+        window: Intensity::new(0.0, 255.0),
+    }];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        Ok(VoxelData::F32(vec![
+            block.level as f32
+                + block.frame as f32 * 100.0;
+            block.voxels()
+        ]))
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        &frames,
+        &mut ImageSpec {
+            name: "frames",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 2,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::F32,
+            calibration: Calibration::Recorded,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the frame fixture writes");
+    let derived = Image::open_with_cache(
+        &Source::file_series(frames, 0),
+        Some(temp.path().join("derived")),
+    )
+    .expect("the derived pyramid opens");
+    assert_eq!(derived.pyramid().level_count(), 2);
+    let composed = |frame: u32| {
+        derived
+            .read_region(
+                frame,
+                1,
+                0,
+                &[0..32, 0..32, 0..2],
+                &grana_warp::Warp::IDENTITY,
+            )
+            .expect("the derived level composes")
+            .value(0)
+    };
+    assert_eq!(
+        composed(0),
+        0.0,
+        "the first derived voxel averages the first frame"
+    );
+    assert_eq!(
+        composed(1),
+        100.0,
+        "the derived level composes the frame it is asked for"
+    );
+}
+
+#[test]
+fn round_trips_a_rotated_basis_through_ome_tiff() {
+    let temp = Temp::new("suite-ome-tiff-basis");
+    let basis = Basis::new([[0.0, 0.5, 0.0], [0.25, 0.0, 0.0], [0.0, 0.0, 1.5]]);
+    let coarse = Basis::new([[0.0, 1.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.0, 3.0]]);
+    let levels = [
+        Level::placed(Extent::new(32, 24, 4), basis, [-2.0, 1.0, -3.0]),
+        Level::placed(Extent::new(16, 12, 4), coarse, [-1.5, 0.5, -2.5]),
+    ];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [1.0, 1.0, 1.0],
+        intensity: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
+    }];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        Ok(VoxelData::F32(vec![block.level as f32; block.voxels()]))
+    };
+    let mut progress = |_, _| {};
+    let path = temp.path().join("rotated.ome.tif");
+    grana_tiff::write_archive(
+        &path,
+        &mut ImageSpec {
+            name: "rotated",
+            channels: &channels,
+            levels: &levels,
+            placement: [1.5, -2.0, 3.0],
+            frames: 1,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::F32,
+            calibration: Calibration::Inferred,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("a rotated basis writes an OME-TIFF");
+    let image = grana_tiff::Image::open(&path, 0).expect("the rotated archive opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.level_count(), 2);
+    for (axis, value) in pyramid.placement().into_iter().enumerate() {
+        assert!(
+            (value - [1.5, -2.0, 3.0][axis]).abs() <= 1.0e-5,
+            "the archive keeps its placement on axis {axis}"
+        );
+    }
+    for (index, level) in levels.iter().enumerate() {
+        let held = pyramid.level(index);
+        assert_eq!(
+            held.extent(),
+            level.extent(),
+            "level {index} keeps its extent"
+        );
+        assert!(
+            held.basis().close(level.basis()),
+            "level {index} keeps its full basis: {:?} against {:?}",
+            held.basis().matrix(),
+            level.basis().matrix()
+        );
+        let (read, written) = (held.origin(), level.origin());
+        assert!(
+            (0..3).all(|axis| (read[axis] - written[axis]).abs() <= 1.0e-5),
+            "level {index} keeps its origin: {read:?} against {written:?}"
+        );
+    }
 }
 
 fn write_derived_zarr(root: &std::path::Path, value: f32) {

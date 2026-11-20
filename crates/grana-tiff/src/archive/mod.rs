@@ -13,7 +13,6 @@ use tile::{LevelInfo, Request, SIDE, Tile};
 
 const ALIGN: u64 = 8;
 const ZEROS: [u8; 8] = [0; 8];
-const ALIGNMENT: f32 = 1.0e-5;
 const CANCELLED: &str = "the write was cancelled";
 const TILE_OVERHEAD: u64 = 256;
 const POINTER_BYTES: u64 = 16;
@@ -161,36 +160,18 @@ fn validate(path: &Path, spec: &ImageSpec<'_>) -> Result<(), Error> {
         let basis = level.basis();
         for axis in 0..3 {
             let column = basis.column(axis);
-            let norm = column.iter().map(|value| value * value).sum::<f32>().sqrt();
-            let world = column
-                .iter()
-                .filter(|value| value.abs() > ALIGNMENT * norm)
-                .count();
-            if world > 1 {
+            if !column.iter().all(|value| value.is_finite()) {
                 return Err(Error::write(
                     path,
-                    format!(
-                        "resolution level {index} rotates the {} axis over {world} world axes, which an OME-TIFF cannot represent",
-                        ["x", "y", "z"][axis]
-                    ),
+                    format!("resolution level {index} carries a basis that is not finite"),
                 ));
             }
-            let dominant = column.iter().fold(0.0f32, |held, value| {
-                if value.abs() > held.abs() {
-                    *value
-                } else {
-                    held
-                }
-            });
-            if dominant < 0.0 {
-                return Err(Error::write(
-                    path,
-                    format!(
-                        "resolution level {index} flips the {} axis, which an OME-TIFF cannot represent; export it as OME-Zarr to keep the direction",
-                        ["x", "y", "z"][axis]
-                    ),
-                ));
-            }
+        }
+        if !level.origin().iter().all(|value| value.is_finite()) {
+            return Err(Error::write(
+                path,
+                format!("resolution level {index} carries an origin that is not finite"),
+            ));
         }
     }
     for (index, pair) in spec.levels.windows(2).enumerate() {

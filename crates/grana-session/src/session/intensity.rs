@@ -4,24 +4,32 @@ use grana_pipeline::Channels;
 use grana_readout::{ImportedFilament, ImportedSpot, ImportedSurface};
 use grana_volume::Level;
 
-const LIMIT: u64 = 1 << 22;
 const BUDGET: u64 = 32 << 20;
+const FLOOR: u64 = 4096;
+const LIMIT: u64 = 1 << 22;
+const TILE: u32 = 32;
+
+const TILE_VOXELS: u64 = (TILE as u64).pow(3);
 
 pub(super) struct Sampled {
     pub(super) intensities: Vec<SampleStatistics>,
+    pub(super) level: usize,
+    pub(super) coverage: f32,
     pub(super) measured: bool,
 }
 
 pub(super) struct Sampler<'a> {
     channels: &'a Channels,
-    remaining: u64,
+    per_object: u64,
 }
 
 impl<'a> Sampler<'a> {
-    pub(super) fn new(channels: &'a Channels) -> Self {
+    pub(super) fn new(channels: &'a Channels, objects: u64) -> Self {
+        let per_channel = BUDGET / u64::from(channels.pyramid().channel_count() as u32);
+        let per_object = (per_channel / objects.max(1)).clamp(FLOOR, LIMIT);
         Self {
             channels,
-            remaining: BUDGET,
+            per_object,
         }
     }
 
@@ -46,8 +54,9 @@ impl<'a> Sampler<'a> {
                 .map(|point| point[axis])
                 .fold(f32::NEG_INFINITY, f32::max)
         });
+        let triangles = surface.triangles();
         self.sample(time, low, high, |level, low, high, mask| {
-            surface_mask(level, low, high, positions, surface.triangles(), mask)
+            surface_mask(level, low, high, positions, triangles, mask)
         })
     }
 
@@ -96,75 +105,137 @@ impl<'a> Sampler<'a> {
         time: u32,
         low: [f32; 3],
         high: [f32; 3],
-        fill: impl FnOnce(Level, [u32; 3], [u32; 3], &mut [bool]),
+        mut fill: impl FnMut(Level, [u32; 3], [u32; 3], &mut [bool]),
     ) -> Result<Sampled, String> {
         let channels = self.channels.pyramid().channel_count();
-        let per_object = (self.remaining / channels as u64).clamp(1, LIMIT);
-        let Some((index, low, high)) = bounds(self.channels, low, high, per_object) else {
-            return Err("the object lies outside the dataset".to_string());
-        };
+        let allowance = self.per_object;
+        let (index, low, high) = self.choose(low, high, allowance)?;
         let level = self.channels.pyramid().level(index);
         let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
-        let voxels = u64::from(dims[0]) * u64::from(dims[1]) * u64::from(dims[2]);
-        self.remaining = self.remaining.saturating_sub(voxels * channels as u64);
-        let mut mask = vec![false; voxels as usize];
-        fill(level, low, high, &mut mask);
-        let measured = mask.iter().any(|inside| *inside);
-        if !measured {
-            seed(low, high, &mut mask)?;
-        }
-        let ranges = [low[0]..high[0], low[1]..high[1], low[2]..high[2]];
+        let tiles = tiles_of(dims);
+        let selected = select(tiles, allowance);
+        let coverage = selected.len() as f32 / (tiles[0] * tiles[1] * tiles[2]).max(1) as f32;
         let mut accumulators = vec![SampleAccumulator::new(); channels];
-        for (channel, accumulator) in accumulators.iter_mut().enumerate() {
-            let data = self
-                .channels
-                .read_region(time, index, channel, &ranges, &grana_warp::Warp::IDENTITY)
-                .map_err(|error| error.to_string())?;
-            if data.voxel_count() != mask.len() {
-                return Err("the sampled region disagrees with its extent".to_string());
+        let mut measured = false;
+        let mut inside_any = false;
+        for tile in selected {
+            let origin = [0, 1, 2].map(|axis| low[axis] + tile[axis] * TILE);
+            let reach = [0, 1, 2].map(|axis| (low[axis] + (tile[axis] + 1) * TILE).min(high[axis]));
+            let extent = [
+                reach[0] - origin[0],
+                reach[1] - origin[1],
+                reach[2] - origin[2],
+            ];
+            let voxels = u64::from(extent[0]) * u64::from(extent[1]) * u64::from(extent[2]);
+            let mut mask = vec![false; voxels as usize];
+            fill(level, origin, reach, &mut mask);
+            if !mask.iter().any(|inside| *inside) {
+                continue;
             }
-            for (slot, inside) in mask.iter().enumerate() {
-                if *inside {
-                    accumulator.push(data.value(slot));
+            inside_any = true;
+            let ranges = [
+                origin[0]..reach[0],
+                origin[1]..reach[1],
+                origin[2]..reach[2],
+            ];
+            for (channel, accumulator) in accumulators.iter_mut().enumerate() {
+                let data = self
+                    .channels
+                    .read_region(time, index, channel, &ranges, &grana_warp::Warp::IDENTITY)
+                    .map_err(|error| error.to_string())?;
+                if data.voxel_count() != mask.len() {
+                    return Err("the sampled region disagrees with its extent".to_string());
+                }
+                for (slot, inside) in mask.iter().enumerate() {
+                    if *inside {
+                        accumulator.push(data.value(slot));
+                    }
                 }
             }
+        }
+        if !inside_any {
+            let centre = [0, 1, 2].map(|axis| (low[axis] + high[axis]) / 2);
+            let ranges = [
+                centre[0]..centre[0] + 1,
+                centre[1]..centre[1] + 1,
+                centre[2]..centre[2] + 1,
+            ];
+            for (channel, accumulator) in accumulators.iter_mut().enumerate() {
+                let region = self
+                    .channels
+                    .read_region(time, index, channel, &ranges, &grana_warp::Warp::IDENTITY)
+                    .map_err(|error| error.to_string())?;
+                accumulator.push(region.value(0));
+            }
+        } else {
+            measured = true;
         }
         Ok(Sampled {
             intensities: accumulators
                 .into_iter()
                 .map(SampleAccumulator::statistics)
                 .collect(),
+            level: index,
+            coverage: if measured { coverage } else { 0.0 },
             measured,
         })
     }
+
+    fn choose(
+        &self,
+        low: [f32; 3],
+        high: [f32; 3],
+        allowance: u64,
+    ) -> Result<(usize, [u32; 3], [u32; 3]), String> {
+        let pyramid = self.channels.pyramid();
+        let allowed = (allowance / TILE_VOXELS).max(1);
+        let mut coarsest = None;
+        for index in 0..pyramid.level_count() {
+            let level = pyramid.level(index);
+            let Some((low, high)) = voxel_bounds(level, low, high) else {
+                continue;
+            };
+            let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
+            let tiles = tiles_of(dims);
+            let count = u64::from(tiles[0]) * u64::from(tiles[1]) * u64::from(tiles[2]);
+            coarsest = Some((index, low, high));
+            if count <= allowed {
+                return Ok((index, low, high));
+            }
+        }
+        coarsest.ok_or_else(|| "the object lies outside the dataset".to_string())
+    }
 }
 
-fn bounds(
-    channels: &Channels,
-    low: [f32; 3],
-    high: [f32; 3],
-    limit: u64,
-) -> Option<(usize, [u32; 3], [u32; 3])> {
-    let count = channels.pyramid().level_count();
-    let mut coarsest = None;
-    for index in 0..count {
-        let info = channels.pyramid().level(index);
-        let Some((low, high)) = voxel_bounds(info, low, high) else {
-            continue;
-        };
-        let voxels = [low[0], low[1], low[2]]
-            .into_iter()
-            .zip(high)
-            .map(|(low, high)| u64::from(high - low))
-            .product::<u64>();
-        if voxels <= limit {
-            return Some((index, low, high));
-        }
-        coarsest = Some((index, low, high));
+fn tiles_of(dims: [u32; 3]) -> [u32; 3] {
+    dims.map(|value| value.div_ceil(TILE).max(1))
+}
+
+fn select(tiles: [u32; 3], allowance: u64) -> Vec<[u32; 3]> {
+    let count = tiles[0] * tiles[1] * tiles[2];
+    let allowed = (allowance / TILE_VOXELS).max(1) as u32;
+    if count <= allowed {
+        return (0..count)
+            .map(|index| {
+                [
+                    index % tiles[0],
+                    (index / tiles[0]) % tiles[1],
+                    index / (tiles[0] * tiles[1]),
+                ]
+            })
+            .collect();
     }
-    let (index, low, high) = coarsest?;
-    let middle = [0, 1, 2].map(|axis| (low[axis] + high[axis]) / 2);
-    Some((index, middle, [middle[0] + 1, middle[1] + 1, middle[2] + 1]))
+    let step = count.div_ceil(allowed);
+    (0..count)
+        .step_by(step as usize)
+        .map(|index| {
+            [
+                index % tiles[0],
+                (index / tiles[0]) % tiles[1],
+                index / (tiles[0] * tiles[1]),
+            ]
+        })
+        .collect()
 }
 
 fn voxel_bounds(level: Level, low: [f32; 3], high: [f32; 3]) -> Option<([u32; 3], [u32; 3])> {
@@ -363,17 +434,4 @@ fn voxel_range(
         }
     }
     Some((start, end))
-}
-
-fn seed(low: [u32; 3], high: [u32; 3], mask: &mut [bool]) -> Result<(), String> {
-    let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
-    if dims.contains(&0) {
-        return Err("the sampled region holds no voxel".to_string());
-    }
-    let middle = [dims[0] / 2, dims[1] / 2, dims[2] / 2];
-    let width = dims[0] as usize;
-    let height = dims[1] as usize;
-    let index = middle[0] as usize + width * (middle[1] as usize + height * middle[2] as usize);
-    mask[index] = true;
-    Ok(())
 }

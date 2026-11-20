@@ -11,12 +11,36 @@ use grana_readout::{
 use grana_scene::{IntensitySource, ObjectKind};
 use grana_store::SpillStore;
 
-use super::intensity::Sampler;
+use super::intensity::{Sampled, Sampler};
 use super::*;
 
 #[derive(Default)]
 struct Report {
     unmeasured: usize,
+    lowest: Option<usize>,
+    highest: Option<usize>,
+    coverage: Option<f32>,
+}
+
+impl Report {
+    fn record(&mut self, sampled: &Sampled) {
+        self.lowest = Some(
+            self.lowest
+                .map_or(sampled.level, |held| held.min(sampled.level)),
+        );
+        self.highest = Some(
+            self.highest
+                .map_or(sampled.level, |held| held.max(sampled.level)),
+        );
+        self.coverage = Some(
+            self.coverage
+                .map_or(sampled.coverage, |held| held.min(sampled.coverage)),
+        );
+    }
+
+    fn levels(&self) -> Option<(usize, usize)> {
+        Some((self.lowest?, self.highest?))
+    }
 }
 
 struct Sampling<'a, 'b> {
@@ -39,6 +63,7 @@ impl Sampling<'_, '_> {
         if !measured.measured {
             self.report.unmeasured += 1;
         }
+        self.report.record(&measured);
         Ok(measured.intensities)
     }
 
@@ -51,6 +76,7 @@ impl Sampling<'_, '_> {
         if !measured.measured {
             self.report.unmeasured += 1;
         }
+        self.report.record(&measured);
         Ok(measured.intensities)
     }
 
@@ -67,6 +93,7 @@ impl Sampling<'_, '_> {
         if !measured.measured {
             self.report.unmeasured += 1;
         }
+        self.report.record(&measured);
         Ok(measured.intensities)
     }
 }
@@ -81,7 +108,9 @@ impl Session {
         let voxel = scene.dataset.voxel_size().min_element();
         let frames = scene.dataset.frame_count();
         let store = Arc::clone(&self.store);
-        let mut sampler = channels.as_deref().map(Sampler::new);
+        let mut sampler = channels
+            .as_deref()
+            .map(|channels| Sampler::new(channels, imported_objects(&imported)));
         let mut report = Report::default();
         let mut sampled = 0usize;
         let mut failed = Vec::new();
@@ -185,6 +214,21 @@ impl Session {
             let mut text = format!(
                 "{sampled} Imaris objects held no statistics and were measured from the voxels inside them"
             );
+            if let Some((lowest, highest)) = report.levels() {
+                if lowest == highest {
+                    text.push_str(&format!(" · at level {lowest}"));
+                } else {
+                    text.push_str(&format!(" · at levels {lowest}–{highest}"));
+                }
+            }
+            if let Some(coverage) = report.coverage
+                && coverage < 1.0
+            {
+                text.push_str(&format!(
+                    " · each covered {:.0}% of its voxels",
+                    f64::from(coverage) * 100.0
+                ));
+            }
             if report.unmeasured > 0 {
                 text.push_str(&format!(
                     " · {} held no voxel inside and were sampled at their centre",
@@ -207,6 +251,24 @@ impl Session {
 }
 
 type Install<'a> = &'a mut dyn FnMut(u32, ObjectFrame);
+
+fn imported_objects(imported: &Imported) -> u64 {
+    imported
+        .objects()
+        .iter()
+        .map(|object| {
+            object
+                .frames()
+                .iter()
+                .map(|(_, frame)| match frame {
+                    ImportedFrame::Surfaces(items) => items.len() as u64,
+                    ImportedFrame::Spots(items) => items.len() as u64,
+                    ImportedFrame::Filaments(items) => items.len() as u64,
+                })
+                .sum::<u64>()
+        })
+        .sum()
+}
 
 fn kind_of(kind: ImportedKind) -> ObjectKind {
     match kind {

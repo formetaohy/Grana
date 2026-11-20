@@ -177,6 +177,33 @@ fn the_unsaved_prompt_covers_the_editor_and_resolves_its_choice() {
         released.is_empty(),
         "releasing over the scrim reaches no editor control"
     );
+    let card = ui
+        .bounds("prompt")
+        .expect("the prompt card is laid out")
+        .center();
+    for event in [Event::Moved(card), Event::Down(Button::Primary)] {
+        ui.input_mut().push(event);
+    }
+    let held = ui.update(PROMPT_SIZE, 1.0, 0.25);
+    assert!(
+        held.is_empty(),
+        "a press on the prompt card reaches no editor control"
+    );
+    assert!(
+        ui.pointer_over_chrome(),
+        "the prompt card holds the pointer back from the scene"
+    );
+    assert!(
+        !ui.pointer_captured(),
+        "the prompt card starts no drag under the pointer"
+    );
+    let element = prompt_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Up(Button::Primary));
+    assert!(
+        ui.update(PROMPT_SIZE, 1.0, 0.28).is_empty(),
+        "releasing over the prompt card resolves nothing"
+    );
     let cancel = ui
         .bounds("prompt.cancel")
         .expect("the prompt offers a cancel action")

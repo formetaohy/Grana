@@ -9,31 +9,6 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
-fn reads_imaris_filaments() {
-    let imported = imported(&fixture("imaris-filaments.ims")).expect("the filament fixture opens");
-    let objects = imported.objects();
-    assert_eq!(objects.len(), 1, "the scene groups merge by identifier");
-    let object = &objects[0];
-    assert_eq!(object.name(), "Filaments 1");
-    assert_eq!(object.kind(), ImportedKind::Filaments);
-    let frames = object.frames();
-    assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0].0, 0);
-    let ImportedFrame::Filaments(filaments) = &frames[0].1 else {
-        panic!("the frame holds filaments");
-    };
-    assert_eq!(filaments.len(), 1);
-    let filament = &filaments[0];
-    assert_eq!(
-        filament.positions(),
-        &[[-2.0, -2.0, 0.0], [0.0, -2.0, 0.0], [2.0, -2.0, 0.0]]
-    );
-    assert_eq!(filament.radii(), &[0.5, 0.25, 0.25]);
-    assert_eq!(filament.edges(), &[[0, 1], [1, 2]]);
-    assert!(imported.diagnostics().is_empty());
-}
-
-#[test]
 fn reads_an_imaris_scene() {
     let imported = imported(&fixture("imaris.ims")).expect("the Imaris fixture opens");
     assert_eq!(imported.center(), [2.0, 2.0, 2.0]);
@@ -94,4 +69,29 @@ fn reads_an_imaris_scene() {
             .contains("different number of radii"),
         "the mismatched radii are reported instead of cutting the table"
     );
+
+    let filaments = grana_readout::imported(&fixture("imaris-filaments.ims"))
+        .expect("the filament fixture opens");
+    assert_eq!(
+        filaments.objects().len(),
+        1,
+        "the scene groups merge by identifier"
+    );
+    let object = &filaments.objects()[0];
+    assert_eq!(object.name(), "Filaments 1");
+    assert_eq!(object.kind(), ImportedKind::Filaments);
+    let frames = object.frames();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].0, 0);
+    let ImportedFrame::Filaments(held) = &frames[0].1 else {
+        panic!("the frame holds filaments");
+    };
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        held[0].positions(),
+        &[[-2.0, -2.0, 0.0], [0.0, -2.0, 0.0], [2.0, -2.0, 0.0]]
+    );
+    assert_eq!(held[0].radii(), &[0.5, 0.25, 0.25]);
+    assert_eq!(held[0].edges(), &[[0, 1], [1, 2]]);
+    assert!(filaments.diagnostics().is_empty());
 }

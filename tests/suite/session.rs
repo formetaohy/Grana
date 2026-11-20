@@ -361,6 +361,55 @@ fn imports_imaris_filaments() {
     assert!(session.import().is_empty());
 }
 
+#[test]
+fn measures_imported_objects_where_their_voxels_are() {
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/imaris-no-statistics.ims");
+    let mut session = Session::new();
+    load(&mut session, fixture);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the Imaris fixture never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let message = session
+        .message()
+        .map(|message| message.text().to_string())
+        .unwrap_or_default();
+    assert!(
+        message.contains("at level 0"),
+        "the import names the level it measured: {message}"
+    );
+    let scene = session.scene().expect("the fixture opens");
+    let mut measured = Vec::new();
+    for set in scene.objects.iter() {
+        let frame = set
+            .frame_shared(0)
+            .expect("the imported set holds its first frame");
+        assert_eq!(
+            frame.level(),
+            0,
+            "a small object is measured at the level it fits"
+        );
+        let table = match frame.as_ref() {
+            grana_scene::ObjectFrame::Spots(set) => set.intensities(),
+            grana_scene::ObjectFrame::Surfaces(set) => set.intensities(),
+            _ => panic!("the fixture imports spots and surfaces"),
+        };
+        for object in 0..table.objects() {
+            let statistics = table.object(object, 0);
+            measured.push(statistics.sum() / f64::from(statistics.mean()));
+        }
+    }
+    measured.sort_by(f64::total_cmp);
+    assert_eq!(
+        measured,
+        [8.0, 24.0],
+        "every object is measured from every voxel inside it"
+    );
+}
+
 fn view_state() -> ViewState {
     ViewState {
         camera: CameraState {

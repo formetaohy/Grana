@@ -94,6 +94,7 @@ pub(crate) fn view<'a>(
             .background(surface)
             .clipped()
             .layer(Layer::Popup)
+            .blocks_pointer()
             .children(children),
     ]
 }
