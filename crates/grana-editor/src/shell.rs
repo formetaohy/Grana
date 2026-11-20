@@ -75,18 +75,8 @@ pub(crate) fn view<'a>(
     if shown > 0 {
         children.push(recent_block(ctx, view));
     }
-    let top_pad = if workspace.chrome.leading > 0.0 {
-        PANEL_PADDING + 14.0
-    } else {
-        PANEL_PADDING
-    };
     let panel = grana_ui::column()
-        .padding(Edges {
-            left: PANEL_PADDING,
-            top: top_pad,
-            right: PANEL_PADDING,
-            bottom: PANEL_PADDING,
-        })
+        .padding(Edges::all(PANEL_PADDING))
         .gap(PANEL_GAP)
         .width(Length::Fixed(PANEL_WIDTH))
         .children(children)

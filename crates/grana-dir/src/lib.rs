@@ -23,16 +23,7 @@ fn base(kind: Kind) -> Option<PathBuf> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn base(kind: Kind) -> Option<PathBuf> {
-    let home = variable("HOME")?;
-    Some(match kind {
-        Kind::Cache => home.join("Library").join("Caches"),
-        Kind::Data => home.join("Library").join("Application Support"),
-    })
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(target_os = "windows"))]
 fn base(kind: Kind) -> Option<PathBuf> {
     let (specific, fallback) = match kind {
         Kind::Cache => ("XDG_CACHE_HOME", ".cache"),

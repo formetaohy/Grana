@@ -2,10 +2,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::canvas::Canvas;
-
-const MACOS_CONTENT: f32 = 0.805;
-
 pub fn write_ico(path: &Path, sizes: &[u32]) -> io::Result<()> {
     let images = sizes
         .iter()
@@ -32,43 +28,6 @@ pub fn write_ico(path: &Path, sizes: &[u32]) -> io::Result<()> {
         file.extend_from_slice(data);
     }
     fs::write(path, file)
-}
-
-pub fn write_icns(path: &Path, entries: &[(&[u8; 4], u32)]) -> io::Result<()> {
-    let mut body = Vec::new();
-    for (kind, size) in entries {
-        let image = encode_png(&macos_icon(*size), *size, *size);
-        body.extend_from_slice(*kind);
-        body.extend_from_slice(&((image.len() + 8) as u32).to_be_bytes());
-        body.extend_from_slice(&image);
-    }
-    let mut file = Vec::new();
-    file.extend_from_slice(b"icns");
-    file.extend_from_slice(&((body.len() + 8) as u32).to_be_bytes());
-    file.extend_from_slice(&body);
-    fs::write(path, file)
-}
-
-fn macos_icon(size: u32) -> Vec<u8> {
-    let content = (size as f32 * MACOS_CONTENT).round() as u32;
-    let mark = grana_brand::icon(content);
-    let mut canvas = Canvas::new(size, size);
-    let offset = ((size - content) / 2) as i32;
-    canvas.blit(&mark, content, (offset, offset));
-    canvas.into_pixels()
-}
-
-fn encode_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let mut output = Vec::new();
-    let mut encoder = png::Encoder::new(&mut output, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().expect("the icon header encodes");
-    writer
-        .write_image_data(pixels)
-        .expect("the icon pixels encode");
-    drop(writer);
-    output
 }
 
 fn bitmap_entry(pixels: &[u8], size: u32) -> Vec<u8> {

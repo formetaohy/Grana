@@ -16,7 +16,6 @@ pub struct ChromeView {
     pub maximized: bool,
     pub controls: bool,
     pub close_only: bool,
-    pub leading: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

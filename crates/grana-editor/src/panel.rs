@@ -270,7 +270,7 @@ impl Layout {
         let chrome = workspace.chrome;
         let top = full.min.y + MARGIN;
         let toolbar_left = Rect::from_min_size(
-            Vec2::new(full.min.x + MARGIN + chrome.leading, top),
+            Vec2::new(full.min.x + MARGIN, top),
             Vec2::new(SIDEBAR_WIDTH, TOOLBAR_HEIGHT),
         );
         let controls = if chrome.controls {

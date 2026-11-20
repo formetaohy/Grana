@@ -21,9 +21,7 @@ impl Shortcut {
 
     pub fn label(self) -> String {
         let key = self.key.to_ascii_uppercase();
-        if cfg!(target_os = "macos") {
-            format!("{}{key}", if self.shift { "⇧⌘" } else { "⌘" })
-        } else if self.shift {
+        if self.shift {
             format!("Ctrl+Shift+{key}")
         } else {
             format!("Ctrl+{key}")

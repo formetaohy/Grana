@@ -12,22 +12,7 @@ use crate::REQUIRED_FEATURES;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
-const BACKEND_ORDER: &[Backends] = backend_order();
-
-const fn backend_order() -> &'static [Backends] {
-    #[cfg(target_os = "windows")]
-    {
-        &[Backends::VULKAN]
-    }
-    #[cfg(target_os = "macos")]
-    {
-        &[Backends::METAL]
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        &[Backends::VULKAN]
-    }
-}
+const BACKEND_ORDER: &[Backends] = &[Backends::VULKAN];
 
 pub struct Gpu {
     pub surface: Surface<'static>,

@@ -4,12 +4,12 @@ use glam::Vec2;
 use grana_editor::ChromeView;
 use grana_ui::Rect;
 use winit::event::WindowEvent;
+use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes};
 
 const RESIZE_BORDER: f32 = 6.0;
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 const DOUBLE_CLICK_SLOP: f32 = 4.0;
-const TRAFFIC_LIGHTS: f32 = 78.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Press {
@@ -37,9 +37,8 @@ impl Chrome {
     pub fn view(&self, window: &Window) -> ChromeView {
         ChromeView {
             maximized: window.is_maximized(),
-            controls: custom_controls(),
+            controls: true,
             close_only: false,
-            leading: leading(),
         }
     }
 
@@ -126,7 +125,7 @@ fn screen_pointer(window: &Window, pointer: Vec2) -> Vec2 {
 }
 
 fn resize_edge(window: &Window, point: Vec2) -> Option<ResizeDirection> {
-    if !custom_controls() || window.is_maximized() {
+    if window.is_maximized() {
         return None;
     }
     let size = logical_size(window);
@@ -148,37 +147,9 @@ fn resize_edge(window: &Window, point: Vec2) -> Option<ResizeDirection> {
     Some(direction)
 }
 
-fn custom_controls() -> bool {
-    cfg!(target_os = "windows")
-}
-
-fn leading() -> f32 {
-    if cfg!(target_os = "macos") {
-        TRAFFIC_LIGHTS
-    } else {
-        0.0
-    }
-}
-
-#[cfg(target_os = "windows")]
 pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
-    use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
     attributes
         .with_decorations(false)
         .with_undecorated_shadow(true)
         .with_corner_preference(CornerPreference::Round)
-}
-
-#[cfg(target_os = "macos")]
-pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
-    use winit::platform::macos::WindowAttributesExtMacOS;
-    attributes
-        .with_titlebar_transparent(true)
-        .with_fullsize_content_view(true)
-        .with_title_hidden(true)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
-    attributes
 }

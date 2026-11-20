@@ -17,7 +17,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  MACOSX_DEPLOYMENT_TARGET: 14.0
 
 jobs:
   quality:
@@ -44,13 +43,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
   test:
-    name: ${{ matrix.platform }} Test
-    runs-on: ${{ matrix.platform }}
+    name: Test
+    runs-on: windows-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [windows-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,7 +56,6 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: test-${{ matrix.platform }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
@@ -89,17 +83,9 @@ jobs:
         run: cargo build --workspace --all-features --release --locked
 
   installer:
-    name: ${{ matrix.platform }} Installer
-    runs-on: ${{ matrix.runner }}
+    name: Windows Installer
+    runs-on: windows-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: Windows
-            runner: windows-latest
-          - platform: macOS
-            runner: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,24 +93,14 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
 
-      - name: Install Apple silicon target
-        if: runner.os == 'macOS'
-        run: rustup target add aarch64-apple-darwin
-
       - name: Cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: installer-${{ matrix.platform }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
       - name: Build release binary
-        if: runner.os == 'Windows'
         run: cargo build -p grana --all-features --release --locked
-
-      - name: Build release binary
-        if: runner.os == 'macOS'
-        run: cargo build -p grana --all-features --release --locked --target aarch64-apple-darwin
 
       - name: Regenerate installer artwork
         run: cargo run -p grana-package --release --locked -- installer
@@ -133,22 +109,16 @@ jobs:
         run: git diff --exit-code -- installer
 
       - name: Build installer
-        if: runner.os == 'Windows'
         shell: pwsh
         run: ./installer/windows/build.ps1 -Output dist
-
-      - name: Build installer
-        if: runner.os == 'macOS'
-        run: bash installer/macos/build.sh --output dist
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: installer-${{ matrix.platform }}
+          name: installer-windows
           path: |
             dist/*.msi
             dist/*.exe
-            dist/*.dmg
           if-no-files-found: error
           retention-days: 7
 
@@ -165,5 +135,3 @@ jobs:
           test "${{ needs.test.result }}" = success
           test "${{ needs.build.result }}" = success
           test "${{ needs.installer.result }}" = success
-
-

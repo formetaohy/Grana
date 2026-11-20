@@ -82,7 +82,6 @@ fn folder_name() -> io::Result<String> {
     }
     let platform = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => "windows-x64",
-        ("macos", "aarch64") => "macos-arm64",
         (os, arch) => {
             return Err(io::Error::other(format!(
                 "unsupported distribution platform: {os}-{arch}"
@@ -97,5 +96,5 @@ fn cargo() -> OsString {
 }
 
 const fn executable_name() -> &'static str {
-    if cfg!(windows) { "grana.exe" } else { "grana" }
+    "grana.exe"
 }

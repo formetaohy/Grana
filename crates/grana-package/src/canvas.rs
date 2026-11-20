@@ -161,10 +161,6 @@ impl Canvas {
         self.pixels[index..index + 4].copy_from_slice(&bytes(color));
     }
 
-    pub fn into_pixels(self) -> Vec<u8> {
-        self.pixels
-    }
-
     pub fn write(&self, path: &Path) -> io::Result<()> {
         let file = File::create(path)?;
         let mut encoder = png::Encoder::new(BufWriter::new(file), self.width, self.height);
