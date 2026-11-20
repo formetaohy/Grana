@@ -267,12 +267,14 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
         spec.channels.len(),
         spec.frames
     ));
-    xml.push_str(&format!(
-        " PhysicalSizeX=\"{}\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"{}\" PhysicalSizeYUnit=\"µm\" PhysicalSizeZ=\"{}\" PhysicalSizeZUnit=\"µm\"",
-        number(basis.step(0)),
-        number(basis.step(1)),
-        number(basis.step(2))
-    ));
+    if spec.calibration != grana_volume::Calibration::Uncalibrated {
+        xml.push_str(&format!(
+            " PhysicalSizeX=\"{}\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"{}\" PhysicalSizeYUnit=\"µm\" PhysicalSizeZ=\"{}\" PhysicalSizeZUnit=\"µm\"",
+            number(basis.step(0)),
+            number(basis.step(1)),
+            number(basis.step(2))
+        ));
+    }
     if let Some(interval) = spec.interval {
         xml.push_str(&format!(
             " TimeIncrement=\"{}\" TimeIncrementUnit=\"s\"",
@@ -319,7 +321,25 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
     }
     xml.push_str(&data);
     xml.push_str(&planes);
-    xml.push_str("  </Pixels>\n </Image>\n</OME>");
+    xml.push_str("  </Pixels>\n </Image>\n");
+    xml.push_str(&annotations(spec));
+    xml.push_str("</OME>");
+    xml
+}
+
+fn annotations(spec: &ImageSpec<'_>) -> String {
+    let mut xml = String::from(
+        " <StructuredAnnotations>\n  <MapAnnotation ID=\"Annotation:grana\" Namespace=\"urn:grana:archive\">\n",
+    );
+    for (key, value) in grana_archive::annotations(spec.levels, spec.calibration) {
+        xml.push_str(&format!(
+            "   <Value><M>{}</M><S>{}</S></Value>\n",
+            escape(&key),
+            escape(&value)
+        ));
+    }
+    xml.push_str("   <Value><M>image</M><S>0</S></Value>\n");
+    xml.push_str("  </MapAnnotation>\n </StructuredAnnotations>\n");
     xml
 }
 

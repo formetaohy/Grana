@@ -134,13 +134,14 @@ impl Image {
         match &mut data {
             VoxelData::U8(values) => self.read_planes(time, level, view, &ranges, values)?,
             VoxelData::U16(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::U32(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::U64(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::I8(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::I16(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::I32(values) => self.read_planes(time, level, view, &ranges, values)?,
+            VoxelData::I64(values) => self.read_planes(time, level, view, &ranges, values)?,
             VoxelData::F32(values) => self.read_planes(time, level, view, &ranges, values)?,
-            _ => {
-                return Err(Error::region(
-                    &self.path,
-                    "the scene decodes a voxel type this platform cannot hold",
-                ));
-            }
+            VoxelData::F64(values) => self.read_planes(time, level, view, &ranges, values)?,
         }
         Ok(data)
     }
@@ -345,12 +346,15 @@ fn format_of(pixel: PixelType) -> Option<VoxelFormat> {
     match pixel {
         PixelType::Uint8 => Some(VoxelFormat::U8),
         PixelType::Uint16 => Some(VoxelFormat::U16),
+        PixelType::Uint32 => Some(VoxelFormat::U32),
+        PixelType::Uint64 => Some(VoxelFormat::U64),
+        PixelType::Int8 => Some(VoxelFormat::I8),
+        PixelType::Int16 => Some(VoxelFormat::I16),
+        PixelType::Int32 => Some(VoxelFormat::I32),
+        PixelType::Int64 => Some(VoxelFormat::I64),
         PixelType::Float => Some(VoxelFormat::F32),
-        PixelType::Int8
-        | PixelType::Int16
-        | PixelType::Uint32
-        | PixelType::Int32
-        | PixelType::Double => Some(VoxelFormat::F32),
+        PixelType::Double => Some(VoxelFormat::F64),
+        PixelType::ComplexFloat | PixelType::ComplexDouble => Some(VoxelFormat::F32),
         _ => None,
     }
 }

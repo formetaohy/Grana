@@ -36,6 +36,12 @@ fn reads_a_tiled_slide_with_shared_jpeg_tables() {
     assert_eq!(pyramid.level(1).extent(), Extent::new(50, 35, 1));
     assert_eq!(pyramid.level(2).extent(), Extent::new(25, 18, 1));
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 0.5));
+    assert_eq!(pyramid.level(1).spacing(), Spacing::new(1.0, 1.0, 0.5));
+    assert_eq!(
+        pyramid.level(2).spacing(),
+        Spacing::new(2.0, 2.0, 0.5),
+        "a chained level keeps the whole power of its step where rounding shortened its extent"
+    );
     let read = |level: usize, width: u32, height: u32| {
         let VoxelData::U8(values) = image
             .read_region(0, level, 0, 0..width, 0..height, 0..1)
@@ -120,6 +126,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             frames: 2,
             interval: Some(0.5),
             sample: grana_volume::VoxelFormat::F32,
+            calibration: grana_volume::Calibration::Assumed,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -144,6 +151,11 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         "the OME-XML lists every TiffData before the first Plane"
     );
     assert_eq!(image.pyramid().level_count(), 3);
+    assert_eq!(
+        image.pyramid().calibration(),
+        Calibration::Assumed,
+        "the archive keeps the calibration it was given"
+    );
     for (axis, value) in image.pyramid().placement().into_iter().enumerate() {
         let expected = [1.5, -2.0, 3.0][axis];
         assert!(
@@ -161,9 +173,13 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             level.extent(),
             "level {index} keeps its extent"
         );
+        let held = image.pyramid().level(index).spacing();
+        let wanted = level.spacing();
         assert!(
-            (image.pyramid().level(index).spacing().x() - level.spacing().x()).abs() <= 1.0e-5,
-            "level {index} keeps its spacing"
+            (held.x() - wanted.x()).abs() <= 1.0e-5
+                && (held.y() - wanted.y()).abs() <= 1.0e-5
+                && (held.z() - wanted.z()).abs() <= 1.0e-5,
+            "level {index} keeps its spacing: {held:?} against {wanted:?}"
         );
     }
     let coarse = image
@@ -210,6 +226,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             placement: image.pyramid().placement(),
             frames: 1,
             interval: 1.0,
+            calibration: grana_volume::Calibration::Recorded,
             drift: Vec::new(),
             labels: Vec::new(),
         },
@@ -258,6 +275,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             placement: image.pyramid().placement(),
             frames: 1,
             interval: 1.0,
+            calibration: grana_volume::Calibration::Recorded,
             drift: Vec::new(),
             labels: Vec::new(),
         },
@@ -306,6 +324,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             placement: [0.0; 3],
             frames: 1,
             interval: 1.0,
+            calibration: grana_volume::Calibration::Recorded,
             drift: Vec::new(),
             labels: Vec::new(),
         },
@@ -339,6 +358,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             placement: [0.0; 3],
             frames: 1,
             interval: 1.0,
+            calibration: grana_volume::Calibration::Recorded,
             drift: Vec::new(),
             labels: Vec::new(),
         },
@@ -386,6 +406,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 placement: [0.0; 3],
                 frames: 1,
                 interval: 1.0,
+                calibration: grana_volume::Calibration::Recorded,
                 drift: Vec::new(),
                 labels: Vec::new(),
             },
@@ -461,6 +482,7 @@ fn writes_a_sixteen_bit_ome_tiff() {
             frames: 1,
             interval: Some(2.0),
             sample: grana_volume::VoxelFormat::U16,
+            calibration: grana_volume::Calibration::Recorded,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -549,6 +571,7 @@ fn writes_a_sharded_ome_zarr_level() {
             frames: 1,
             interval: Some(1.0),
             sample: grana_volume::VoxelFormat::F32,
+            calibration: grana_volume::Calibration::Recorded,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -662,6 +685,7 @@ fn write_zarr(root: &std::path::Path) {
             frames: 2,
             interval: Some(1.5),
             sample: grana_volume::VoxelFormat::F32,
+            calibration: grana_volume::Calibration::Assumed,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -749,6 +773,11 @@ fn writes_and_reads_a_tiny_ome_zarr() {
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 1.0));
     assert_eq!(pyramid.level(1).extent(), Extent::new(12, 8, 4));
     assert_eq!(pyramid.level(1).spacing(), Spacing::new(1.0, 1.0, 2.0));
+    assert_eq!(
+        pyramid.calibration(),
+        Calibration::Assumed,
+        "the written image keeps the calibration it was given"
+    );
 
     let data = image
         .read_region(1, 0, 1, 2..6, 1..4, 0..2)
@@ -812,7 +841,7 @@ fn writes_and_reads_a_tiny_ome_zarr() {
 
 fn write_derived_zarr(root: &std::path::Path, value: f32) {
     let levels = [Level::new(
-        Extent::new(64, 64, 16),
+        Extent::new(128, 128, 16),
         Spacing::new(1.0, 1.0, 1.0),
     )];
     let channels = [WriteChannel {
@@ -850,6 +879,7 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
             frames: 1,
             interval: Some(1.0),
             sample: grana_volume::VoxelFormat::F32,
+            calibration: grana_volume::Calibration::Recorded,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -859,8 +889,12 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
 }
 
 fn derived_values(image: &Image, ranges: &[std::ops::Range<u32>; 3]) -> Vec<f32> {
+    derived_values_at(image, 1, ranges)
+}
+
+fn derived_values_at(image: &Image, level: usize, ranges: &[std::ops::Range<u32>; 3]) -> Vec<f32> {
     let data = image
-        .read_region(0, 1, 0, ranges, &grana_warp::Warp::IDENTITY)
+        .read_region(0, level, 0, ranges, &grana_warp::Warp::IDENTITY)
         .expect("the derived level composes");
     let VoxelData::F32(values) = data else {
         panic!("the fixture stores float voxels");
@@ -938,21 +972,39 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
 
 fn assert_derived(image: &Image, ranges: &[std::ops::Range<u32>; 3], value: f32) {
     let read = derived_values(image, ranges);
-    let derived = image.pyramid().level(1).extent();
+    let width = ranges[0].end - ranges[0].start;
+    let height = ranges[1].end - ranges[1].start;
     assert_eq!(
-        read.len() as u64,
-        derived.voxel_count(),
-        "the derived level holds its extent"
+        read.len(),
+        (width * height * (ranges[2].end - ranges[2].start)) as usize,
+        "the derived level holds its request"
     );
     for z in ranges[2].clone() {
         for y in ranges[1].clone() {
             for x in ranges[0].clone() {
-                let index = x + derived.x() * (y + derived.y() * z);
+                let index = ((x - ranges[0].start)
+                    + width * ((y - ranges[1].start) + height * (z - ranges[2].start)))
+                    as usize;
                 let expected = derived_gradient(value, [x, y, z]);
                 assert!(
-                    (read[index as usize] - expected).abs() < 1.0e-3,
+                    (read[index] - expected).abs() < 1.0e-3,
                     "the derived voxel {x} {y} {z} averages its block: {} against {expected}",
-                    read[index as usize]
+                    read[index]
+                );
+            }
+        }
+    }
+    let ranges = [0..4u32, 0..4, 0..2];
+    let read = derived_values_at(image, 2, &ranges);
+    for z in ranges[2].clone() {
+        for y in ranges[1].clone() {
+            for x in ranges[0].clone() {
+                let index = (x + 4 * (y + 4 * z)) as usize;
+                let expected = value + (x * 12 + y * 20 + z * 28) as f32 + 22.5;
+                assert!(
+                    (read[index] - expected).abs() < 1.0e-3,
+                    "the derived level 2 voxel {x} {y} {z} averages its child block: {} against {expected}",
+                    read[index]
                 );
             }
         }
@@ -1060,6 +1112,7 @@ fn exports_a_region_of_the_channels_and_labels() {
             placement: image.pyramid().placement(),
             frames: 1,
             interval: 1.0,
+            calibration: grana_volume::Calibration::Recorded,
             drift: Vec::new(),
             labels: vec![label],
         },
@@ -1378,6 +1431,7 @@ fn writes_and_reads_a_label_image() {
             frames: 2,
             interval: Some(1.0),
             sample: grana_volume::VoxelFormat::F32,
+            calibration: grana_volume::Calibration::Recorded,
             fill: Fill::EveryLevel(&image_fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,
@@ -1724,6 +1778,7 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
             placement: image.pyramid().placement(),
             frames: 1,
             interval: 1.0,
+            calibration: grana_volume::Calibration::Recorded,
             drift: Vec::new(),
             labels: vec![label],
         },
@@ -1935,9 +1990,9 @@ fn reads_an_electron_microscopy_stack_through_the_shared_registry() {
     let plane = image
         .read_region(1, 0, 0, &[1..4, 2..3, 0..1], &grana_warp::Warp::IDENTITY)
         .expect("a tilt section reads");
-    let expected = [121.0f32, 122.0, 123.0];
-    let VoxelData::F32(values) = plane else {
-        panic!("an integer electron stack widens to float samples");
+    let expected = [121i16, 122, 123];
+    let VoxelData::I16(values) = plane else {
+        panic!("a signed sixteen bit electron stack keeps its native samples");
     };
     assert_eq!(values, expected.to_vec(), "the plane values are wrong");
 }

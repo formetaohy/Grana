@@ -19,7 +19,7 @@ use crate::plane;
 use crate::region;
 use crate::{Error, Series, Source};
 
-const RESOLVED_VERSION: u32 = 2;
+const RESOLVED_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -473,22 +473,21 @@ impl Image {
             }
             return Ok(plane::Plane::new(planes));
         }
-        let scale = Scale::of(&self.pyramid, level);
-        let ratio = 1u32 << scale.shift();
-        let source = self.level_extent(scale.source())?;
+        let parent = level - 1;
+        let source = self.level_extent(parent)?;
         let width = extent.x() as usize;
         let voxels = width * extent.y() as usize;
         let mut sums = plane::blank_sums(channels, voxels);
-        let start = z * ratio;
-        let end = ((z + 1) * ratio).min(source.z());
+        let start = z * 2;
+        let end = ((z + 1) * 2).min(source.z());
         for source_z in start..end {
-            let held = self.plane(time, scale.source(), source_z)?;
+            let held = self.plane(time, parent, source_z)?;
             for (channel, sum) in sums.iter_mut().enumerate() {
-                plane::add(held.channel(channel), source, ratio, width, sum);
+                plane::add(held.channel(channel), source, 2, width, sum);
             }
         }
         let mut counts = plane::blank_counts(voxels);
-        plane::cover(source, ratio, width, &mut counts);
+        plane::cover(source, 2, width, &mut counts);
         counts.iter_mut().for_each(|count| *count *= end - start);
         let mut planes = Vec::with_capacity(channels);
         for (channel, sum) in sums.iter().enumerate() {

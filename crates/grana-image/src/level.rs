@@ -47,10 +47,6 @@ impl Scale {
         self.source
     }
 
-    pub(crate) fn shift(&self) -> u32 {
-        self.shift
-    }
-
     pub(crate) fn source_ranges(&self, ranges: &[Range<u32>; 3]) -> [Range<u32>; 3] {
         let ratio = 1u32 << self.shift;
         [

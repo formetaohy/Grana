@@ -10,12 +10,15 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
     let mut depth = 0usize;
     let mut image_depth = None;
     let mut pending: Option<TiffData> = None;
+    let mut annotation: Option<Annotation> = None;
     loop {
         let event = reader.read_event().map_err(|error| error.to_string())?;
         match event {
             Event::Start(start) => {
                 depth += 1;
-                if start.name().local_name().as_ref() == b"Image" {
+                let name = start.name();
+                let name = name.local_name();
+                if name.as_ref() == b"Image" {
                     if image_depth.is_none() {
                         image_depth = Some(depth);
                         images.push(series(&start)?);
@@ -24,24 +27,40 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
                     let series = images.last_mut().expect("an Image element opened a series");
                     element(&start, series, &mut pending)?;
                 }
+                if name.as_ref() == b"MapAnnotation" {
+                    annotation = Some(Annotation::new());
+                } else if let Some(held) = annotation.as_mut() {
+                    held.enter(name.as_ref());
+                }
             }
             Event::Empty(start) => {
-                if start.name().local_name().as_ref() == b"Image" {
+                let name = start.name();
+                let name = name.local_name();
+                if name.as_ref() == b"Image" {
                     if image_depth.is_none() {
                         images.push(series(&start)?);
                     }
                 } else if image_depth.is_some() {
                     let series = images.last_mut().expect("an Image element opened a series");
                     element(&start, series, &mut pending)?;
-                    if start.name().local_name().as_ref() == b"TiffData"
+                    if name.as_ref() == b"TiffData"
                         && let Some(block) = pending.take()
                     {
                         series.tiff_data.push(block);
                     }
                 }
             }
+            Event::Text(text) => {
+                if let Some(held) = annotation.as_mut() {
+                    let decoded = text.decode().map_err(|error| error.to_string())?;
+                    let value =
+                        quick_xml::escape::unescape(&decoded).map_err(|error| error.to_string())?;
+                    held.text(&value);
+                }
+            }
             Event::End(end) => {
-                let name = end.name().local_name();
+                let name = end.name();
+                let name = name.local_name();
                 if image_depth.is_some() && name.as_ref() == b"TiffData" {
                     let series = images.last_mut().expect("an Image element opened a series");
                     if let Some(block) = pending.take() {
@@ -50,6 +69,13 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
                 }
                 if image_depth == Some(depth) && name.as_ref() == b"Image" {
                     image_depth = None;
+                }
+                if name.as_ref() == b"MapAnnotation"
+                    && let Some(held) = annotation.take()
+                {
+                    held.commit(&mut images)?;
+                } else if let Some(held) = annotation.as_mut() {
+                    held.leave(name.as_ref());
                 }
                 depth = depth.saturating_sub(1);
             }
@@ -61,6 +87,78 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
         series.tiff_data.push(block);
     }
     Ok(images)
+}
+
+struct Annotation {
+    pairs: Vec<(String, String)>,
+    key: Option<String>,
+    capturing: bool,
+    text: String,
+}
+
+impl Annotation {
+    fn new() -> Self {
+        Self {
+            pairs: Vec::new(),
+            key: None,
+            capturing: false,
+            text: String::new(),
+        }
+    }
+
+    fn enter(&mut self, name: &[u8]) {
+        if matches!(name, b"M" | b"S") {
+            self.capturing = true;
+            self.text.clear();
+        }
+    }
+
+    fn leave(&mut self, name: &[u8]) {
+        match name {
+            b"M" => {
+                self.capturing = false;
+                self.key = Some(self.text.trim().to_string());
+            }
+            b"S" => {
+                self.capturing = false;
+                if let Some(key) = self.key.take() {
+                    self.pairs.push((key, self.text.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn text(&mut self, value: &str) {
+        if self.capturing {
+            self.text.push_str(value);
+        }
+    }
+
+    fn commit(self, images: &mut [Image]) -> Result<(), String> {
+        let marked = self
+            .pairs
+            .iter()
+            .any(|(key, value)| key == "grana" && value == "1");
+        if !marked {
+            return Ok(());
+        }
+        let index = self
+            .pairs
+            .iter()
+            .find(|(key, _)| key == "image")
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .ok_or_else(|| "a grana annotation names no image".to_string())?;
+        let image = images
+            .get_mut(index)
+            .ok_or_else(|| format!("a grana annotation names the missing image {index}"))?;
+        for (key, value) in self.pairs {
+            if key != "grana" && key != "image" {
+                image.annotations.push((key, value));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn series(start: &BytesStart) -> Result<Image, String> {

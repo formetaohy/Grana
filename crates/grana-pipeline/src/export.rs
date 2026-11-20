@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use glam::Vec3;
 use grana_archive::{Block, Channel as WriteChannel, Fill, Format, ImageSpec};
 use grana_scene::ObjectSet;
-use grana_volume::{Extent, Intensity, Level, Region, VoxelData, VoxelFormat};
+use grana_volume::{Calibration, Extent, Intensity, Level, Region, VoxelData, VoxelFormat};
 use grana_warp::Warps;
 
 use crate::channels::Channels;
@@ -141,6 +141,7 @@ pub struct DatasetSpec {
     pub placement: [f32; 3],
     pub frames: u32,
     pub interval: f32,
+    pub calibration: Calibration,
     pub drift: Vec<Warps>,
     pub labels: Vec<LabelLayer>,
 }
@@ -195,6 +196,7 @@ pub fn write_dataset(
         placement,
         frames,
         interval,
+        calibration,
         drift,
         labels,
     } = spec;
@@ -285,6 +287,7 @@ pub fn write_dataset(
         frames,
         interval: Some(interval),
         sample,
+        calibration,
         fill: Fill::EveryLevel(&fill),
         cancel,
         progress: &mut image_progress,

@@ -1,3 +1,4 @@
+use grana_volume::Calibration;
 use serde_json::{Map, Value};
 
 use crate::Error;
@@ -74,6 +75,7 @@ pub struct Metadata {
     pub axes: Vec<Axis>,
     pub datasets: Vec<Dataset>,
     pub channels: Vec<ChannelMetadata>,
+    pub calibration: Option<Calibration>,
 }
 
 #[derive(Clone, Debug)]
@@ -141,7 +143,29 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
         axes: frame.source,
         datasets,
         channels,
+        calibration: calibration(path, attributes)?,
     })
+}
+
+fn calibration(path: &str, attributes: &Map<String, Value>) -> Result<Option<Calibration>, Error> {
+    let Some(entry) = attributes.get(grana_archive::ANNOTATION) else {
+        return Ok(None);
+    };
+    let Some(name) = entry
+        .as_object()
+        .and_then(|entry| entry.get("calibration"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    grana_archive::calibration_of(name)
+        .map(Some)
+        .ok_or_else(|| {
+            metadata_error(
+                path,
+                format!("the grana metadata names the unknown calibration `{name}`"),
+            )
+        })
 }
 
 fn minor_version(path: &str, version: &str) -> Result<u32, Error> {

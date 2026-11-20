@@ -232,32 +232,57 @@ pub(crate) trait Sample: Send {
     fn sample(plane: &Plane, at: usize) -> Self;
 }
 
+fn widened(plane: &Plane, at: usize) -> f64 {
+    plane.pixel_type.sample_f64(&plane.data[at..])
+}
+
+macro_rules! native {
+    ($type:ty, $pixel:ident) => {
+        impl Sample for $type {
+            fn sample(plane: &Plane, at: usize) -> Self {
+                if plane.pixel_type == PixelType::$pixel {
+                    let width = size_of::<$type>();
+                    <$type>::from_le_bytes(
+                        plane.data[at..at + width]
+                            .try_into()
+                            .expect("a sample holds its bytes"),
+                    )
+                } else {
+                    widened(plane, at) as $type
+                }
+            }
+        }
+    };
+}
+
 impl Sample for u8 {
     fn sample(plane: &Plane, at: usize) -> Self {
-        plane.data[at]
-    }
-}
-
-impl Sample for u16 {
-    fn sample(plane: &Plane, at: usize) -> Self {
-        u16::from_le_bytes([plane.data[at], plane.data[at + 1]])
-    }
-}
-
-impl Sample for f32 {
-    fn sample(plane: &Plane, at: usize) -> Self {
-        if plane.pixel_type == PixelType::Float {
-            f32::from_le_bytes([
-                plane.data[at],
-                plane.data[at + 1],
-                plane.data[at + 2],
-                plane.data[at + 3],
-            ])
+        if plane.pixel_type == PixelType::Uint8 {
+            plane.data[at]
         } else {
-            plane.pixel_type.sample_f64(&plane.data[at..]) as f32
+            widened(plane, at) as u8
         }
     }
 }
+
+impl Sample for i8 {
+    fn sample(plane: &Plane, at: usize) -> Self {
+        if plane.pixel_type == PixelType::Int8 {
+            plane.data[at] as i8
+        } else {
+            widened(plane, at) as i8
+        }
+    }
+}
+
+native!(u16, Uint16);
+native!(u32, Uint32);
+native!(u64, Uint64);
+native!(i16, Int16);
+native!(i32, Int32);
+native!(i64, Int64);
+native!(f32, Float);
+native!(f64, Double);
 
 pub(crate) fn rows<T: Sample>(
     plane: &Plane,

@@ -243,6 +243,7 @@ fn write_stack(
             frames: 1,
             interval: None,
             sample: grana_volume::VoxelFormat::U8,
+            calibration: grana_volume::Calibration::Recorded,
             fill: Fill::EveryLevel(&fill),
             cancel,
             progress: &mut progress,

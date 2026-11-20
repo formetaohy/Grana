@@ -156,11 +156,13 @@ impl Image {
             detail,
         })?;
         let stored = level_metadata.len();
-        let calibration = if metadata.datasets.iter().all(|dataset| dataset.placed) {
-            Calibration::Recorded
-        } else {
-            Calibration::Uncalibrated
-        };
+        let calibration = metadata.calibration.unwrap_or_else(|| {
+            if metadata.datasets.iter().all(|dataset| dataset.placed) {
+                Calibration::Recorded
+            } else {
+                Calibration::Uncalibrated
+            }
+        });
         Ok(Self {
             root,
             group: group.to_string(),

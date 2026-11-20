@@ -300,22 +300,42 @@ impl Image {
                 ));
             }
         }
-        let base = levels[0].extent;
-        let (spacing, calibration) = spacing(ome, &files[0], path, sizes[2])?;
-        let pyramid_levels = levels
-            .iter()
-            .map(|level| {
-                let extent = level.extent;
-                Level::new(
-                    extent,
-                    Spacing::new(
-                        spacing.x() * base.x() as f32 / extent.x() as f32,
-                        spacing.y() * base.y() as f32 / extent.y() as f32,
-                        spacing.z() * base.z() as f32 / extent.z() as f32,
+        let (spacing, derived) = spacing(ome, &files[0], path, sizes[2])?;
+        let extents = levels.iter().map(|level| level.extent).collect::<Vec<_>>();
+        let mut fallback = Vec::with_capacity(extents.len());
+        let mut held = spacing;
+        for (index, extent) in extents.iter().enumerate() {
+            if index > 0 {
+                let previous = extents[index - 1];
+                held = Spacing::new(
+                    held.x() * step(previous.x(), extent.x()),
+                    held.y() * step(previous.y(), extent.y()),
+                    held.z() * step(previous.z(), extent.z()),
+                );
+            }
+            fallback.push(Level::new(*extent, held));
+        }
+        let (pyramid_levels, calibration) = match ome {
+            Some(ome) => {
+                let lookup = |key: &str| ome.annotation(key);
+                let described = grana_archive::spacings_from(lookup, &extents)
+                    .map_err(|detail| Error::metadata(path, detail))?;
+                let calibration = grana_archive::calibration_from(lookup)
+                    .map_err(|detail| Error::metadata(path, detail))?;
+                match described {
+                    Some(spacings) => (
+                        extents
+                            .iter()
+                            .zip(spacings)
+                            .map(|(extent, spacing)| Level::new(*extent, spacing))
+                            .collect::<Vec<_>>(),
+                        calibration.unwrap_or(derived),
                     ),
-                )
-            })
-            .collect::<Vec<_>>();
+                    None => (fallback, derived),
+                }
+            }
+            None => (fallback, derived),
+        };
         let cache = crate::cache(CACHE_BYTES);
         let mut channels = Vec::with_capacity(sizes[1] as usize);
         for index in 0..sizes[1] {
@@ -693,6 +713,16 @@ fn counts(
         ));
     }
     Ok([size_t, size_c, ome.size_z.unwrap_or(1)])
+}
+
+fn step(previous: u32, extent: u32) -> f32 {
+    let ratio = previous as f32 / extent.max(1) as f32;
+    let nearest = ratio.round().max(1.0);
+    if (ratio - nearest).abs() <= 0.05 * nearest {
+        nearest
+    } else {
+        ratio
+    }
 }
 
 fn spacing(

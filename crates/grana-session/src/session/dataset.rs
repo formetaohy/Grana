@@ -23,6 +23,7 @@ struct Request {
     placement: [f32; 3],
     frames: u32,
     interval: f32,
+    calibration: grana_volume::Calibration,
     drift: Vec<grana_warp::Warps>,
 }
 
@@ -39,6 +40,7 @@ impl DatasetExport {
             placement,
             frames,
             interval,
+            calibration,
             drift,
         } = request;
         let task = Progress::spawn(grana_exec::Role::Write, move |cancel, progress| {
@@ -52,6 +54,7 @@ impl DatasetExport {
                     placement,
                     frames,
                     interval,
+                    calibration,
                     drift,
                     labels,
                 },
@@ -196,6 +199,7 @@ impl super::Session {
             placement: scene.dataset.pyramid().placement(),
             frames,
             interval,
+            calibration: scene.dataset.pyramid().calibration(),
             drift,
         }));
     }

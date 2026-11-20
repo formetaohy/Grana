@@ -13,6 +13,16 @@ pub struct Image {
     pub channels: Vec<Channel>,
     pub tiff_data: Vec<TiffData>,
     pub planes: Vec<Plane>,
+    pub annotations: Vec<(String, String)>,
+}
+
+impl Image {
+    pub fn annotation(&self, key: &str) -> Option<&str> {
+        self.annotations
+            .iter()
+            .find(|(held, _)| held == key)
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 pub struct Channel {

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use grana_archive::{Block, Channel as WriteChannel, Fill, ImageSpec};
 use grana_exec::Cancel;
 use grana_image::{Image, Source};
-use grana_volume::{Extent, Intensity, Level, Spacing, VoxelData};
+use grana_volume::{Calibration, Extent, Intensity, Level, Spacing, VoxelData};
 
 use crate::Error;
 use crate::mosaic::{self, Edge, Offset, Plane, Side};
@@ -110,6 +110,7 @@ pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
         frames: mosaic.frames,
         interval: Some(mosaic.interval),
         sample: grana_volume::VoxelFormat::F32,
+        calibration: mosaic.calibration,
         fill: Fill::FinestLevel(&fill),
         cancel,
         progress: &mut progress,
@@ -136,6 +137,7 @@ struct Mosaic {
     tile: Extent,
     extent: Extent,
     spacing: Spacing,
+    calibration: Calibration,
     placement: [f32; 3],
     frames: u32,
     interval: f32,
@@ -234,6 +236,7 @@ impl Mosaic {
             f64::from(extent.x()) / f64::from(coarse.x()),
             f64::from(extent.y()) / f64::from(coarse.y()),
         ];
+        let calibration = base.calibration();
         let placement = base.placement();
         let interval = base.frame_interval();
         let mut solved = Vec::with_capacity(frames as usize);
@@ -282,6 +285,7 @@ impl Mosaic {
             tile: extent,
             extent: canvas,
             spacing,
+            calibration,
             placement,
             frames,
             interval,

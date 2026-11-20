@@ -1258,6 +1258,7 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
             frames: 1,
             interval: Some(1.0),
             sample: grana_volume::VoxelFormat::F32,
+            calibration: grana_volume::Calibration::Recorded,
             fill: Fill::EveryLevel(&fill),
             cancel: &std::sync::atomic::AtomicBool::new(false),
             progress: &mut progress,

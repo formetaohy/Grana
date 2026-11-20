@@ -99,6 +99,7 @@ impl Sink {
                         frames: 1,
                         interval: Some(scene.dataset.frame_interval()),
                         sample: grana_volume::VoxelFormat::U16,
+                        calibration: grana_volume::Calibration::Recorded,
                         fill: Fill::EveryLevel(&fill),
                         cancel: &cancel,
                         progress: &mut progress,

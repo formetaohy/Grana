@@ -561,6 +561,10 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
     });
     let mut attributes = serde_json::Map::new();
     attributes.insert("ome".to_string(), ome);
+    attributes.insert(
+        grana_archive::ANNOTATION.to_string(),
+        json!({ "calibration": grana_archive::calibration_name(spec.calibration) }),
+    );
     attributes
 }
 

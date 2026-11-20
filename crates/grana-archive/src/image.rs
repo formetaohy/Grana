@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_volume::{Intensity, Level, VoxelData, VoxelFormat};
+use grana_volume::{Calibration, Intensity, Level, VoxelData, VoxelFormat};
 
 pub struct Channel<'a> {
     pub name: &'a str,
@@ -66,6 +66,7 @@ pub struct ImageSpec<'a> {
     pub frames: u32,
     pub interval: Option<f32>,
     pub sample: VoxelFormat,
+    pub calibration: Calibration,
     pub fill: Fill<'a>,
     pub cancel: &'a AtomicBool,
     pub progress: &'a mut dyn FnMut(usize, usize),

@@ -65,6 +65,7 @@ pub(super) fn write(
             placement: scene.dataset.pyramid().placement(),
             frames,
             interval: scene.dataset.frame_interval(),
+            calibration: scene.dataset.pyramid().calibration(),
             drift,
             labels,
         },
