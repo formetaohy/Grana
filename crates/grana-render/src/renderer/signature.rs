@@ -14,6 +14,8 @@ pub(super) struct Signature<'a> {
     pub(super) epoch: u64,
     pub(super) size: [u32; 2],
     pub(super) step: f32,
+    pub(super) levels: LevelKey,
+    pub(super) stale: bool,
 }
 
 impl Signature<'_> {
@@ -47,6 +49,14 @@ impl Signature<'_> {
 
     pub(super) fn content(self) -> u64 {
         digest(&[self.layers(), self.stamp])
+    }
+
+    pub(super) fn detail(self) -> u64 {
+        digest(&[
+            self.levels.base as u64,
+            self.levels.count as u64,
+            u64::from(self.stale),
+        ])
     }
 
     pub(super) fn classification(self) -> u64 {
@@ -116,7 +126,7 @@ pub(super) struct ShadowKeys {
 pub(super) struct ShadowVolume {
     pub(super) time: u32,
     pub(super) content: u32,
-    pub(super) awaits: bool,
+    pub(super) stale: bool,
     pub(super) style: u64,
     pub(super) level: usize,
 }
@@ -126,7 +136,7 @@ impl ShadowKeys {
         let ShadowVolume {
             time,
             content,
-            awaits,
+            stale,
             style,
             level,
         } = volume;
@@ -137,7 +147,7 @@ impl ShadowKeys {
                 level as u64,
                 u64::from(time),
                 u64::from(content),
-                u64::from(awaits),
+                u64::from(stale),
                 space,
             ]),
             objects: digest(&[layers, space]),

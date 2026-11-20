@@ -1294,7 +1294,7 @@ impl Decode for ObjectParams {
             ObjectKind::Surfaces
                 if unit(values[0])
                     && length(values[1])
-                    && length(values[2])
+                    && unit(values[2])
                     && length(values[3])
                     && length(values[4])
                     && length(values[5])

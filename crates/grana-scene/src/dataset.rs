@@ -7,9 +7,7 @@ pub enum Origin {
     Zarr,
     Tiff,
     Czi,
-    Nikon,
-    Leica,
-    Imaris,
+    Readout,
     Remote,
 }
 
@@ -53,27 +51,11 @@ impl Dataset {
         }
     }
 
-    pub fn nikon(name: impl Into<String>, pyramid: Pyramid) -> Self {
+    pub fn readout(name: impl Into<String>, pyramid: Pyramid) -> Self {
         Self {
             name: name.into(),
             pyramid,
-            origin: Origin::Nikon,
-        }
-    }
-
-    pub fn leica(name: impl Into<String>, pyramid: Pyramid) -> Self {
-        Self {
-            name: name.into(),
-            pyramid,
-            origin: Origin::Leica,
-        }
-    }
-
-    pub fn imaris(name: impl Into<String>, pyramid: Pyramid) -> Self {
-        Self {
-            name: name.into(),
-            pyramid,
-            origin: Origin::Imaris,
+            origin: Origin::Readout,
         }
     }
 

@@ -15,6 +15,7 @@ pub(super) struct Shot {
     pub(super) view: View,
     pub(super) awaits: bool,
     pub(super) assured: bool,
+    pub(super) stale: bool,
     pub(super) slice: bool,
     pub(super) translucent: bool,
     pub(super) surfaces: bool,
@@ -35,6 +36,7 @@ impl Shot {
             ),
             awaits: frame.delivery.awaits(),
             assured: frame.delivery.assures(),
+            stale: frame.delivery.shows_stale(),
             slice,
             translucent,
             surfaces: !frame.scene.layers.is_empty(),
@@ -268,7 +270,7 @@ impl Renderer {
             channel,
             time: frame.time,
             content: residence.content(),
-            awaits: shot.awaits,
+            stale: shot.stale,
         });
         let shadow = &mut resources.shadow;
         if scene.shading.shadows > 0.0 && !shot.slice {
@@ -292,7 +294,7 @@ impl Renderer {
             },
             space: planned.space,
             translucent: shot.translucent,
-            awaits: shot.awaits,
+            stale: shot.stale,
             content: residence.content(),
             table: &resources.scene,
             oit: target.oit.as_ref(),
@@ -308,6 +310,8 @@ impl Renderer {
             epoch: residence.epoch(),
             size: target.size,
             step: scene.step_scale,
+            levels: LevelKey::of(outlook.levels),
+            stale: shot.stale,
         };
         let started = timing::begin(Begin {
             target,
@@ -316,6 +320,7 @@ impl Renderer {
             content: signature.content(),
             classification: signature.classification(),
             appearance: signature.appearance(),
+            detail: signature.detail(),
             view: signature::view(&data),
             camera: Mat4::from_cols_array_2d(&data.view_projection),
             exporting: *exporting,

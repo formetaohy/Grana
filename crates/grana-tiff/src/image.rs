@@ -500,7 +500,9 @@ fn place(
     }
     let start = planes.index(block.t, block.c, block.z);
     let count = if block.planes == 0 {
-        pages.saturating_sub(block.ifd as usize)
+        pages
+            .saturating_sub(block.ifd as usize)
+            .min(planes.count() as usize - start)
     } else {
         block.planes as usize
     };

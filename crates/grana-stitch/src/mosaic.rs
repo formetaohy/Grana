@@ -87,14 +87,16 @@ impl Plane {
         let width = self.width.div_ceil(scale);
         let height = self.height.div_ceil(scale);
         let mut values = vec![0.0f32; width * height];
+        let mut counts = vec![0.0f32; width * height];
         for y in 0..self.height {
             for x in 0..self.width {
-                values[(x / scale) + width * (y / scale)] += self.values[x + self.width * y];
+                let cell = (x / scale) + width * (y / scale);
+                values[cell] += self.values[x + self.width * y];
+                counts[cell] += 1.0;
             }
         }
-        let count = (scale * scale) as f32;
-        for value in &mut values {
-            *value /= count;
+        for (value, count) in values.iter_mut().zip(&counts) {
+            *value /= *count;
         }
         Plane::new(width, height, values)
     }

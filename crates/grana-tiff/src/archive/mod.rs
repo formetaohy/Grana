@@ -6,6 +6,7 @@ use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use grana_archive::{Fill, Filler, ImageSpec, Written};
+use rayon::prelude::*;
 
 use crate::Error;
 use tile::{LevelInfo, Request, SIDE, Tile};
@@ -18,6 +19,8 @@ const TILE_OVERHEAD: u64 = 256;
 const POINTER_BYTES: u64 = 16;
 const PAGE_OVERHEAD: u64 = 4 << 10;
 const METADATA_OVERHEAD: u64 = 1 << 20;
+const BATCH_BYTES: usize = 32 << 20;
+const BATCH_LIMIT: usize = 256;
 
 pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, crate::Error> {
     spec.check();
@@ -61,7 +64,6 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
         cursor: 0,
         done: 0,
         total,
-        tile: Tile::new(spec.sample),
     };
     sink.write(&layout::header())?;
     let mut pointer: Option<u64> = None;
@@ -236,13 +238,17 @@ fn pack(values: &[u64]) -> Vec<u8> {
     bytes
 }
 
+fn batch_tiles(sample: grana_volume::VoxelFormat) -> usize {
+    let raw = (SIDE as usize).pow(2) * sample.bytes();
+    (BATCH_BYTES / raw).clamp(1, BATCH_LIMIT)
+}
+
 struct Sink {
     file: BufWriter<File>,
     path: PathBuf,
     cursor: u64,
     done: usize,
     total: usize,
-    tile: Tile,
 }
 
 impl Sink {
@@ -286,23 +292,33 @@ impl Sink {
         fill: &Filler<'_>,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
-        let mut offsets = Vec::with_capacity(info.tiles());
-        let mut counts = Vec::with_capacity(info.tiles());
-        for row in 0..info.down() {
-            for column in 0..info.across() {
-                let length = self
-                    .tile
-                    .encode(request, info, column, row, sample, fill)
-                    .map_err(|detail| Error::write(&self.path, detail))?;
+        let count = info.tiles();
+        let mut offsets = Vec::with_capacity(count);
+        let mut counts = Vec::with_capacity(count);
+        let batch = batch_tiles(sample);
+        let mut first = 0;
+        while first < count {
+            let last = (first + batch).min(count);
+            let blocks = (first..last)
+                .into_par_iter()
+                .map_init(
+                    || Tile::new(sample),
+                    |tile, index| {
+                        let row = (index / info.across() as usize) as u32;
+                        let column = (index % info.across() as usize) as u32;
+                        tile.encode(*request, info, column, row, sample, fill)
+                    },
+                )
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|detail| Error::write(&self.path, detail))?;
+            for bytes in blocks {
                 offsets.push(self.cursor);
-                counts.push(length);
-                self.file
-                    .write_all(self.tile.bytes())
-                    .map_err(|error| Error::write(&self.path, error.to_string()))?;
-                self.cursor += length;
+                counts.push(bytes.len() as u64);
+                self.write(&bytes)?;
                 self.done += 1;
                 progress(self.done, self.total);
             }
+            first = last;
         }
         Ok((pack(&offsets), pack(&counts)))
     }

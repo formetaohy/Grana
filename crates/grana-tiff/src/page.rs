@@ -170,8 +170,14 @@ impl Page {
             extra,
         };
         let photometric = directory.integer(store, TAG_PHOTOMETRIC, path)?;
-        let color = ColorModel::of(photometric, samples, sample_type, &values)
-            .map_err(|detail| Error::unsupported(path, detail))?;
+        let color = ColorModel::of(
+            photometric,
+            samples,
+            sample_type,
+            &values,
+            compression.stores_rgb_samples(),
+        )
+        .map_err(|detail| Error::unsupported(path, detail))?;
         if sample_type.components() > 1
             && (color.converts() || samples != 1 || color.channels() != 1)
         {
@@ -350,13 +356,18 @@ impl Page {
             data
         };
         if self.sample_type.packed() {
+            let order = if matches!(self.compression, Compression::Fax { .. }) {
+                FillOrder::Msb
+            } else {
+                self.fill_order
+            };
             let unpacked = unpack(
                 &data,
                 self.sample_type.bits,
                 samples,
                 block.width as usize,
                 block.rows as usize,
-                self.fill_order,
+                order,
             )?;
             return Ok(VoxelData::U8(unpacked));
         }
@@ -460,6 +471,12 @@ fn unpack(
             "the packed TIFF block is shorter than its geometry",
         ));
     }
+    let mirrored = (order == FillOrder::Lsb).then(|| {
+        data.iter()
+            .map(|byte| byte.reverse_bits())
+            .collect::<Vec<u8>>()
+    });
+    let data = mirrored.as_deref().unwrap_or(data);
     let mut values = Vec::with_capacity(width * samples * rows);
     let mask = (1u16 << bits) - 1;
     for row in 0..rows {
@@ -468,30 +485,16 @@ fn unpack(
             let offset = slot * bits as usize;
             let byte = line[offset / 8];
             let shift = offset % 8;
-            let mut value = if shift + bits as usize <= 8 {
+            let value = if shift + bits as usize <= 8 {
                 u16::from(byte >> (8 - shift - bits as usize))
             } else {
                 (u16::from(byte) << 8 | u16::from(line[offset / 8 + 1]))
                     >> (16 - shift - bits as usize)
             };
-            value &= mask;
-            if order == FillOrder::Lsb {
-                value = reverse_bits(value, bits);
-            }
-            values.push(value as u8);
+            values.push((value & mask) as u8);
         }
     }
     Ok(values)
-}
-
-fn reverse_bits(value: u16, bits: u16) -> u16 {
-    let mut reversed = 0;
-    for index in 0..bits {
-        if value & (1 << index) != 0 {
-            reversed |= 1 << (bits - 1 - index);
-        }
-    }
-    reversed
 }
 
 fn required(directory: &Directory, store: &Store, tag: u16, path: &Path) -> Result<u32, Error> {

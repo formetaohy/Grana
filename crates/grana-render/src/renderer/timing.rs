@@ -8,6 +8,7 @@ pub(super) struct Begin<'a> {
     pub(super) content: u64,
     pub(super) classification: u64,
     pub(super) appearance: u64,
+    pub(super) detail: u64,
     pub(super) view: u64,
     pub(super) camera: Mat4,
     pub(super) exporting: bool,
@@ -50,6 +51,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         content,
         classification,
         appearance,
+        detail,
         view,
         camera,
         exporting,
@@ -71,11 +73,13 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
     let restart = target.layers != Some(layers);
     let restaged = target.classification != Some(classification);
     let restyled = target.appearance != Some(appearance);
-    let refresh = restart || target.content != Some(content) || restaged || restyled;
+    let redetailed = target.detail != Some(detail);
+    let refresh = restart || target.content != Some(content) || restaged || restyled || redetailed;
     target.layers = Some(layers);
     target.content = Some(content);
     target.classification = Some(classification);
     target.appearance = Some(appearance);
+    target.detail = Some(detail);
     target.view = Some(view);
     target.camera = Some(camera);
     if refresh {

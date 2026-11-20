@@ -13,6 +13,7 @@ grana-ome = { workspace = true }
 grana-store = { workspace = true }
 flate2 = { workspace = true }
 grana-volume = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
 weezl = { workspace = true }
 fax = { workspace = true }

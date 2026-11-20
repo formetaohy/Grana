@@ -1,14 +1,11 @@
 use std::path::Path;
+use std::sync::OnceLock;
 
 use grana_volume::Extent;
 use openreadout_core::FileInfo;
 
 use crate::error::Error;
 use crate::open;
-
-const EXTENSIONS: [&str; 9] = [
-    "nd2", "lif", "lifext", "lof", "xlif", "xlef", "xlcf", "xllf", "ims",
-];
 
 const RGB_SAMPLES: u32 = 3;
 
@@ -64,10 +61,21 @@ pub fn has_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            EXTENSIONS
+            extensions()
                 .iter()
                 .any(|known| known.eq_ignore_ascii_case(extension))
         })
+}
+
+fn extensions() -> &'static [String] {
+    static EXTENSIONS: OnceLock<Vec<String>> = OnceLock::new();
+    EXTENSIONS.get_or_init(|| {
+        open::registry()
+            .descriptors()
+            .into_iter()
+            .flat_map(|descriptor| descriptor.extensions)
+            .collect()
+    })
 }
 
 pub fn dataset_name(path: &Path) -> String {

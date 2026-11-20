@@ -201,7 +201,7 @@ pub(super) struct Frame<'a> {
     pub(super) ray: crate::frame::Ray,
     pub(super) space: ShadowSpace,
     pub(super) translucent: bool,
-    pub(super) awaits: bool,
+    pub(super) stale: bool,
     pub(super) content: u32,
     pub(super) table: &'a SceneTable,
     pub(super) oit: Option<&'a Oit>,
@@ -220,7 +220,7 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
         ray,
         space,
         translucent,
-        awaits,
+        stale,
         content,
         table,
         oit,
@@ -242,7 +242,7 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
     );
     data.viewport = view.region.map(|value| value as f32);
     data.oit = [u32::from(translucent), 0, 0, 0];
-    data.tag[1] = u32::from(!awaits);
+    data.tag[1] = u32::from(stale);
     data.tag[3] = content;
     data.occupancy[0] = table.threshold_floor();
     data.packs = table.packs();
@@ -262,7 +262,7 @@ pub(super) struct ShadowFrame<'a> {
     pub(super) channel: u64,
     pub(super) time: u32,
     pub(super) content: u32,
-    pub(super) awaits: bool,
+    pub(super) stale: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -292,7 +292,7 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
         channel,
         time,
         content,
-        awaits,
+        stale,
     } = frame;
     let finest = pyramid.level(0);
     let world = Vec3::from(finest.world_extent());
@@ -323,7 +323,7 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
         ShadowVolume {
             time,
             content,
-            awaits,
+            stale,
             style: channel,
             level,
         },

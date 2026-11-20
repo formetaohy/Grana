@@ -17,6 +17,21 @@ pub(crate) fn registry() -> Registry {
         .with(Box::new(openreadout_nd2::Nd2Reader))
         .with(Box::new(openreadout_lif::LifReader))
         .with(Box::new(openreadout_hdf5::ImsReader))
+        .with(Box::new(openreadout_oir::OirReader))
+        .with(Box::new(openreadout_oif::OifReader))
+        .with(Box::new(openreadout_oif::OibReader))
+        .with(Box::new(openreadout_vsi::VsiReader))
+        .with(Box::new(openreadout_zvi::ZviReader))
+        .with(Box::new(openreadout_em::DmReader))
+        .with(Box::new(openreadout_em::EmdReader))
+        .with(Box::new(openreadout_em::MrcReader))
+        .with(Box::new(openreadout_em::SerReader))
+        .with(Box::new(openreadout_wsi::MiraxReader))
+        .with(Box::new(openreadout_wsi::IsyntaxReader))
+        .with(Box::new(openreadout_wsi::VmsReader))
+        .with(Box::new(openreadout_hcs::HarmonyReader))
+        .with(Box::new(openreadout_hcs::ImageXpressReader))
+        .with(Box::new(openreadout_hcs::CellVoyagerReader))
 }
 
 pub(crate) fn open(path: &Path) -> Result<Document, Error> {

@@ -1,4 +1,4 @@
-use super::{ColocMoments, ColocThresholdRange, ColocThresholds};
+use super::{ColocMoments, ColocThresholdRange, ColocThresholds, cut};
 
 const ZERO: f64 = 1.0e-4;
 const MINIMUM: f64 = 3.0;
@@ -108,17 +108,6 @@ pub(super) fn costes(
         return None;
     };
     Some(ColocThresholdRange::new(low, high))
-}
-
-fn cut(unit: f64, bins: usize) -> usize {
-    let position = unit * bins as f64 - 0.5;
-    if position <= 0.0 {
-        0
-    } else if position >= bins as f64 {
-        bins
-    } else {
-        position.ceil() as usize
-    }
 }
 
 fn pair(bins: usize, along_a: bool, step: usize, slope: f64, intercept: f64) -> ColocThresholds {

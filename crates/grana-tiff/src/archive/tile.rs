@@ -46,10 +46,6 @@ impl LevelInfo {
         self.across
     }
 
-    pub(crate) fn down(self) -> u32 {
-        self.down
-    }
-
     pub(crate) fn tiles(self) -> usize {
         self.across as usize * self.down as usize
     }
@@ -65,26 +61,24 @@ pub(crate) struct Request {
 
 pub(crate) struct Tile {
     raw: Vec<u8>,
-    compressed: Vec<u8>,
 }
 
 impl Tile {
     pub(crate) fn new(sample: VoxelFormat) -> Self {
         Self {
             raw: vec![0; BLOCK * sample.bytes()],
-            compressed: Vec::new(),
         }
     }
 
     pub(crate) fn encode(
         &mut self,
-        request: &Request,
+        request: Request,
         info: LevelInfo,
         column: u32,
         row: u32,
         sample: VoxelFormat,
         fill: &Filler<'_>,
-    ) -> Result<u64, String> {
+    ) -> Result<Vec<u8>, String> {
         let origin = [column * SIDE, row * SIDE, request.z];
         let extent = [
             SIDE.min(info.width - origin[0]),
@@ -112,17 +106,13 @@ impl Tile {
             let to = line * stride;
             self.raw[to..to + width].copy_from_slice(&bytes[from..from + width]);
         }
-        let mut compressed = std::mem::take(&mut self.compressed);
-        compressed.clear();
-        let mut encoder = ZlibEncoder::new(compressed, Compression::default());
+        let mut encoder = ZlibEncoder::new(
+            Vec::with_capacity(self.raw.len() / 2),
+            Compression::default(),
+        );
         encoder
             .write_all(&self.raw)
             .map_err(|error| error.to_string())?;
-        self.compressed = encoder.finish().map_err(|error| error.to_string())?;
-        Ok(self.compressed.len() as u64)
-    }
-
-    pub(crate) fn bytes(&self) -> &[u8] {
-        &self.compressed
+        encoder.finish().map_err(|error| error.to_string())
     }
 }

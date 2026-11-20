@@ -121,12 +121,12 @@ pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<Residency, Str
         !movie || plan.size.height().is_multiple_of(2) && plan.size.width().is_multiple_of(2),
         "a movie frame holds an even number of pixels"
     );
-    let height = plan.size.height();
+    let size = plan.size.to_array();
     let mut slots = 1usize;
     let mut level = pyramid.level_count() - 1;
     for pose in &plan.poses {
         let camera = camera(&pose.camera);
-        let held = grana_render::residency(pyramid, &camera, height, plan.region);
+        let held = grana_render::residency(pyramid, &camera, size, plan.region);
         slots = slots.max(held.slots);
         level = level.min(held.detail.level);
     }

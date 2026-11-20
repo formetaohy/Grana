@@ -1033,7 +1033,6 @@ impl Session {
             source.set_time(scene.time());
         }
         let existing = scene.objects.iter().map(|set| set.id()).collect::<Vec<_>>();
-        self.mask_extents = scene.mask_extents(scene.time());
         self.in_flight
             .retain(|request| request.time >= scene.time());
         self.failed

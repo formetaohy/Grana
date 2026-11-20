@@ -59,7 +59,7 @@ impl ColocThresholds {
             bins > 0,
             "a colocalization histogram holds at least one bin"
         );
-        [self.a, self.b].map(|threshold| ((threshold * bins as f32) as usize).min(bins - 1))
+        [self.a, self.b].map(|threshold| cut(f64::from(threshold), bins))
     }
 }
 
@@ -911,6 +911,17 @@ impl ObjectColoc {
 
 fn bin(unit: f32, bins: usize) -> usize {
     ((unit.clamp(0.0, 1.0) * bins as f32) as usize).min(bins - 1)
+}
+
+fn cut(unit: f64, bins: usize) -> usize {
+    let position = unit * bins as f64 - 0.5;
+    if position <= 0.0 {
+        0
+    } else if position >= bins as f64 {
+        bins
+    } else {
+        position.ceil() as usize
+    }
 }
 
 fn above(sums: &[f64], cut: usize) -> f64 {

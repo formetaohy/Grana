@@ -38,6 +38,7 @@ impl ColorModel {
         samples: u32,
         sample: SampleType,
         values: &ColorValues,
+        coded: bool,
     ) -> Result<Self, String> {
         let photometric = photometric.unwrap_or(u64::from(PHOTOMETRIC_WHITE_IS_ZERO));
         let photometric = u16::try_from(photometric)
@@ -74,7 +75,7 @@ impl ColorModel {
             }
             PHOTOMETRIC_YCBCR => {
                 let subsampling = values.subsampling.unwrap_or([2, 2]);
-                if subsampling != [1, 1] {
+                if !coded && subsampling != [1, 1] {
                     return Err(format!(
                         "the TIFF YCbCr subsampling {}x{} is not supported",
                         subsampling[0], subsampling[1]

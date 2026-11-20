@@ -26,9 +26,7 @@ pub enum Format {
     Zarr,
     Tiff,
     Czi,
-    Nikon,
-    Leica,
-    Imaris,
+    Readout,
 }
 
 enum Inner {
@@ -137,11 +135,14 @@ impl Image {
             Inner::Zarr(_) => Some(Format::Zarr),
             Inner::Tiff(_) => Some(Format::Tiff),
             Inner::Czi(_) => Some(Format::Czi),
-            Inner::Readout(image) => Some(match image.family() {
-                grana_readout::Family::Nikon => Format::Nikon,
-                grana_readout::Family::Leica => Format::Leica,
-                grana_readout::Family::Imaris => Format::Imaris,
-            }),
+            Inner::Readout(_) => Some(Format::Readout),
+        }
+    }
+
+    pub fn family(&self) -> Option<grana_readout::Family> {
+        match &self.inner {
+            Inner::Readout(image) => Some(image.family()),
+            Inner::Memory(_) | Inner::Zarr(_) | Inner::Tiff(_) | Inner::Czi(_) => None,
         }
     }
 
@@ -859,7 +860,7 @@ impl Inner {
         }
         Err(Error::Unsupported {
             path: path.to_path_buf(),
-            detail: "the file is not an OME-TIFF, a CZI, an ND2, a LIF or an IMS image".to_string(),
+            detail: "the file stores no image grana can read".to_string(),
         })
     }
 

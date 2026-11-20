@@ -461,15 +461,12 @@ impl Session {
         let name = dataset.name().to_string();
         match dataset.origin() {
             Origin::Synthetic => None,
-            Origin::Zarr
-            | Origin::Tiff
-            | Origin::Czi
-            | Origin::Nikon
-            | Origin::Leica
-            | Origin::Imaris => match self.source.as_ref()?.source() {
-                Source::File { path, .. } => Some(ProjectSource::File { name, path, series }),
-                Source::Memory(_) | Source::Remote { .. } => None,
-            },
+            Origin::Zarr | Origin::Tiff | Origin::Czi | Origin::Readout => {
+                match self.source.as_ref()?.source() {
+                    Source::File { path, .. } => Some(ProjectSource::File { name, path, series }),
+                    Source::Memory(_) | Source::Remote { .. } => None,
+                }
+            }
             Origin::Remote => match self.source.as_ref()?.source() {
                 Source::Remote { url, .. } => Some(ProjectSource::Remote { name, url, series }),
                 Source::Memory(_) | Source::File { .. } => None,
@@ -640,10 +637,8 @@ impl Session {
                         (false, Some(Format::Zarr)) => Dataset::zarr(opened.name, opened.pyramid),
                         (false, Some(Format::Tiff)) => Dataset::tiff(opened.name, opened.pyramid),
                         (false, Some(Format::Czi)) => Dataset::czi(opened.name, opened.pyramid),
-                        (false, Some(Format::Nikon)) => Dataset::nikon(opened.name, opened.pyramid),
-                        (false, Some(Format::Leica)) => Dataset::leica(opened.name, opened.pyramid),
-                        (false, Some(Format::Imaris)) => {
-                            Dataset::imaris(opened.name, opened.pyramid)
+                        (false, Some(Format::Readout)) => {
+                            Dataset::readout(opened.name, opened.pyramid)
                         }
                         (false, None) => Dataset::synthetic(opened.name, opened.pyramid),
                     };

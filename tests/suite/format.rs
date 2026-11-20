@@ -1789,3 +1789,122 @@ fn write_chunky_series(path: &std::path::Path) {
     }
     std::fs::write(path, &bytes).expect("the sample tiff writes");
 }
+
+fn electron_stack(path: &std::path::Path, extent: [u32; 3]) {
+    let mut bytes = vec![0u8; 1024];
+    let mut put = |at: usize, value: i32| {
+        bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    put(0, extent[0] as i32);
+    put(4, extent[1] as i32);
+    put(8, extent[2] as i32);
+    put(12, 1);
+    put(28, extent[0] as i32);
+    put(32, extent[1] as i32);
+    put(36, extent[2] as i32);
+    put(64, 1);
+    put(68, 2);
+    put(72, 3);
+    bytes[208..212].copy_from_slice(b"MAP ");
+    bytes[212..216].copy_from_slice(&[0x44, 0x44, 0, 0]);
+    for z in 0..extent[2] {
+        for y in 0..extent[1] {
+            for x in 0..extent[0] {
+                let value = (x + 10 * y + 100 * z) as i16;
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+    }
+    std::fs::write(path, &bytes).expect("the electron stack writes");
+}
+
+#[test]
+fn reads_an_electron_microscopy_stack_through_the_shared_registry() {
+    let temp = Temp::new("suite-mrc");
+    let path = temp.path().join("tilt.mrc");
+    electron_stack(&path, [8, 6, 4]);
+    assert!(
+        grana_image::is_image(&path),
+        "the stack is not recognised as an image"
+    );
+    assert_eq!(
+        grana_image::series_count(&path).expect("the stack counts its images"),
+        1
+    );
+    let image = Image::open(&Source::file(path.clone())).expect("the stack opens");
+    assert_eq!(image.format(), Some(grana_image::Format::Readout));
+    assert_eq!(
+        image.family(),
+        Some(grana_readout::Family::Electron),
+        "the stack does not declare its vendor family"
+    );
+    assert_eq!(image.pyramid().level(0).extent(), Extent::new(8, 6, 1));
+    assert_eq!(image.pyramid().frame_count(), 4);
+    assert_eq!(image.pyramid().channel_count(), 1);
+    let plane = image
+        .read_region(1, 0, 0, &[1..4, 2..3, 0..1], &grana_warp::Warp::IDENTITY)
+        .expect("a tilt section reads");
+    let expected = [121.0f32, 122.0, 123.0];
+    let VoxelData::F32(values) = plane else {
+        panic!("an integer electron stack widens to float samples");
+    };
+    assert_eq!(values, expected.to_vec(), "the plane values are wrong");
+}
+
+fn packed_tiff(path: &std::path::Path, fill_order: u16) {
+    let entries = 10u32;
+    let record = 2 + entries * 12 + 4;
+    let header = 8u32;
+    let data = header + record;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&header.to_le_bytes());
+    bytes.extend_from_slice(&(entries as u16).to_le_bytes());
+    let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(&kind.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+    };
+    entry(256, 4, 1, 8);
+    entry(257, 4, 1, 1);
+    entry(258, 3, 1, 1);
+    entry(259, 3, 1, 1);
+    entry(262, 3, 1, 1);
+    entry(266, 3, 1, fill_order as u32);
+    entry(273, 4, 1, data);
+    entry(277, 3, 1, 1);
+    entry(278, 4, 1, 1);
+    entry(279, 4, 1, 1);
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.push(0x01);
+    std::fs::write(path, &bytes).expect("the packed tiff writes");
+}
+
+#[test]
+fn reads_packed_samples_in_the_declared_bit_order() {
+    let temp = Temp::new("suite-tiff-fill-order");
+    let row = |name: &str, fill_order: u16| -> Vec<u8> {
+        let path = temp.path().join(name);
+        packed_tiff(&path, fill_order);
+        let image = grana_tiff::Image::open(&path, 0).expect("the packed page opens");
+        let data = image
+            .read_region(0, 0, 0, 0..8, 0..1, 0..1)
+            .expect("the packed row reads");
+        let VoxelData::U8(values) = data else {
+            panic!("a one bit page unpacks to bytes");
+        };
+        values
+    };
+    assert_eq!(
+        row("msb.tif", 1),
+        vec![0, 0, 0, 0, 0, 0, 0, 1],
+        "a most significant bit first page starts at the leftmost pixel"
+    );
+    assert_eq!(
+        row("lsb.tif", 2),
+        vec![1, 0, 0, 0, 0, 0, 0, 0],
+        "a least significant bit first page starts at the leftmost pixel"
+    );
+}

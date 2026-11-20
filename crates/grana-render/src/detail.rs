@@ -17,16 +17,21 @@ pub struct Residency {
     pub slots: usize,
 }
 
-pub fn residency(pyramid: &Pyramid, camera: &Camera, height: u32, region: Region) -> Residency {
+pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Region) -> Residency {
     assert!(
         pyramid.level_count() > 0,
         "a pyramid holds at least one level"
+    );
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "an export covers a positive surface"
     );
     let limits = Limits {
         first: 0,
         ceiling: pyramid.level_count() - 1,
     };
-    let height = height.max(1);
+    let height = size[1];
+    let aspect = size[0] as f32 / height as f32;
     let ladder = volume_ladder(LadderView {
         pyramid,
         camera,
@@ -39,7 +44,7 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, height: u32, region: Region
             pyramid,
             camera,
             region,
-            aspect: 1.0,
+            aspect,
             height,
             limits,
             capacity: 1,

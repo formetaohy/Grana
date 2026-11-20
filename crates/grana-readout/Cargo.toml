@@ -12,8 +12,15 @@ grana-volume = { workspace = true }
 hdf5-pure = { workspace = true }
 openreadout-core = { workspace = true }
 openreadout-hdf5 = { workspace = true }
+openreadout-em = { workspace = true }
+openreadout-hcs = { workspace = true }
 openreadout-lif = { workspace = true }
 openreadout-nd2 = { workspace = true }
+openreadout-oif = { workspace = true }
+openreadout-oir = { workspace = true }
+openreadout-vsi = { workspace = true }
+openreadout-wsi = { workspace = true }
+openreadout-zvi = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

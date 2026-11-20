@@ -115,6 +115,16 @@ pub fn layout(axes: &[Axis], shape: &[u64], dataset: &Dataset) -> Result<Layout,
     let Some(y) = space[1] else {
         return Err("the image names no spatial axis `y`".to_string());
     };
+    let ordered = [space[2], Some(y), Some(x)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if ordered.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Err(
+            "the image stores its spatial axes in an order other than z, y, x; grana reads only arrays whose x axis varies fastest"
+                .to_string(),
+        );
+    }
     let extent = Extent::new(
         dimension(shape[x])?,
         dimension(shape[y])?,

@@ -486,7 +486,9 @@ fn bins_for(counts: &[u64], sum: f64, squares: f64, voxels: u64) -> usize {
     } else {
         return COLOC_BINS_MIN;
     };
-    ((1.0 / width).ceil() as usize).clamp(COLOC_BINS_MIN, COLOC_BINS_MAX)
+    ((1.0 / width).ceil() as usize)
+        .clamp(COLOC_BINS_MIN, COLOC_BINS_MAX)
+        .next_power_of_two()
 }
 
 fn interquartile(counts: &[u64]) -> f64 {

@@ -1252,6 +1252,63 @@ fn fits_the_volume_level_to_the_residency_budget() {
     holds_a_settled_frame(&gpu, &mut renderer, &view);
 }
 
+#[test]
+fn restarts_accumulation_when_the_band_ladder_changes() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volumes = ladder_volumes();
+    let pyramid = ladder_pyramid(&volumes);
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        16 << 20,
+        gpu.pipelines(),
+    );
+    renderer.set_dataset(gpu.device(), &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = ladder_view(&view_texture, &camera, &scene);
+    let settled = stream_levels(&gpu, &mut renderer, &view, &volumes);
+    assert_eq!(
+        settled.view.level, 0,
+        "the unconstrained view never reached the finest level"
+    );
+    let narrowed = renderer
+        .draw(gpu.device(), gpu.queue(), capped(&view, 0))
+        .expect("the narrowed ladder draws");
+    assert!(narrowed.drawn, "the single band frame never drew");
+    assert_eq!(
+        narrowed.age, 1,
+        "a different band ladder kept the convergence age of the old one"
+    );
+    assert!(
+        !narrowed.history,
+        "a different band ladder mixed the samples of the old one through the temporal history"
+    );
+    let held = renderer
+        .draw(gpu.device(), gpu.queue(), capped(&view, 0))
+        .expect("the narrowed ladder draws");
+    assert!(
+        held.history,
+        "an unchanged band ladder dropped its temporal history"
+    );
+}
+
 fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
     for _ in 0..4 {
         let info = renderer

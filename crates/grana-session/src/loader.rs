@@ -288,8 +288,8 @@ fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: 
         Ok(labels) => (labels.names().map(str::to_string).collect(), None),
         Err(detail) => (Vec::new(), Some(detail.to_string())),
     };
-    let (imports, imports_error) = match (format, source.path()) {
-        (Format::Imaris, Some(path)) => match grana_readout::imported(path) {
+    let (imports, imports_error) = match (reader.family(), source.path()) {
+        (Some(grana_readout::Family::Imaris), Some(path)) => match grana_readout::imported(path) {
             Ok(imported) => (imported, None),
             Err(detail) => (
                 grana_readout::Imported::default(),

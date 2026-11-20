@@ -1592,9 +1592,7 @@ fn dataset_of(format: Option<Format>, name: &str, pyramid: &Pyramid) -> Dataset 
         Some(Format::Zarr) => Dataset::zarr(name, pyramid),
         Some(Format::Tiff) => Dataset::tiff(name, pyramid),
         Some(Format::Czi) => Dataset::czi(name, pyramid),
-        Some(Format::Nikon) => Dataset::nikon(name, pyramid),
-        Some(Format::Leica) => Dataset::leica(name, pyramid),
-        Some(Format::Imaris) => Dataset::imaris(name, pyramid),
+        Some(Format::Readout) => Dataset::readout(name, pyramid),
         None => Dataset::synthetic(name, pyramid),
     }
 }

@@ -3535,7 +3535,7 @@ dependencies = [
  "grana-store",
  "grana-volume",
  "openreadout-jpegxr",
- "quick-xml",
+ "quick-xml 0.41.0",
  "thiserror 2.0.21",
  "zstd 0.13.3",
 ]
@@ -3759,7 +3759,7 @@ dependencies = [
 name = "grana-ome"
 version = "0.2.2"
 dependencies = [
- "quick-xml",
+ "quick-xml 0.41.0",
 ]
 
 [[package]]
@@ -3922,9 +3922,16 @@ dependencies = [
  "grana-volume",
  "hdf5-pure",
  "openreadout-core",
+ "openreadout-em",
+ "openreadout-hcs",
  "openreadout-hdf5",
  "openreadout-lif",
  "openreadout-nd2",
+ "openreadout-oif",
+ "openreadout-oir",
+ "openreadout-vsi",
+ "openreadout-wsi",
+ "openreadout-zvi",
  "thiserror 2.0.21",
 ]
 
@@ -4078,6 +4085,7 @@ dependencies = [
  "grana-ome",
  "grana-store",
  "grana-volume",
+ "rayon",
  "thiserror 2.0.21",
  "weezl 0.2.1",
  "zstd 0.13.3",
@@ -6123,6 +6131,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "openreadout-em"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2351c26094ee7c8f269da85f09c83aea15becee822f0e4f21be799001864410d"
+dependencies = [
+ "hdf5-pure",
+ "openreadout-core",
+ "roxmltree",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "openreadout-hcs"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e3cb2de5d67f1c0b677f8620b73a3614444151114401361b99034f8d9aa6515"
+dependencies = [
+ "openreadout-core",
+ "openreadout-tiff",
+ "quick-xml 0.42.0",
+ "roxmltree",
+ "serde_json",
+]
+
+[[package]]
 name = "openreadout-hdf5"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6170,6 +6205,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "openreadout-oif"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f760c390e5268c29565a140e200d582dea5b737b80cdba77fba1d95bbd9f9f6"
+dependencies = [
+ "openreadout-core",
+ "openreadout-tiff",
+ "serde_json",
+]
+
+[[package]]
+name = "openreadout-oir"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "586e686fabf00339ceff6613a72f868607e5fac188088b0417f5582ca3ff051c"
+dependencies = [
+ "openreadout-core",
+ "roxmltree",
+ "serde_json",
+]
+
+[[package]]
 name = "openreadout-tiff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6179,6 +6236,43 @@ dependencies = [
  "openreadout-core",
  "rayon",
  "roxmltree",
+ "serde_json",
+]
+
+[[package]]
+name = "openreadout-vsi"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "705d502a62cf2f28153224f39616dd30577f2eec64b2e07d83c385c1fe5cdb7e"
+dependencies = [
+ "openreadout-codecs",
+ "openreadout-core",
+ "rayon",
+ "serde_json",
+]
+
+[[package]]
+name = "openreadout-wsi"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65a94348efa6b0ceea751d50147d871f666d151cf483566b2b34b8eaf8bf74f1"
+dependencies = [
+ "base64 0.23.1",
+ "openreadout-codecs",
+ "openreadout-core",
+ "png",
+ "rayon",
+ "roxmltree",
+ "serde_json",
+]
+
+[[package]]
+name = "openreadout-zvi"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c5ae11975db4424330047093001f7aba2344b3bebe653fed3852d7ca4401e05"
+dependencies = [
+ "openreadout-core",
  "serde_json",
 ]
 
@@ -6691,6 +6785,15 @@ name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
  "memchr",
 ]
@@ -8906,7 +9009,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "338e30461b3a2b67d70eb30a6d89f8e0c93a833e07d2ae89085cd070c4a00ac0"
 dependencies = [
  "proc-macro2",
- "quick-xml",
+ "quick-xml 0.41.0",
  "quote",
 ]
 

@@ -128,6 +128,10 @@ impl Delivery {
     pub fn prefetches(self) -> bool {
         self == Self::Awaited
     }
+
+    pub fn shows_stale(self) -> bool {
+        self == Self::Immediate
+    }
 }
 
 pub struct Frame<'a, 'b> {
@@ -359,6 +363,7 @@ impl Renderer {
         for target in self.targets.iter_mut() {
             target.layers = None;
             target.content = None;
+            target.detail = None;
             target.taa.invalidate();
             target.phase = 0;
         }
