@@ -1675,6 +1675,64 @@ fn composites_soft_splats_through_the_depth_layers() {
         solid.contrast(core),
         faint.contrast(core)
     );
+    let occluder = PackedMesh::new(placed_quads(&[([0.0, 0.0], 2.5)]));
+    let occluding = [Layer::new(
+        LayerKey::new(1, 0, 0),
+        1,
+        1,
+        Arc::new(occluder),
+        Arc::from([Style::new([0.1, 1.0, 0.1], true, false, 1.0)]),
+        0,
+    )];
+    let mut face_on = camera.clone();
+    let mut state = face_on.state();
+    state.yaw = 0.0;
+    state.pitch = 0.0;
+    face_on.restore(state);
+    let occluded = |centre: f32| {
+        let chunks = [SplatChunk::single(
+            0,
+            revision(),
+            vec![splat([0.0, 0.0, centre], 0.5, [1.0, 0.1, 0.1], 1.0)],
+        )];
+        let scene = SceneFrame {
+            versions: versions(),
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 0.5,
+            layers: &occluding,
+            splats: Splats::new(&chunks),
+            overlays: &[],
+        };
+        let view = View {
+            target: &view_texture,
+            camera: &face_on,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Assured,
+        };
+        snapshot(
+            &gpu,
+            &mut build_renderer(&gpu, &pyramid),
+            &view,
+            &target,
+            &volume,
+        )
+    };
+    let behind = around(project(&face_on, [0.0, 0.0, 0.0]), 5);
+    let raising = occluded(-0.2);
+    let buried = occluded(-1.5);
+    assert!(
+        raising.hue(behind, Hue::Red) > 40,
+        "the near surface of a splat behind an occluder shows through: {} red pixels",
+        raising.hue(behind, Hue::Red)
+    );
+    assert_eq!(
+        buried.hue(behind, Hue::Red),
+        0,
+        "a splat whose whole body lies behind the occluder stays hidden"
+    );
 }
 
 #[test]

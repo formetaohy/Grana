@@ -30,6 +30,8 @@ const SPLAT_SHADER: &str = concat!(
     "\n",
     include_str!("shader/oit.wgsl"),
     "\n",
+    include_str!("shader/opaque.wgsl"),
+    "\n",
     include_str!("shader/splat.wgsl")
 );
 
@@ -493,7 +495,7 @@ impl SplatPasses {
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            depth_stencil: None,
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &module,
@@ -729,6 +731,7 @@ impl SplatPasses {
         pass: &mut RenderPass<'a>,
         scene: &'a BindGroup,
         oit: &'a BindGroup,
+        depth: &'a BindGroup,
     ) {
         if self.active.is_empty() {
             return;
@@ -736,6 +739,7 @@ impl SplatPasses {
         pass.set_pipeline(&self.key);
         pass.set_bind_group(0, scene, &[]);
         pass.set_bind_group(4, oit, &[]);
+        pass.set_bind_group(6, depth, &[]);
         for entry in &self.active {
             let slot = &self.slots[entry];
             pass.set_bind_group(1, &slot.rows, &[]);

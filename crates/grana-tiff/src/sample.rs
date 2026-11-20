@@ -54,9 +54,7 @@ impl SampleType {
             (SampleFormat::Signed, 33..=64) | (SampleFormat::ComplexSigned, 33..=64) => {
                 VoxelFormat::I64
             }
-            (SampleFormat::Float, 16 | 32) | (SampleFormat::ComplexFloat, 16 | 32) => {
-                VoxelFormat::F32
-            }
+            (SampleFormat::Float, 32) | (SampleFormat::ComplexFloat, 32) => VoxelFormat::F32,
             (SampleFormat::Float, 64) | (SampleFormat::ComplexFloat, 64) => VoxelFormat::F64,
             (SampleFormat::Float, bits) | (SampleFormat::ComplexFloat, bits) => {
                 return Err(format!("the TIFF stores {bits}-bit floating point samples"));
@@ -74,7 +72,31 @@ impl SampleType {
     }
 
     pub(crate) fn packed(self) -> bool {
-        self.bits < 8
+        !self.bits.is_multiple_of(8)
+    }
+
+    pub(crate) fn storage(self) -> usize {
+        usize::from(self.bits).div_ceil(8)
+    }
+
+    pub(crate) fn check_storage(self, container: VoxelFormat) -> Result<(), String> {
+        if self.packed() {
+            if self.bits > 16 {
+                return Err(format!(
+                    "the TIFF packs {} bits per sample beyond the sixteen bits a voxel unpacks",
+                    self.bits
+                ));
+            }
+            return Ok(());
+        }
+        if self.storage() != container.bytes() {
+            return Err(format!(
+                "the TIFF stores {} bits per sample in a container of {} bytes",
+                self.bits,
+                container.bytes()
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn maximum(self) -> f32 {

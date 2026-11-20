@@ -100,6 +100,9 @@ impl Page {
         let container = sample_type
             .container()
             .map_err(|detail| Error::unsupported(path, detail))?;
+        sample_type
+            .check_storage(container)
+            .map_err(|detail| Error::unsupported(path, detail))?;
         let compression = directory
             .integer(store, TAG_COMPRESSION, path)?
             .unwrap_or(1);
@@ -358,7 +361,7 @@ impl Page {
             if decoded.len() < expected {
                 return Err(Error::read(
                     path,
-                    "the decoded TIFF block is shorter than its geometry",
+                    shortage(block, self.sample_type.bits, decoded.len(), expected),
                 ));
             }
             return Ok(VoxelData::reinterpret(self.format, &decoded));
@@ -367,7 +370,7 @@ impl Page {
             if !block.padding {
                 return Err(Error::read(
                     path,
-                    "the decoded TIFF block is shorter than its geometry",
+                    shortage(block, self.sample_type.bits, decoded.len(), expected),
                 ));
             }
             let mut data = decoded;
@@ -379,20 +382,7 @@ impl Page {
             data
         };
         if self.sample_type.packed() {
-            let order = if matches!(self.compression, Compression::Fax { .. }) {
-                FillOrder::Msb
-            } else {
-                self.fill_order
-            };
-            let unpacked = unpack(
-                &data,
-                self.sample_type.bits,
-                samples,
-                block.width as usize,
-                block.rows as usize,
-                order,
-            )?;
-            return Ok(VoxelData::U8(unpacked));
+            return self.unpack(&data, block, samples, path);
         }
         if self.predictor == Predictor::Floating {
             reverse_predictor(
@@ -431,6 +421,72 @@ impl Page {
         } else {
             Ok(reinterpreted)
         }
+    }
+
+    fn unpack(
+        &self,
+        data: &[u8],
+        block: &Block,
+        samples: usize,
+        path: &Path,
+    ) -> Result<VoxelData, Error> {
+        let bits = self.sample_type.bits;
+        let width = block.width as usize;
+        let rows = block.rows as usize;
+        let slots = width * samples;
+        let row_bytes = (slots * bits as usize).div_ceil(8);
+        if data.len() < row_bytes * rows {
+            return Err(Error::read(
+                path,
+                shortage(block, bits, data.len(), row_bytes * rows),
+            ));
+        }
+        let mirrored = (self.fill_order == FillOrder::Lsb
+            && !matches!(self.compression, Compression::Fax { .. }))
+        .then(|| {
+            data.iter()
+                .map(|byte| byte.reverse_bits())
+                .collect::<Vec<u8>>()
+        });
+        let data = mirrored.as_deref().unwrap_or(data);
+        let mask = (1u32 << bits) - 1;
+        let mut values = Vec::with_capacity(slots * rows);
+        for row in 0..rows {
+            let line = &data[row * row_bytes..(row + 1) * row_bytes];
+            for slot in 0..slots {
+                let offset = slot * bits as usize;
+                let at = offset / 8;
+                let shift = offset % 8;
+                let window = u32::from(line[at]) << 16
+                    | u32::from(line.get(at + 1).copied().unwrap_or(0)) << 8
+                    | u32::from(line.get(at + 2).copied().unwrap_or(0));
+                values.push(((window >> (24 - shift - bits as usize)) & mask) as u16);
+            }
+        }
+        Ok(match self.format {
+            VoxelFormat::U8 => VoxelData::U8(values.into_iter().map(|value| value as u8).collect()),
+            VoxelFormat::U16 => VoxelData::U16(values),
+            VoxelFormat::I8 => VoxelData::I8(
+                values
+                    .into_iter()
+                    .map(|value| sign_extend(value, bits) as i8)
+                    .collect(),
+            ),
+            VoxelFormat::I16 => VoxelData::I16(
+                values
+                    .into_iter()
+                    .map(|value| sign_extend(value, bits))
+                    .collect(),
+            ),
+            _ => {
+                return Err(Error::unsupported(
+                    path,
+                    format!(
+                        "a TIFF packing {bits} bits per sample finds no eight or sixteen bit container"
+                    ),
+                ));
+            }
+        })
     }
 
     fn missing(&self, pixels: usize, samples: usize) -> VoxelData {
@@ -534,46 +590,15 @@ fn extract_values<T: Copy>(
     extracted
 }
 
-fn unpack(
-    data: &[u8],
-    bits: u16,
-    samples: usize,
-    width: usize,
-    rows: usize,
-    order: FillOrder,
-) -> Result<Vec<u8>, Error> {
-    let row_bits = width * samples * bits as usize;
-    let row_bytes = row_bits.div_ceil(8);
-    if data.len() < row_bytes * rows {
-        return Err(Error::read(
-            Path::new(""),
-            "the packed TIFF block is shorter than its geometry",
-        ));
-    }
-    let mirrored = (order == FillOrder::Lsb).then(|| {
-        data.iter()
-            .map(|byte| byte.reverse_bits())
-            .collect::<Vec<u8>>()
-    });
-    let data = mirrored.as_deref().unwrap_or(data);
-    let mut values = Vec::with_capacity(width * samples * rows);
-    let mask = (1u16 << bits) - 1;
-    for row in 0..rows {
-        let line = &data[row * row_bytes..(row + 1) * row_bytes];
-        for slot in 0..width * samples {
-            let offset = slot * bits as usize;
-            let byte = line[offset / 8];
-            let shift = offset % 8;
-            let value = if shift + bits as usize <= 8 {
-                u16::from(byte >> (8 - shift - bits as usize))
-            } else {
-                (u16::from(byte) << 8 | u16::from(line[offset / 8 + 1]))
-                    >> (16 - shift - bits as usize)
-            };
-            values.push((value & mask) as u8);
-        }
-    }
-    Ok(values)
+fn sign_extend(value: u16, bits: u16) -> i16 {
+    ((value << (16 - bits)) as i16) >> (16 - bits)
+}
+
+fn shortage(block: &Block, bits: u16, decoded: usize, expected: usize) -> String {
+    format!(
+        "a TIFF block of {}x{} pixels at {bits} bits per sample decodes to {decoded} bytes where its geometry needs {expected}",
+        block.width, block.rows
+    )
 }
 
 fn required(directory: &Directory, store: &Store, tag: u16, path: &Path) -> Result<u32, Error> {

@@ -81,13 +81,14 @@ fn position(positions: &[[f32; 3]], index: u32) -> Option<DVec3> {
 }
 
 fn moments(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Option<([f64; 3], [[f64; 3]; 3])> {
+    let base = anchor(positions)?;
     let mut volume = 0.0f64;
     let mut first = DVec3::ZERO;
     let mut second = [[0.0f64; 3]; 3];
     for triangle in triangles {
-        let a = position(positions, triangle[0])?;
-        let b = position(positions, triangle[1])?;
-        let c = position(positions, triangle[2])?;
+        let a = position(positions, triangle[0])? - base;
+        let b = position(positions, triangle[1])? - base;
+        let c = position(positions, triangle[2])? - base;
         let signed = a.dot(b.cross(c)) / 6.0;
         if !signed.is_finite() {
             return None;
@@ -123,6 +124,15 @@ fn moments(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Option<([f64; 3], 
         }
     }
     Some((centroid.to_array(), moment))
+}
+
+fn anchor(positions: &[[f32; 3]]) -> Option<DVec3> {
+    let mut total = DVec3::ZERO;
+    for index in 0..positions.len() {
+        total += position(positions, index as u32)?;
+    }
+    let anchor = total / positions.len() as f64;
+    anchor.is_finite().then_some(anchor)
 }
 
 fn eigenvalues(matrix: [[f64; 3]; 3]) -> [f64; 3] {

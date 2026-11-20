@@ -433,6 +433,8 @@ impl Layouts {
                 None,
                 None,
                 Some(&oit_write),
+                None,
+                Some(&depth),
             ],
             immediate_size: 0,
         });

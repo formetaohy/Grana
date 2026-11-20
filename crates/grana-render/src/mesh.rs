@@ -57,6 +57,8 @@ const FORWARD_SHADER: &str = concat!(
     "\n",
     include_str!("shader/oit.wgsl"),
     "\n",
+    include_str!("shader/opaque.wgsl"),
+    "\n",
     include_str!("shader/mesh_common.wgsl"),
     "\n",
     include_str!("shader/mesh_shade.wgsl"),
@@ -193,7 +195,7 @@ impl MeshPasses {
                 Some(&layouts.shadow),
                 Some(&layouts.oit_write),
                 None,
-                None,
+                Some(&layouts.depth),
                 Some(&layouts.ao_read),
             ],
             immediate_size: 0,
@@ -354,7 +356,7 @@ impl MeshPasses {
                 buffers: &[Some(vertex_layout())],
             },
             primitive: PrimitiveState::default(),
-            depth_stencil: Some(depth_state(false, CompareFunction::Less)),
+            depth_stencil: None,
             multisample: MultisampleState::default(),
             fragment: Some(FragmentState {
                 module: &forward_module,
@@ -650,6 +652,7 @@ impl MeshPasses {
         pass: &mut RenderPass<'a>,
         shadow: &'a BindGroup,
         oit: &'a BindGroup,
+        depth: &'a BindGroup,
         ao: &'a BindGroup,
     ) {
         if self.active.is_empty() {
@@ -659,6 +662,7 @@ impl MeshPasses {
         pass.set_bind_group(0, &self.uniform_group, &[]);
         pass.set_bind_group(3, shadow, &[]);
         pass.set_bind_group(4, oit, &[]);
+        pass.set_bind_group(6, depth, &[]);
         pass.set_bind_group(7, ao, &[]);
         for (geometry, rows) in &self.active {
             self.shade(pass, geometry, rows, LAYER);

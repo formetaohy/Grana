@@ -23,7 +23,7 @@ fn fs_oit(input: VertexOutput) -> Residual {
     let size = vec2<i32>(mesh.viewport.zw);
     let pixel = vec2<i32>(input.clip_position.xy);
     let index = oit_index(origin, size, pixel);
-    if (index < 0) {
+    if (index < 0 || behind_opaque(pixel, input.clip_position.z)) {
         return output;
     }
     let sample = shade(

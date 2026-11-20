@@ -103,7 +103,9 @@ impl Layout {
                     (index % across) as u32 * tile_width,
                     (index / across) as u32 * tile_length,
                 );
-                (origin, *tile_width, *tile_length, true)
+                let padding = width.saturating_sub(origin.0) < *tile_width
+                    || height.saturating_sub(origin.1) < *tile_length;
+                (origin, *tile_width, *tile_length, padding)
             }
         };
         let flat = index + sample as usize * self.per_plane();

@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_geometry::{Bounds, Mesh, MeshVertex, ends, push_graph};
+use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape, ends, push_graph};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentSweep, FilamentTopology, IntensityTable,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
@@ -573,7 +573,7 @@ fn statistics_of(surface: &ImportedSurface, voxel: f32) -> Result<SurfaceStatist
         area,
         centroid.to_array(),
         Bounds::new(low, high),
-        None,
+        SurfaceShape::of(vertices, triangles),
     ))
 }
 

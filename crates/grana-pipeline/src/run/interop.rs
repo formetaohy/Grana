@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_interop::{Kind, Objects, Shape};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
@@ -180,7 +180,7 @@ fn surfaces(
             *area,
             detections[*slot].position(),
             bounds,
-            None,
+            SurfaceShape::of(mesh.positions(), mesh.indices().as_chunks::<3>().0),
         ));
     }
     Ok((Mesh::new(vertices, indices), statistics))

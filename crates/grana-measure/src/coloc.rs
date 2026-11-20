@@ -985,8 +985,8 @@ fn otsu(counts: &[u64]) -> f32 {
     }
     let mut weight = 0.0;
     let mut sum = 0.0;
-    let mut best = 0.0;
-    let mut split = 0;
+    let mut best = -1.0;
+    let mut split = None;
     for (index, count) in counts.iter().enumerate() {
         weight += *count as f64;
         sum += (index as f64 + 0.5) * (*count as f64);
@@ -995,12 +995,12 @@ fn otsu(counts: &[u64]) -> f32 {
             continue;
         }
         let between = weight * remaining * (sum / weight - (sum_all - sum) / remaining).powi(2);
-        if between >= best {
+        if between > best {
             best = between;
-            split = index;
+            split = Some(index);
         }
     }
-    split as f32 / counts.len() as f32
+    split.map_or(0.5, |split| (split as f32 + 1.0) / counts.len() as f32)
 }
 
 fn option(value: Option<f64>) -> String {

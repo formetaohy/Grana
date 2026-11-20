@@ -2172,8 +2172,27 @@ fn reads_an_electron_microscopy_stack_through_the_shared_registry() {
     assert_eq!(values, expected.to_vec(), "the plane values are wrong");
 }
 
-fn packed_tiff(path: &std::path::Path, fill_order: u16) {
-    let entries = 10u32;
+struct SamplePage<'a> {
+    width: u32,
+    height: u32,
+    bits: u16,
+    format: u16,
+    fill_order: u16,
+    tile: Option<(u32, u32)>,
+    payload: &'a [u8],
+}
+
+fn sample_tiff(path: &std::path::Path, page: SamplePage<'_>) {
+    let SamplePage {
+        width,
+        height,
+        bits,
+        format,
+        fill_order,
+        tile,
+        payload,
+    } = page;
+    let entries = if tile.is_some() { 12u32 } else { 11 };
     let record = 2 + entries * 12 + 4;
     let header = 8u32;
     let data = header + record;
@@ -2188,18 +2207,29 @@ fn packed_tiff(path: &std::path::Path, fill_order: u16) {
         bytes.extend_from_slice(&count.to_le_bytes());
         bytes.extend_from_slice(&value.to_le_bytes());
     };
-    entry(256, 4, 1, 8);
-    entry(257, 4, 1, 1);
-    entry(258, 3, 1, 1);
+    entry(256, 4, 1, width);
+    entry(257, 4, 1, height);
+    entry(258, 3, 1, u32::from(bits));
     entry(259, 3, 1, 1);
     entry(262, 3, 1, 1);
-    entry(266, 3, 1, fill_order as u32);
-    entry(273, 4, 1, data);
+    entry(266, 3, 1, u32::from(fill_order));
     entry(277, 3, 1, 1);
-    entry(278, 4, 1, 1);
-    entry(279, 4, 1, 1);
+    match tile {
+        Some((tile_width, tile_length)) => {
+            entry(322, 4, 1, tile_width);
+            entry(323, 4, 1, tile_length);
+            entry(324, 4, 1, data);
+            entry(325, 4, 1, payload.len() as u32);
+        }
+        None => {
+            entry(273, 4, 1, data);
+            entry(278, 4, 1, height);
+            entry(279, 4, 1, payload.len() as u32);
+        }
+    }
+    entry(339, 3, 1, u32::from(format));
     bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.push(0x01);
+    bytes.extend_from_slice(payload);
     std::fs::write(path, &bytes).expect("the packed tiff writes");
 }
 
@@ -2208,7 +2238,18 @@ fn reads_packed_samples_in_the_declared_bit_order() {
     let temp = Temp::new("suite-tiff-fill-order");
     let row = |name: &str, fill_order: u16| -> Vec<u8> {
         let path = temp.path().join(name);
-        packed_tiff(&path, fill_order);
+        sample_tiff(
+            &path,
+            SamplePage {
+                width: 8,
+                height: 1,
+                bits: 1,
+                format: 1,
+                fill_order,
+                tile: None,
+                payload: &[0x01],
+            },
+        );
         let image = grana_tiff::Image::open(&path, 0).expect("the packed page opens");
         let data = image
             .read_region(0, 0, 0, 0..8, 0..1, 0..1)
@@ -2227,5 +2268,78 @@ fn reads_packed_samples_in_the_declared_bit_order() {
         row("lsb.tif", 2),
         vec![1, 0, 0, 0, 0, 0, 0, 0],
         "a least significant bit first page starts at the leftmost pixel"
+    );
+    let path = temp.path().join("half.tif");
+    sample_tiff(
+        &path,
+        SamplePage {
+            width: 8,
+            height: 1,
+            bits: 16,
+            format: 3,
+            fill_order: 1,
+            tile: Some((8, 1)),
+            payload: &[0u8; 16],
+        },
+    );
+    assert!(
+        matches!(
+            grana_tiff::Image::open(&path, 0),
+            Err(grana_tiff::Error::Unsupported { .. })
+        ),
+        "a sixteen bit floating point page is rejected instead of read as garbage"
+    );
+    let path = temp.path().join("packed24.tif");
+    sample_tiff(
+        &path,
+        SamplePage {
+            width: 4,
+            height: 1,
+            bits: 24,
+            format: 1,
+            fill_order: 1,
+            tile: Some((4, 1)),
+            payload: &(1..=12u8).collect::<Vec<u8>>(),
+        },
+    );
+    assert!(
+        matches!(
+            grana_tiff::Image::open(&path, 0),
+            Err(grana_tiff::Error::Unsupported { .. })
+        ),
+        "a twenty four bit page is rejected instead of read into a wider container"
+    );
+    let twelve = [0x0ABu16, 0x123, 0x456, 0x789, 0xABC, 0xDEF, 0x111, 0x222];
+    let payload = twelve
+        .chunks(2)
+        .flat_map(|pair| {
+            let window = u32::from(pair[0]) << 12 | u32::from(pair[1]);
+            [(window >> 16) as u8, (window >> 8) as u8, window as u8]
+        })
+        .collect::<Vec<u8>>();
+    let path = temp.path().join("twelve.tif");
+    sample_tiff(
+        &path,
+        SamplePage {
+            width: 4,
+            height: 2,
+            bits: 12,
+            format: 1,
+            fill_order: 1,
+            tile: Some((4, 2)),
+            payload: &payload,
+        },
+    );
+    let image = grana_tiff::Image::open(&path, 0).expect("the twelve bit page opens");
+    let data = image
+        .read_region(0, 0, 0, 0..4, 0..2, 0..1)
+        .expect("the twelve bit tile reads");
+    let VoxelData::U16(values) = data else {
+        panic!("a twelve bit page unpacks to a sixteen bit container");
+    };
+    assert_eq!(
+        values,
+        twelve.to_vec(),
+        "a twelve bit tile keeps every value it stores"
     );
 }

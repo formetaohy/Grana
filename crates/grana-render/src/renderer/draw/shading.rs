@@ -46,6 +46,7 @@ pub(super) fn encode(stage: Stage<'_>) {
     let ao = target.ao.as_ref().map_or(dummy_ao, crate::ao::Ao::group);
     let oit = target.oit.as_ref().filter(|_| features.translucent);
     let oit_group = oit.map_or(dummy_oit.read_group(), Oit::read_group);
+    let opaque = target.scene.depth_group();
     if features.surfaces
         && !features.slice
         && let Some(meshes) = meshes
@@ -66,14 +67,7 @@ pub(super) fn encode(stage: Stage<'_>) {
                 Some(cleared(oit.residual_color())),
                 Some(cleared(oit.residual_moment())),
             ],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: target.scene.depth(),
-                depth_ops: Some(Operations {
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
+            depth_stencil_attachment: None,
             ..Default::default()
         });
         crate::target::viewport(&mut pass, region);
@@ -82,11 +76,12 @@ pub(super) fn encode(stage: Stage<'_>) {
                 &mut pass,
                 shadow.expect("the shadow is ready"),
                 oit.write_group(),
+                opaque,
                 ao,
             );
         }
         if let Some(splats) = splats {
-            splats.draw_oit(&mut pass, table.group(), oit.write_group());
+            splats.draw_oit(&mut pass, table.group(), oit.write_group(), opaque);
         }
     }
     if features.volume

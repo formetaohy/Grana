@@ -21,6 +21,7 @@ const SPLAT_MINIMUM_SIGMA: f32 = 0.5;
 const SPLAT_ALPHA_FLOOR: f32 = 1.0e-3;
 const SPLAT_PICK_ALPHA: f32 = 0.08;
 const SPLAT_FADE: f32 = 0.25;
+const SPLAT_RADIUS_PER_SIGMA: f32 = 1.1774100225154747;
 
 struct SplatVertex {
     @builtin(position) clip_position: vec4<f32>,
@@ -28,10 +29,9 @@ struct SplatVertex {
     @location(1) @interpolate(flat) sigma: vec3<f32>,
     @location(2) @interpolate(flat) color: vec3<f32>,
     @location(3) @interpolate(flat) alpha: f32,
-    @location(4) @interpolate(flat) depth: f32,
-    @location(5) @interpolate(flat) index: u32,
-    @location(6) @interpolate(flat) pixel: f32,
-    @location(7) world: vec3<f32>,
+    @location(4) @interpolate(flat) index: u32,
+    @location(5) @interpolate(flat) pixel: f32,
+    @location(6) world: vec3<f32>,
 }
 
 struct PickFragment {
@@ -111,6 +111,12 @@ fn splat_alpha(input: SplatVertex, origin: vec3<f32>, direction: vec3<f32>) -> f
     return 1.0 - exp(-tau * exp(-0.5 * squared));
 }
 
+fn splat_surface(sigma: vec3<f32>) -> f32 {
+    let sight = frame.forward.xyz;
+    let inverse = 1.0 / (sigma * sigma);
+    return SPLAT_RADIUS_PER_SIGMA / sqrt(max(dot(sight * sight, inverse), 1.0e-12));
+}
+
 fn splat_slice(input: SplatVertex) -> Shaded {
     let ray = splat_ray(input.world);
     let normal = frame.slice.xyz;
@@ -167,13 +173,21 @@ fn vs_main(@builtin(vertex_index) index: u32, @builtin(instance_index) instance:
     );
     let world = center + frame.right.xyz * local.x * extent.x + frame.up.xyz * local.y * extent.y;
     let clip = frame.view_projection * vec4<f32>(world, 1.0);
+    let scaled = max(data.sigma.xyz, vec3<f32>(SPLAT_MINIMUM_SIGMA * world_per_pixel));
+    let surface = frame.view_projection
+        * vec4<f32>(world - frame.forward.xyz * splat_surface(scaled), 1.0);
+    let depth = surface.z * (clip.w / surface.w);
+    let shifted = surface.w > 0.0 && !slice_active();
     var output: SplatVertex;
-    output.clip_position = vec4<f32>(clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w), clip.zw);
+    output.clip_position = vec4<f32>(
+        clip.xy + frame.jitter.xy * clip.w + lens_shift(clip.w),
+        select(clip.z, depth, shifted),
+        clip.w,
+    );
     output.center = center;
     output.sigma = sigma;
     output.color = look.color.rgb;
     output.alpha = look.color.a;
-    output.depth = clip_center.z / clip_center.w;
     output.index = slot;
     output.pixel = world_per_pixel;
     output.world = world;
@@ -201,14 +215,15 @@ fn fs_oit(input: SplatVertex) -> Residual {
     let size = vec2<i32>(frame.viewport.zw);
     let pixel = vec2<i32>(input.clip_position.xy);
     let index = oit_index(origin, size, pixel);
-    if (index < 0) {
+    if (index < 0 || behind_opaque(pixel, input.clip_position.z)) {
         return output;
     }
+    let depth = input.clip_position.z;
     let premultiplied = vec4<f32>(input.color * alpha, alpha);
-    if (oit_insert(u32(index), frame.oit.y, frame.oit.z, input.depth, premultiplied)) {
+    if (oit_insert(u32(index), frame.oit.y, frame.oit.z, depth, premultiplied)) {
         return output;
     }
-    return oit_residual(frame.oit.z, alpha, input.color, input.depth);
+    return oit_residual(frame.oit.z, alpha, input.color, depth);
 }
 
 @fragment
@@ -219,7 +234,7 @@ fn fs_pick(input: SplatVertex) -> PickFragment {
     }
     var output: PickFragment;
     output.id = vec2<u32>(2u, slot.base.x + input.index + 1u);
-    output.depth = input.depth;
+    output.depth = input.clip_position.z;
     return output;
 }
 
