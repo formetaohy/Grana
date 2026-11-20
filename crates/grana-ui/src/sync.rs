@@ -7,6 +7,30 @@ use crate::ui::Ui;
 use crate::widget::FrameAnimation;
 
 impl<A: Clone> Ui<A> {
+    pub(crate) fn sync_hover(&mut self) {
+        let mut chain = HashSet::new();
+        let mut cursor = self.hover;
+        while let Some(id) = cursor {
+            let Some(node) = self.tree.nodes.get(id) else {
+                break;
+            };
+            chain.insert(id);
+            cursor = node.parent;
+        }
+        let mut fired = Vec::new();
+        for (id, node) in self.tree.nodes.iter_mut() {
+            let within = chain.contains(&id);
+            if within == node.runtime.within_hover {
+                continue;
+            }
+            node.runtime.within_hover = within;
+            if let Some(handler) = &node.hover {
+                fired.push(handler(within));
+            }
+        }
+        self.actions.extend(fired);
+    }
+
     pub(crate) fn animate_nodes(&mut self) {
         let elapsed = self.elapsed;
         let mut hovered_chain = Vec::new();

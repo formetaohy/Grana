@@ -124,6 +124,10 @@ pub enum Message {
         axis: usize,
         text: String,
     },
+    CalibrationHover {
+        axis: usize,
+        inside: bool,
+    },
     BeginCalibration,
     ApplyCalibration,
     DismissCalibration,

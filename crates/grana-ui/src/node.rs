@@ -32,6 +32,7 @@ pub(crate) struct Runtime {
     pub seeded: bool,
     pub active: bool,
     pub resnap: bool,
+    pub within_hover: bool,
 }
 
 impl Runtime {
@@ -86,6 +87,7 @@ impl Runtime {
             seeded,
             active: false,
             resnap: false,
+            within_hover: false,
         }
     }
 }
@@ -98,6 +100,7 @@ pub(crate) struct Node<A> {
     pub layout: Layout,
     pub content: Content,
     pub interaction: Interaction<A>,
+    pub hover: Option<Box<dyn Fn(bool) -> A>>,
     pub background: Option<Surface>,
     pub hover_surface: Option<Surface>,
     pub layer: Layer,
@@ -159,6 +162,7 @@ impl<A> Node<A> {
             layout,
             content,
             interaction,
+            hover: None,
             background: None,
             hover_surface: None,
             layer: Layer::Chrome,

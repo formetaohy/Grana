@@ -282,6 +282,7 @@ pub struct Element<'a, A> {
     pub(crate) layout: Layout,
     pub(crate) content: Content,
     pub(crate) interaction: Interaction<A>,
+    pub(crate) hover: Option<Box<dyn Fn(bool) -> A>>,
     pub(crate) canvas: Option<Canvas<'a>>,
     pub(crate) children: Vec<Element<'a, A>>,
     pub(crate) background: Option<Surface>,
@@ -304,6 +305,7 @@ impl<'a, A> Element<'a, A> {
             layout,
             content: Content::Empty,
             interaction: Interaction::None,
+            hover: None,
             canvas: None,
             children: Vec::new(),
             background: None,
@@ -591,6 +593,11 @@ impl<'a, A> Element<'a, A> {
         self
     }
 
+    pub fn on_hover(mut self, handler: impl Fn(bool) -> A + 'static) -> Self {
+        self.hover = Some(Box::new(handler));
+        self
+    }
+
     pub fn on_pointer(mut self, handler: impl Fn(Pointer) -> Option<A> + 'static) -> Self {
         self.interaction = Interaction::Pointer {
             handler: Box::new(handler),
@@ -633,6 +640,7 @@ impl<'a, A> Element<'a, A> {
         );
         node.background = self.background;
         node.hover_surface = self.hover_surface;
+        node.hover = self.hover;
         node.layer = self.layer.unwrap_or(layer);
         node.layer_explicit = self.layer.is_some();
         node.position = self.position;
@@ -656,6 +664,7 @@ impl<'a, A> Element<'a, A> {
             layout,
             content,
             interaction,
+            hover,
             canvas: _,
             children: _,
             background,
@@ -697,6 +706,7 @@ impl<'a, A> Element<'a, A> {
             dirty.hits = true;
         }
         node.interaction = interaction;
+        node.hover = hover;
         if node.background != background {
             node.background = background;
             dirty = dirty.union(Dirty::INTERACTION);

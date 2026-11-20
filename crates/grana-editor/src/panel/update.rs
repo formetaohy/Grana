@@ -406,6 +406,15 @@ pub fn apply(
                     sheet.fields[axis] = text;
                 }
             }
+            Message::CalibrationHover { axis, inside } => {
+                if let Some(sheet) = workspace.calibration.as_mut() {
+                    if inside {
+                        sheet.hover = Some(axis);
+                    } else if sheet.hover == Some(axis) {
+                        sheet.hover = None;
+                    }
+                }
+            }
             Message::ApplyCalibration => {
                 let Some(sheet) = workspace.calibration.as_mut() else {
                     continue;

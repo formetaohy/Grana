@@ -342,12 +342,21 @@ pub(crate) fn calibration<'a>(
         sheet.name, sheet.extent[0], sheet.extent[1], sheet.extent[2]
     );
     let diagram_spacing = [0, 1, 2].map(|axis| values[axis].unwrap_or(sheet.spacing[axis]));
+    let hover = sheet.hover;
     let font = theme.font(Level::Caption);
     let diagram = grana_ui::canvas(Length::Fixed(120.0), 120.0)
         .view(
-            (diagram_spacing.map(f32::to_bits), known),
+            (diagram_spacing.map(f32::to_bits), known, hover),
             move |_, painter, info| {
-                paint_voxel_cell(painter, info.rect, diagram_spacing, known, palette, font);
+                paint_voxel_cell(
+                    painter,
+                    info.rect,
+                    diagram_spacing,
+                    known,
+                    hover,
+                    palette,
+                    font,
+                );
             },
         )
         .named("calibration.cell");
@@ -355,6 +364,7 @@ pub(crate) fn calibration<'a>(
     let mut fields = Vec::with_capacity(3);
     for (axis, text) in sheet.fields.iter().enumerate() {
         let name = format!("calibration.{}", AXES[axis].to_ascii_lowercase());
+        let active = hover == Some(axis);
         let color = if known[axis] {
             palette.on_surface
         } else {
@@ -371,15 +381,18 @@ pub(crate) fn calibration<'a>(
                 text: text.to_string(),
             });
         let known_axis = known[axis];
+        let dim = hover.is_some() && !active;
         let ruler = grana_ui::canvas(Length::Fixed(field_width), 8.0).view(
-            known_axis,
+            (known_axis, active, dim),
             move |_, painter, info| {
-                paint_provenance(painter, info.rect, known_axis, palette);
+                paint_provenance(painter, info.rect, known_axis, active, dim, palette);
             },
         );
         let label_style = TextStyle::new(
             font,
-            if known[axis] {
+            if active {
+                palette.on_surface
+            } else if known[axis] {
                 palette.on_surface_variant
             } else {
                 palette.warning
@@ -389,9 +402,11 @@ pub(crate) fn calibration<'a>(
             grana_ui::column()
                 .width(Length::Fixed(field_width))
                 .gap(4.0)
+                .hit_target()
+                .on_hover(move |inside| Message::CalibrationHover { axis, inside })
                 .children([
                     grana_ui::canvas(Length::Fill, 16.0).view(
-                        (axis, known[axis]),
+                        (axis, known[axis], active),
                         move |_, painter, info| {
                             painter.text_in(info.rect, AXES[axis], label_style, Align::Center);
                         },
@@ -446,6 +461,7 @@ fn paint_voxel_cell(
     rect: Rect,
     spacing: [f32; 3],
     known: [bool; 3],
+    hover: Option<usize>,
     palette: grana_ui::Palette,
     font: grana_ui::TypeStyle,
 ) {
@@ -495,27 +511,44 @@ fn paint_voxel_cell(
         let mut end = [false; 3];
         end[axis] = true;
         let tip = corner(coordinate(end[0]), coordinate(end[1]), coordinate(end[2]));
+        let active = hover == Some(axis);
         let color = if known[axis] {
             palette.primary
         } else {
             palette.warning
         };
+        let color = if hover.is_some() && !active {
+            color.with_alpha(0.4)
+        } else {
+            color
+        };
+        if active {
+            painter.segment(origin, tip, 10.0, color.with_alpha(0.22));
+        }
+        let width = if active { 3.2 } else { 2.0 };
         if known[axis] {
-            painter.segment(origin, tip, 2.0, color);
+            painter.segment(origin, tip, width, color);
             let direction = (tip - origin).normalize_or_zero();
-            let perpendicular = Vec2::new(-direction.y, direction.x) * 4.0;
+            let perpendicular =
+                Vec2::new(-direction.y, direction.x) * if active { 5.0 } else { 4.0 };
             for point in [origin, tip] {
-                painter.segment(point - perpendicular, point + perpendicular, 1.5, color);
+                painter.segment(
+                    point - perpendicular,
+                    point + perpendicular,
+                    width * 0.75,
+                    color,
+                );
             }
         } else {
-            dashed(painter, origin, tip, 2.0, color);
+            dashed(painter, origin, tip, width, color);
         }
         let anchor = match axis {
             0 => Vec2::new(tip.x - 4.0, tip.y + 5.0),
             1 => Vec2::new(tip.x - 12.0, tip.y - 6.0),
             _ => Vec2::new(tip.x + 5.0, tip.y - 2.0),
         };
-        painter.text_at(anchor, ["X", "Y", "Z"][axis], TextStyle::new(font, color));
+        let label = if active { palette.on_surface } else { color };
+        painter.text_at(anchor, ["X", "Y", "Z"][axis], TextStyle::new(font, label));
     }
 }
 
@@ -523,33 +556,39 @@ fn paint_provenance(
     painter: &mut grana_ui::Painter,
     rect: Rect,
     known: bool,
+    active: bool,
+    dim: bool,
     palette: grana_ui::Palette,
 ) {
     let rect = rect.shrink2(Vec2::new(4.0, 0.0));
     let y = rect.center().y;
     let from = Vec2::new(rect.min.x, y);
     let to = Vec2::new(rect.max.x, y);
+    let alpha = if dim { 0.35 } else { 1.0 };
+    let width = if active { 2.2 } else { 1.5 };
     if !known {
-        dashed(painter, from, to, 1.5, palette.warning);
+        dashed(painter, from, to, width, palette.warning.with_alpha(alpha));
         return;
     }
-    let color = palette.primary;
-    painter.segment(from, to, 1.5, color);
+    let color = palette.primary.with_alpha(alpha);
+    painter.segment(from, to, width, color);
+    let cap = if active { 5.0 } else { 4.0 };
     for point in [from, to] {
         painter.segment(
-            Vec2::new(point.x, y - 4.0),
-            Vec2::new(point.x, y + 4.0),
-            1.5,
+            Vec2::new(point.x, y - cap),
+            Vec2::new(point.x, y + cap),
+            width,
             color,
         );
     }
+    let tick = if active { 2.6 } else { 2.0 };
     for step in 1..5 {
         let x = from.x + (to.x - from.x) * step as f32 / 5.0;
         painter.segment(
-            Vec2::new(x, y - 2.0),
-            Vec2::new(x, y + 2.0),
-            1.0,
-            color.with_alpha(0.7),
+            Vec2::new(x, y - tick),
+            Vec2::new(x, y + tick),
+            if active { 1.4 } else { 1.0 },
+            color.with_alpha(alpha * if active { 0.9 } else { 0.7 }),
         );
     }
 }

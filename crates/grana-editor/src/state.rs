@@ -220,6 +220,7 @@ pub struct CalibrationSheet {
     pub spacing: [f32; 3],
     pub reason: Calibration,
     pub fields: [String; 3],
+    pub hover: Option<usize>,
 }
 
 impl CalibrationSheet {
@@ -233,6 +234,7 @@ impl CalibrationSheet {
             spacing: [spacing.x(), spacing.y(), spacing.z()],
             reason: scene.dataset.pyramid().calibration(),
             fields: [spacing.x(), spacing.y(), spacing.z()].map(voxel_text),
+            hover: None,
         }
     }
 

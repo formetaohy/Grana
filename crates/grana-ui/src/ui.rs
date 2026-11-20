@@ -346,6 +346,7 @@ impl<A: Clone> Ui<A> {
             self.tree.focus = false;
         }
         self.dispatch();
+        self.sync_hover();
         self.animate_nodes();
         std::mem::take(&mut self.actions)
     }
