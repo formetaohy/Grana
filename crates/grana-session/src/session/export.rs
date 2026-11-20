@@ -103,17 +103,22 @@ impl Session {
             ));
             return;
         }
+        self.ask(
+            Inquiry::folder("Export the provenance crate into a folder"),
+            |session, path| {
+                if let Some(root) = path {
+                    session.write_provenance(root);
+                }
+            },
+        );
+    }
+
+    fn write_provenance(&mut self, root: PathBuf) {
         if self.protocol.is_none() {
             self.capture_protocol();
         }
         let Some(protocol) = self.protocol.clone() else {
             self.message = Some(Message::error("the analysis carries no protocol"));
-            return;
-        };
-        let Some(root) = rfd::FileDialog::new()
-            .set_title("Export the provenance crate into a folder")
-            .pick_folder()
-        else {
             return;
         };
         let Some(scene) = self.scene.as_ref() else {
@@ -166,21 +171,30 @@ impl Session {
             return;
         };
         let pair = result.pair();
-        let csv = result.series().csv(result.thresholds());
         let file_name = format!(
             "{}-{}-{}-colocalization.csv",
             crate::slug(scene.dataset.name()),
             crate::slug(scene.dataset.channels()[pair.a()].name()),
             crate::slug(scene.dataset.channels()[pair.b()].name())
         );
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export colocalization statistics")
-            .set_file_name(file_name)
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save("Export colocalization statistics", file_name).filter("CSV", &["csv"]),
+            |session, path| {
+                if let Some(path) = path {
+                    session.write_coloc(path);
+                }
+            },
+        );
+    }
+
+    fn write_coloc(&mut self, path: PathBuf) {
+        let Some(scene) = self.scene.as_ref() else {
             return;
         };
+        let Some(result) = scene.coloc.result() else {
+            return;
+        };
+        let csv = result.series().csv(result.thresholds());
         match grana_file::write(&path, csv.as_bytes()) {
             Ok(()) => self.message = None,
             Err(error) => {
@@ -230,17 +244,35 @@ impl Session {
             return;
         }
         let title = format!("Export {name} statistics");
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(file_name)
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save(title, file_name).filter("CSV", &["csv"]),
+            |session, path| session.write_measure(path),
+        );
+    }
+
+    fn write_measure(&mut self, path: Option<PathBuf>) {
+        let Some(path) = path else {
             return;
         };
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(set) = self.measure.set() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let name = object.name().to_string();
+        if self.tasks.pending_csv() {
+            self.message = Some(Message::info(
+                "the statistics are being measured before they are exported",
+            ));
+            return;
+        }
         self.message = None;
         if self.measure.export(scene).is_some() {
-            self.start_csv_export(path, name.to_string());
+            self.start_csv_export(path, name);
             return;
         }
         let Some(request) =
@@ -251,7 +283,7 @@ impl Session {
             ));
             return;
         };
-        self.tasks.defer_csv(path, request.key(), name.to_string());
+        self.tasks.defer_csv(path, request.key(), name);
     }
 
     fn export_ripley(&mut self) {
@@ -267,26 +299,32 @@ impl Session {
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let Some(grana_measure::Plot::Ripley(ripley)) = self.measure.plot() else {
+        let Some(grana_measure::Plot::Ripley(_)) = self.measure.plot() else {
             self.message = Some(Message::info(
                 "the Ripley curve is still being computed before it is exported",
             ));
             return;
         };
-        let text = ripley.table();
         let file_name = format!(
             "{}-{}-ripley.csv",
             crate::slug(scene.dataset.name()),
             crate::slug(object.key().as_str())
         );
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export the Ripley curve")
-            .set_file_name(file_name)
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save("Export the Ripley curve", file_name).filter("CSV", &["csv"]),
+            |session, path| {
+                if let Some(path) = path {
+                    session.write_ripley(path);
+                }
+            },
+        );
+    }
+
+    fn write_ripley(&mut self, path: PathBuf) {
+        let Some(grana_measure::Plot::Ripley(ripley)) = self.measure.plot() else {
             return;
         };
+        let text = ripley.table();
         self.message = match grana_file::write(&path, text.as_bytes()) {
             Ok(()) => None,
             Err(error) => Some(Message::error(format!(
@@ -370,6 +408,44 @@ impl Session {
             ));
             return;
         }
+        let file_name =
+            grana_measure::PairExport::file_name(set.key().as_str(), related.key().as_str(), shift);
+        let title = format!("Export {} pairs", set.name());
+        self.ask(
+            Inquiry::save(title, file_name).filter("CSV", &["csv"]),
+            move |session, path| {
+                if let Some(path) = path {
+                    session.write_relation(source, target, shift, path);
+                }
+            },
+        );
+    }
+
+    fn write_relation(
+        &mut self,
+        source: ObjectSetId,
+        target: ObjectSetId,
+        shift: i32,
+        path: PathBuf,
+    ) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(set) = scene.objects.get(source) else {
+            return;
+        };
+        let Some(related) = scene.objects.get(target) else {
+            return;
+        };
+        let Some(relation) = set.relation(target, shift) else {
+            return;
+        };
+        if relation.computed() == 0 {
+            self.message = Some(Message::info(
+                "measure the relation before exporting its pairs",
+            ));
+            return;
+        }
         let mut export = grana_measure::PairExport::new(
             scene.dataset.frame_interval(),
             set.key().as_str(),
@@ -378,17 +454,6 @@ impl Session {
         for (time, frame) in relation.frames() {
             export.push(time, frame);
         }
-        let file_name =
-            grana_measure::PairExport::file_name(set.key().as_str(), related.key().as_str(), shift);
-        let title = format!("Export {} pairs", set.name());
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(file_name)
-            .add_filter("CSV", &["csv"])
-            .save_file()
-        else {
-            return;
-        };
         match grana_file::write(&path, export.text().as_bytes()) {
             Ok(()) => self.message = None,
             Err(error) => {
@@ -404,25 +469,50 @@ impl Session {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
-        let Some((target, written)) = mesh(scene, set, format) else {
+        let Some((target, title)) = mesh_target(scene, set, format) else {
             return;
         };
-        self.message = match written {
-            Ok(()) => Some(Message::info(format!(
+        match format {
+            MeshFormat::Stl => self.ask(Inquiry::folder(title), move |session, path| {
+                if let Some(folder) = path {
+                    session.write_mesh(set, format, folder.join(target));
+                }
+            }),
+            format => self.ask(
+                Inquiry::save(title, target).filter(format.label(), &[format.extension()]),
+                move |session, path| {
+                    if let Some(path) = path {
+                        session.write_mesh(set, format, path);
+                    }
+                },
+            ),
+        }
+    }
+
+    fn write_mesh(&mut self, set: ObjectSetId, format: MeshFormat, target: PathBuf) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let Some(object) = scene.objects.get(set) else {
+            return;
+        };
+        let name = object.name().to_string();
+        let time = scene.time();
+        self.message = match grana_pipeline::mesh::write(scene, set, time, format, &target) {
+            Ok(grana_pipeline::mesh::Export::Written) => Some(Message::info(format!(
                 "wrote the {} mesh to {}",
                 format.label(),
                 target.display()
+            ))),
+            Ok(grana_pipeline::mesh::Export::Empty) => Some(Message::error(format!(
+                "{name} holds no mesh at frame {time}"
             ))),
             Err(detail) => Some(Message::error(detail)),
         };
     }
 }
 
-fn mesh(
-    scene: &Scene,
-    set: ObjectSetId,
-    format: MeshFormat,
-) -> Option<(PathBuf, Result<(), String>)> {
+fn mesh_target(scene: &Scene, set: ObjectSetId, format: MeshFormat) -> Option<(String, String)> {
     let object = scene.objects.get(set)?;
     let name = object.name().to_string();
     let key = object.key().as_str().to_string();
@@ -433,23 +523,11 @@ fn mesh(
         crate::slug(&key)
     );
     let title = format!("Export {name} mesh");
-    let target = match format {
-        MeshFormat::Stl => rfd::FileDialog::new()
-            .set_title(format!("{title} into a folder named {stem}"))
-            .pick_folder()
-            .map(|folder| folder.join(&stem))?,
-        format => rfd::FileDialog::new()
-            .set_title(&title)
-            .set_file_name(format!("{stem}.{}", format.extension()))
-            .add_filter(format.label(), &[format.extension()])
-            .save_file()?,
-    };
-    let written = match grana_pipeline::mesh::write(scene, set, time, format, &target) {
-        Ok(grana_pipeline::mesh::Export::Written) => Ok(()),
-        Ok(grana_pipeline::mesh::Export::Empty) => {
-            Err(format!("{name} holds no mesh at frame {time}"))
+    Some(match format {
+        MeshFormat::Stl => {
+            let title = format!("{title} into a folder named {stem}");
+            (stem, title)
         }
-        Err(detail) => Err(detail),
-    };
-    Some((target, written))
+        format => (format!("{stem}.{}", format.extension()), title),
+    })
 }

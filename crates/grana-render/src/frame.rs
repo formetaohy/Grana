@@ -155,7 +155,8 @@ impl FrameData {
         let (half_width, half_height) = if orthographic {
             (half * aspect, half)
         } else {
-            (0.0, 0.0)
+            let tan = (0.5 * camera.fov_y()).tan();
+            (tan * aspect, tan)
         };
         let eye = camera.eye();
         let light = shading.light();

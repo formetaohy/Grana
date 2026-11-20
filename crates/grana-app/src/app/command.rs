@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use grana_session::{Command, Effects, Held, Transfer};
+use grana_session::{Command, Effects, Held, Inquiry, Transfer};
 
 use super::{App, Resume};
 
@@ -19,6 +19,10 @@ impl App {
                 return false;
             }
             if self.execute(command) {
+                return true;
+            }
+            if self.session.inquiry_pending() {
+                self.poll_inquiry();
                 return true;
             }
         }
@@ -41,53 +45,38 @@ impl App {
         if effects.repaint {
             self.request_redraw();
         }
-        if effects.open_any
-            && let Some(path) = self.pick_any()
-        {
-            let transfer = self.session.open_path(path);
-            self.absorb(transfer);
+        if effects.open_any {
+            self.ask_any();
             return true;
         }
-        if effects.open_dataset
-            && let Some(path) = self.pick_folder()
-        {
-            let transfer = self.session.open_path(path);
-            self.absorb(transfer);
+        if effects.open_dataset {
+            self.ask_dataset();
             return true;
         }
-        if effects.open_image
-            && let Some(path) = self.pick_image()
-        {
-            let transfer = self.session.begin_load(path);
-            self.absorb(transfer);
+        if effects.open_image {
+            self.ask_image();
             return true;
         }
-        if effects.open_tiles
-            && let Some(path) = self.pick_tiles()
-        {
-            let transfer = self.session.open_path(path);
-            self.absorb(transfer);
+        if effects.open_tiles {
+            self.ask_tiles();
             return true;
         }
-        if effects.open_project
-            && let Some(path) = self.pick_project()
-        {
-            let transfer = self.session.begin_project(path);
-            self.absorb(transfer);
+        if effects.open_project {
+            self.ask_project();
             return true;
         }
-        if effects.open_package
-            && let Some(path) = self.pick_package()
-        {
-            let transfer = self.session.begin_package(path);
-            self.absorb(transfer);
+        if effects.open_package {
+            self.ask_package();
             return true;
         }
         if let Some(choose) = effects.save_project {
-            let view = self.view_state();
-            if let Some(path) = self.project_path(choose) {
-                self.session.save_project(path, view);
-            }
+            self.ask_project_path(choose, |app, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                let view = app.view_state();
+                app.session.save_project(path, view);
+            });
         }
         if effects.snapshot {
             self.begin_snapshot();
@@ -151,85 +140,125 @@ impl App {
         }
     }
 
-    pub(super) fn pick_folder(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_folder(self.workspace.language))
-            .pick_folder()
-    }
-
-    pub(super) fn pick_any(&self) -> Option<PathBuf> {
+    fn ask_any(&mut self) {
         let language = self.workspace.language;
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_anything(language))
-            .add_filter(
-                grana_i18n::app::supported_files(language),
-                &[
-                    "grana", "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
-                ],
-            )
-            .add_filter(grana_i18n::app::grana_project(language), &["grana"])
-            .add_filter(
-                grana_i18n::app::microscopy_image(language),
-                &[
-                    "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
-                ],
-            )
-            .pick_file()
+        self.ask(
+            Inquiry::choose(grana_i18n::app::open_anything(language))
+                .filter(
+                    grana_i18n::app::supported_files(language),
+                    &[
+                        "grana", "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
+                    ],
+                )
+                .filter(grana_i18n::app::grana_project(language), &["grana"])
+                .filter(
+                    grana_i18n::app::microscopy_image(language),
+                    &[
+                        "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
+                    ],
+                ),
+            |app, path| {
+                if let Some(path) = path {
+                    let transfer = app.session.open_path(path);
+                    app.absorb(transfer);
+                }
+            },
+        );
     }
 
-    pub(super) fn pick_tiles(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_tile_folder(self.workspace.language))
-            .pick_folder()
+    fn ask_dataset(&mut self) {
+        self.ask(
+            Inquiry::folder(grana_i18n::app::open_folder(self.workspace.language)),
+            |app, path| {
+                if let Some(path) = path {
+                    let transfer = app.session.open_path(path);
+                    app.absorb(transfer);
+                }
+            },
+        );
     }
 
-    pub(super) fn pick_image(&self) -> Option<PathBuf> {
+    fn ask_tiles(&mut self) {
+        self.ask(
+            Inquiry::folder(grana_i18n::app::open_tile_folder(self.workspace.language)),
+            |app, path| {
+                if let Some(path) = path {
+                    let transfer = app.session.open_path(path);
+                    app.absorb(transfer);
+                }
+            },
+        );
+    }
+
+    fn ask_image(&mut self) {
         let language = self.workspace.language;
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_microscopy_image(language))
-            .add_filter(
-                grana_i18n::app::microscopy_image(language),
-                &[
-                    "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
-                ],
-            )
-            .add_filter("ZEISS CZI", &["czi"])
-            .add_filter("Nikon ND2", &["nd2"])
-            .add_filter("Leica LIF", &["lif"])
-            .add_filter("Imaris IMS", &["ims"])
-            .add_filter("OME-TIFF", &["ome.tif", "ome.tiff", "tif", "tiff"])
-            .pick_file()
+        self.ask(
+            Inquiry::choose(grana_i18n::app::open_microscopy_image(language))
+                .filter(
+                    grana_i18n::app::microscopy_image(language),
+                    &[
+                        "czi", "nd2", "lif", "ims", "ome.tif", "ome.tiff", "tif", "tiff",
+                    ],
+                )
+                .filter("ZEISS CZI", &["czi"])
+                .filter("Nikon ND2", &["nd2"])
+                .filter("Leica LIF", &["lif"])
+                .filter("Imaris IMS", &["ims"])
+                .filter("OME-TIFF", &["ome.tif", "ome.tiff", "tif", "tiff"]),
+            |app, path| {
+                if let Some(path) = path {
+                    let transfer = app.session.begin_load(path);
+                    app.absorb(transfer);
+                }
+            },
+        );
     }
 
-    pub(super) fn pick_project(&self) -> Option<PathBuf> {
+    fn ask_project(&mut self) {
         let language = self.workspace.language;
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_grana_project(language))
-            .add_filter(
+        self.ask(
+            Inquiry::choose(grana_i18n::app::open_grana_project(language)).filter(
                 grana_i18n::app::grana_project(language),
                 &[grana_session::PROJECT_EXTENSION],
-            )
-            .pick_file()
+            ),
+            |app, path| {
+                if let Some(path) = path {
+                    let transfer = app.session.begin_project(path);
+                    app.absorb(transfer);
+                }
+            },
+        );
     }
 
-    pub(super) fn pick_package(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::open_grana_package(self.workspace.language))
-            .pick_folder()
+    fn ask_package(&mut self) {
+        self.ask(
+            Inquiry::folder(grana_i18n::app::open_grana_package(self.workspace.language)),
+            |app, path| {
+                if let Some(path) = path {
+                    let transfer = app.session.begin_package(path);
+                    app.absorb(transfer);
+                }
+            },
+        );
     }
 
-    pub(super) fn project_path(&self, choose: bool) -> Option<PathBuf> {
+    pub(super) fn ask_project_path(
+        &mut self,
+        choose: bool,
+        answer: impl FnOnce(&mut App, Option<PathBuf>) + 'static,
+    ) {
         if !choose && let Some(path) = self.session.project() {
-            return Some(path.to_path_buf());
+            answer(self, Some(path.to_path_buf()));
+            return;
         }
         let language = self.workspace.language;
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::save_grana_project(language))
-            .set_file_name(self.session.suggested_project())
-            .add_filter(
+        let suggested = self.session.suggested_project();
+        self.ask(
+            Inquiry::save(grana_i18n::app::save_grana_project(language), suggested).filter(
                 grana_i18n::app::grana_project(language),
                 &[grana_session::PROJECT_EXTENSION],
-            )
-            .save_file()
+            ),
+            answer,
+        );
     }
 }

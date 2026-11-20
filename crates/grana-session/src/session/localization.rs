@@ -325,18 +325,20 @@ impl Session {
                 || "localizations".to_string(),
                 |object| object.name().to_string(),
             );
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export a super-resolution image")
-            .set_file_name(format!("{}.ome.tif", crate::slug(&name)))
-            .add_filter("OME-TIFF", &["tif", "tiff"])
-            .add_filter("PNG", &["png"])
-            .save_file()
-        else {
-            return;
-        };
-        if let Err(detail) = self.export_localization_image_to(set, &path) {
-            self.message = Some(Message::error(detail));
-        }
+        let title = format!("Export the {name} super-resolution image");
+        self.ask(
+            Inquiry::save(title, format!("{}.ome.tif", crate::slug(&name)))
+                .filter("OME-TIFF", &["tif", "tiff"])
+                .filter("PNG", &["png"]),
+            move |session, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                if let Err(detail) = session.export_localization_image_to(set, &path) {
+                    session.message = Some(Message::error(detail));
+                }
+            },
+        );
     }
 
     pub(super) fn export_localization_composite(&mut self) {
@@ -344,17 +346,21 @@ impl Session {
             self.message = Some(Message::error("an export is already running"));
             return;
         }
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export the composed super-resolution image")
-            .set_file_name("superres.ome.tif")
-            .add_filter("OME-TIFF", &["tif", "tiff"])
-            .save_file()
-        else {
-            return;
-        };
-        if let Err(detail) = self.export_localization_composite_to(&path) {
-            self.message = Some(Message::error(detail));
-        }
+        self.ask(
+            Inquiry::save(
+                "Export the composed super-resolution image",
+                "superres.ome.tif",
+            )
+            .filter("OME-TIFF", &["tif", "tiff"]),
+            |session, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                if let Err(detail) = session.export_localization_composite_to(&path) {
+                    session.message = Some(Message::error(detail));
+                }
+            },
+        );
     }
 
     pub fn export_localization_composite_to(&mut self, path: &Path) -> Result<(), String> {

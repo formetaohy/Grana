@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use glam::Vec3;
-use grana_volume::{Level, VoxelData, VoxelFormat};
+use grana_volume::{Level, Sampling, VoxelData, VoxelFormat};
 use grana_warp::Warp;
 
 pub(crate) enum Plan {
@@ -33,6 +33,17 @@ impl Axis {
         let lower = self.lower[index].map(|at| (at, self.lower_weight));
         let upper = self.upper[index].map(|at| (at, self.upper_weight));
         lower.into_iter().chain(upper)
+    }
+
+    fn nearest(&self, index: usize) -> Option<usize> {
+        match (self.lower[index], self.upper[index]) {
+            (Some(lower), Some(upper)) => Some(if self.upper_weight > self.lower_weight {
+                upper
+            } else {
+                lower
+            }),
+            (lower, upper) => lower.or(upper),
+        }
     }
 }
 
@@ -109,16 +120,26 @@ fn field_source(
     })
 }
 
-pub(crate) fn resample(data: &VoxelData, plan: &Plan, ranges: &[Range<u32>; 3]) -> VoxelData {
+pub(crate) fn resample(
+    data: &VoxelData,
+    plan: &Plan,
+    ranges: &[Range<u32>; 3],
+    sampling: Sampling,
+) -> VoxelData {
+    let nearest = sampling == Sampling::Nearest;
     macro_rules! resample {
         ($($variant:ident),*) => {
             match (data, plan) {
                 $(
                     (VoxelData::$variant(values), Plan::Shift(plan)) => {
-                        VoxelData::$variant(interpolate_shift(values, plan, ranges))
+                        VoxelData::$variant(if nearest {
+                            sample_nearest(values, plan, ranges)
+                        } else {
+                            interpolate_shift(values, plan, ranges)
+                        })
                     }
                     (VoxelData::$variant(values), Plan::Field(plan)) => {
-                        VoxelData::$variant(interpolate_field(values, plan, ranges))
+                        VoxelData::$variant(interpolate_field(values, plan, ranges, nearest))
                     }
                 )*
             }
@@ -133,6 +154,40 @@ pub(crate) fn zeros(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData 
         .map(|axis| (ranges[*axis].end - ranges[*axis].start) as usize)
         .product();
     VoxelData::blank(format, count)
+}
+
+fn sample_nearest<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
+    let [x_axis, y_axis, z_axis] = &plan.axes;
+    let width = (ranges[0].end - ranges[0].start) as usize;
+    let height = (ranges[1].end - ranges[1].start) as usize;
+    let depth = (ranges[2].end - ranges[2].start) as usize;
+    let source = &plan.source;
+    let dims = [0, 1, 2].map(|axis| (source[axis].end - source[axis].start) as usize);
+    let stride = [1, dims[0], dims[0] * dims[1]];
+    assert_eq!(
+        data.len(),
+        dims[0] * dims[1] * dims[2],
+        "the read holds every voxel of the aligned source"
+    );
+    let mut values = Vec::with_capacity(width * height * depth);
+    for z in 0..depth {
+        let Some(z_at) = z_axis.nearest(z) else {
+            values.extend((0..width * height).map(|_| T::encode(0.0)));
+            continue;
+        };
+        for y in 0..height {
+            let Some(y_at) = y_axis.nearest(y) else {
+                values.extend((0..width).map(|_| T::encode(0.0)));
+                continue;
+            };
+            let base = z_at * stride[2] + y_at * stride[1];
+            for x in 0..width {
+                let value = x_axis.nearest(x).map_or(0.0, |at| data[base + at].decode());
+                values.push(T::encode(value));
+            }
+        }
+    }
+    values
 }
 
 fn interpolate_shift<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
@@ -175,7 +230,12 @@ fn interpolate_shift<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32
     values
 }
 
-fn interpolate_field<T: Value>(data: &[T], plan: &FieldPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
+fn interpolate_field<T: Value>(
+    data: &[T],
+    plan: &FieldPlan,
+    ranges: &[Range<u32>; 3],
+    nearest: bool,
+) -> Vec<T> {
     let width = (ranges[0].end - ranges[0].start) as usize;
     let height = (ranges[1].end - ranges[1].start) as usize;
     let depth = (ranges[2].end - ranges[2].start) as usize;
@@ -213,18 +273,42 @@ fn interpolate_field<T: Value>(data: &[T], plan: &FieldPlan, ranges: &[Range<u32
                 let at = index + Vec3::new(x as f32, 0.0, 0.0);
                 let offset = inverse * Vec3::from(plan.warp.sample(point.to_array()));
                 let position = at + offset;
-                values.push(T::encode(sample(
-                    data,
-                    &dims,
-                    &stride,
-                    position,
-                    first,
-                    plan.limits,
-                )));
+                values.push(T::encode(if nearest {
+                    sample_nearest_voxel(data, &dims, &stride, position, first, plan.limits)
+                } else {
+                    sample(data, &dims, &stride, position, first, plan.limits)
+                }));
             }
         }
     }
     values
+}
+
+fn sample_nearest_voxel<T: Value>(
+    data: &[T],
+    dims: &[usize; 3],
+    stride: &[usize; 3],
+    position: Vec3,
+    first: Vec3,
+    limits: [u32; 3],
+) -> f32 {
+    let at = [
+        position.x.round() as i64,
+        position.y.round() as i64,
+        position.z.round() as i64,
+    ];
+    if (0..3).any(|axis| at[axis] < 0 || at[axis] >= i64::from(limits[axis])) {
+        return 0.0;
+    }
+    let local = [
+        (at[0] as f32 - first.x) as usize,
+        (at[1] as f32 - first.y) as usize,
+        (at[2] as f32 - first.z) as usize,
+    ];
+    if (0..3).any(|axis| local[axis] >= dims[axis]) {
+        return 0.0;
+    }
+    data[local[0] * stride[0] + local[1] * stride[1] + local[2] * stride[2]].decode()
 }
 
 fn sample<T: Value>(

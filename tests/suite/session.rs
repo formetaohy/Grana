@@ -151,7 +151,7 @@ fn objects(session: &Session, set: grana_scene::ObjectSetId) -> usize {
 
 fn settle(session: &mut Session) {
     let deadline = Instant::now() + Duration::from_secs(60);
-    while !session.progress().is_empty() || session.pending() > 0 {
+    while session.running() || !session.progress().is_empty() || session.pending() > 0 {
         assert!(Instant::now() < deadline, "the analysis never settled");
         session.poll();
         std::thread::sleep(Duration::from_millis(1));
@@ -972,6 +972,7 @@ fn paints_erases_and_undoes_a_voxel_mask() {
         tolerance: 0.0,
         points: vec![anchors[0].position()],
     });
+    settle(&mut session);
     let masked = masked_set(&session, set);
     assert!(
         frame_volume(&session, masked) < volume,
@@ -988,6 +989,7 @@ fn paints_erases_and_undoes_a_voxel_mask() {
         tolerance: 0.05,
         points: vec![anchors[1].position()],
     });
+    settle(&mut session);
     assert_eq!(
         objects(&session, masked),
         1,

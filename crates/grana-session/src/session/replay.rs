@@ -272,18 +272,10 @@ impl Session {
                         return;
                     }
                 },
-                Step::Edit { set, .. } => match self.apply_edit_plan(set) {
-                    Ok(()) => {
-                        self.derive_settled(set, true);
-                        self.advance_step();
-                        continue;
-                    }
-                    Err(detail) => {
-                        self.abort_recipe();
-                        self.message = Some(Message::error(detail));
-                        return;
-                    }
-                },
+                Step::Edit { set, .. } => {
+                    self.enqueue_edit(set, Rollback::Keep, Follow::Refresh);
+                    return;
+                }
                 Step::Merge { set, part } => {
                     let waiting = self.analysis.iter().any(|analysis| {
                         analysis.job().involves(set) || analysis.job().involves(part)
@@ -432,13 +424,18 @@ impl Session {
     }
 
     pub(super) fn load_protocol(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Open an analysis protocol")
-            .add_filter("grana protocol", &[grana_protocol::Protocol::EXTENSION])
-            .pick_file()
-        else {
-            return;
-        };
+        self.ask(
+            Inquiry::choose("Open an analysis protocol")
+                .filter("grana protocol", &[grana_protocol::Protocol::EXTENSION]),
+            |session, path| {
+                if let Some(path) = path {
+                    session.read_protocol(path);
+                }
+            },
+        );
+    }
+
+    fn read_protocol(&mut self, path: PathBuf) {
         match Protocol::read(&path) {
             Ok(protocol) => self.set_protocol(protocol),
             Err(error) => self.batch_message = Some(error.to_string()),
@@ -449,9 +446,9 @@ impl Session {
         if self.protocol.is_none() {
             self.capture_protocol();
         }
-        let Some(protocol) = self.protocol.as_ref() else {
+        if self.protocol.is_none() {
             return;
-        };
+        }
         let suggested = format!(
             "{}-protocol.{}",
             crate::slug(
@@ -461,12 +458,19 @@ impl Session {
             ),
             grana_protocol::Protocol::EXTENSION
         );
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Save the analysis protocol")
-            .set_file_name(suggested)
-            .add_filter("grana protocol", &[grana_protocol::Protocol::EXTENSION])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save("Save the analysis protocol", suggested)
+                .filter("grana protocol", &[grana_protocol::Protocol::EXTENSION]),
+            |session, path| {
+                if let Some(path) = path {
+                    session.write_protocol(path);
+                }
+            },
+        );
+    }
+
+    fn write_protocol(&mut self, path: PathBuf) {
+        let Some(protocol) = self.protocol.as_ref() else {
             return;
         };
         match protocol.write(&path) {

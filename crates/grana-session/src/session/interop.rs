@@ -152,58 +152,70 @@ impl Session {
     }
 
     pub(super) fn choose_import_tracks(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Open a GEFF tracking graph")
-            .pick_folder()
-        else {
-            return;
-        };
-        self.import_tracks(&path);
+        self.ask(
+            Inquiry::folder("Open a GEFF tracking graph"),
+            |session, path| {
+                if let Some(path) = path {
+                    session.import_tracks(&path);
+                }
+            },
+        );
     }
 
     pub(super) fn choose_import_localizations(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Open a localization table")
-            .add_filter(
+        self.ask(
+            Inquiry::choose("Open a localization table").filter(
                 "Localization table",
                 &["csv", "tsv", "txt", "dat", "hdf5", "h5"],
-            )
-            .pick_file()
-        else {
-            return;
-        };
-        self.import_localizations(&path);
+            ),
+            |session, path| {
+                if let Some(path) = path {
+                    session.import_localizations(&path);
+                }
+            },
+        );
     }
 
     pub(super) fn choose_export_geff(&mut self, set: ObjectSetId) {
-        let Some(path) = self.track_path(set, "tracks.geff", "Export a GEFF tracking graph") else {
+        let Some(inquiry) = self.track_inquiry(set, "tracks.geff", "Export a GEFF tracking graph")
+        else {
             return;
         };
-        if let Err(detail) = self.export_geff(set, &path) {
-            self.message = Some(Message::error(format!(
-                "failed to export the graph to {}: {detail}",
-                path.display()
-            )));
-        }
+        self.ask(inquiry, move |session, path| {
+            let Some(path) = path else {
+                return;
+            };
+            if let Err(detail) = session.export_geff(set, &path) {
+                session.message = Some(Message::error(format!(
+                    "failed to export the graph to {}: {detail}",
+                    path.display()
+                )));
+            }
+        });
     }
 
     pub(super) fn choose_export_localizations(&mut self, set: ObjectSetId) {
-        let Some(path) = self.track_path(
+        let Some(inquiry) = self.track_inquiry(
             set,
             "localizations.hdf5",
             "Export a Picasso localization table",
         ) else {
             return;
         };
-        if let Err(detail) = self.export_localizations(set, &path) {
-            self.message = Some(Message::error(format!(
-                "failed to export the localizations to {}: {detail}",
-                path.display()
-            )));
-        }
+        self.ask(inquiry, move |session, path| {
+            let Some(path) = path else {
+                return;
+            };
+            if let Err(detail) = session.export_localizations(set, &path) {
+                session.message = Some(Message::error(format!(
+                    "failed to export the localizations to {}: {detail}",
+                    path.display()
+                )));
+            }
+        });
     }
 
-    fn track_path(&self, set: ObjectSetId, suffix: &str, title: &str) -> Option<PathBuf> {
+    fn track_inquiry(&self, set: ObjectSetId, suffix: &str, title: &str) -> Option<Inquiry> {
         let scene = self.scene.as_ref()?;
         let object = scene.objects.get(set)?;
         let suggested = format!(
@@ -211,10 +223,7 @@ impl Session {
             crate::slug(scene.dataset.name()),
             object.key().as_str()
         );
-        rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(suggested)
-            .save_file()
+        Some(Inquiry::save(title, suggested))
     }
 }
 

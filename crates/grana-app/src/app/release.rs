@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use grana_editor::{Prompt, PromptChoice};
-use grana_session::Held;
+use grana_session::{Held, Inquiry};
 
 use super::{App, Resume};
 
@@ -143,21 +143,20 @@ impl App {
                 let field = &held[index];
                 match choice {
                     PromptChoice::Save => {
-                        let Some(path) = self.field_project(field) else {
-                            self.deferred = Some(Deferred::Fields {
-                                held,
-                                index,
-                                steps,
-                                next,
-                            });
-                            self.ask_field();
-                            self.request_redraw();
-                            return;
-                        };
-                        steps.push_back(Step::Save {
-                            series: field.series,
-                            path,
+                        let series = field.series;
+                        let name = field.name.clone();
+                        let project = field.project.clone();
+                        self.deferred = Some(Deferred::Fields {
+                            held,
+                            index,
+                            steps,
+                            next,
                         });
+                        self.ask_field_project(&name, project, move |app, path| {
+                            let step = path.map(|path| Step::Save { series, path });
+                            app.advance_field(step);
+                        });
+                        return;
                     }
                     PromptChoice::Discard => steps.push_back(Step::Discard {
                         series: field.series,
@@ -180,34 +179,79 @@ impl App {
         self.request_redraw();
     }
 
-    fn save_document(&mut self, next: Resume) {
-        let view = self.view_state();
-        let Some(path) = self.project_path(false) else {
-            self.deferred = Some(Deferred::Unsaved { next });
-            self.present_prompt(Prompt::Unsaved);
+    fn advance_field(&mut self, step: Option<Step>) {
+        let Some(Deferred::Fields {
+            held,
+            index,
+            mut steps,
+            next,
+        }) = self.deferred.take()
+        else {
             return;
         };
-        self.session.save_project(path, view);
-        self.resume = Some(next);
+        match step {
+            Some(step) => {
+                steps.push_back(step);
+                self.deferred = Some(Deferred::Fields {
+                    held,
+                    index: index + 1,
+                    steps,
+                    next,
+                });
+                self.ask_field();
+            }
+            None => {
+                self.deferred = Some(Deferred::Fields {
+                    held,
+                    index,
+                    steps,
+                    next,
+                });
+                self.ask_field();
+            }
+        }
+        self.request_redraw();
     }
 
-    fn field_project(&self, field: &Held) -> Option<PathBuf> {
-        if let Some(path) = field.project.as_ref() {
-            return Some(path.clone());
+    fn save_document(&mut self, next: Resume) {
+        let view = self.view_state();
+        self.ask_project_path(false, move |app, path| {
+            let Some(path) = path else {
+                app.deferred = Some(Deferred::Unsaved { next });
+                app.present_prompt(Prompt::Unsaved);
+                return;
+            };
+            app.session.save_project(path, view);
+            app.resume = Some(next);
+        });
+    }
+
+    fn ask_field_project(
+        &mut self,
+        name: &str,
+        project: Option<PathBuf>,
+        answer: impl FnOnce(&mut App, Option<PathBuf>) + 'static,
+    ) {
+        if let Some(project) = project {
+            answer(self, Some(project));
+            return;
         }
         let language = self.workspace.language;
-        rfd::FileDialog::new()
-            .set_title(grana_i18n::app::save_grana_project(language))
-            .set_file_name(format!(
-                "{}.{}",
-                grana_session::slug(&field.name),
-                grana_session::PROJECT_EXTENSION
-            ))
-            .add_filter(
+        self.ask(
+            Inquiry::save(
+                grana_i18n::app::save_grana_project(language),
+                format!(
+                    "{}.{}",
+                    grana_session::slug(name),
+                    grana_session::PROJECT_EXTENSION
+                ),
+            )
+            .filter(
                 grana_i18n::app::grana_project(language),
                 &[grana_session::PROJECT_EXTENSION],
-            )
-            .save_file()
+            ),
+            answer,
+        );
     }
 
     fn run_step(&mut self, step: Step) -> bool {

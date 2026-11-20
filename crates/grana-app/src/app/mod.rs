@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -20,6 +21,7 @@ use winit::window::{Window, WindowId};
 
 mod chrome;
 mod command;
+mod dialog;
 mod editor;
 mod export;
 mod fail;
@@ -32,6 +34,7 @@ mod sync;
 mod time;
 mod viewport;
 
+use self::dialog::{Awaiting, Service};
 use self::export::Export;
 use self::placement::{Fit, Placement};
 use self::release::{Deferred, Release};
@@ -87,6 +90,8 @@ pub struct App {
     surface: Option<Surface>,
     session: Session,
     wake: EventLoopProxy<Wake>,
+    dialog: Option<Service>,
+    awaiting: VecDeque<Awaiting>,
     engine: Option<Engine>,
     pending_engine: Option<Receiver<Engine>>,
     start: Instant,
@@ -162,6 +167,8 @@ impl App {
             surface: None,
             session,
             wake,
+            dialog: None,
+            awaiting: VecDeque::new(),
             engine: None,
             pending_engine: None,
             start: Instant::now(),
@@ -249,6 +256,10 @@ impl App {
         gpu.lost_handle().wake_with(move || {
             let _ = wake.send_event(Wake::Redraw);
         });
+        let repaint = self.wake.clone();
+        self.dialog = Some(Service::spawn(window.clone(), move || {
+            let _ = repaint.send_event(Wake::Redraw);
+        }));
         self.pending_engine = Some(spawn_engine(
             gpu.device.clone(),
             gpu.queue.clone(),
@@ -289,6 +300,7 @@ impl App {
             return false;
         }
         self.session.poll();
+        self.poll_inquiry();
         self.sync_engine();
         if self.follow_resume() {
             return false;
@@ -377,9 +389,6 @@ impl App {
         }
         if !self.workspace.playback.playing && self.streaming() {
             delay = delay.min(self.stream_poll());
-        }
-        if self.session.stitching() {
-            delay = delay.min(STREAM_POLL);
         }
         if self.export.running() {
             delay = delay.min(EXPORT_POLL);

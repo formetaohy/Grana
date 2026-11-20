@@ -1,11 +1,79 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use super::*;
 
+use crate::task::Progress;
 use grana_object::{MaskEdit, MaskMode, MaskTool, ObjectAnchor};
 use grana_scene::{ObjectKind, ObjectSet, Provenance, SurfaceEdit, SurfaceEditKind};
 
 type Deletions = (ObjectSetId, Vec<(u32, Vec<usize>)>);
+type Edited = Vec<grana_pipeline::run::EditedFrame>;
+type EditTask = Progress<Result<Edited, String>>;
+type EditStart = (EditTask, usize, usize);
+
+#[derive(Default)]
+pub(super) struct Edits {
+    queue: VecDeque<Queued>,
+    running: Option<Running>,
+}
+
+struct Queued {
+    set: ObjectSetId,
+    rollback: Rollback,
+    follow: Follow,
+}
+
+struct Running {
+    queued: Queued,
+    strokes: usize,
+    edits: usize,
+    task: EditTask,
+}
+
+pub(super) enum Rollback {
+    Keep,
+    Remove,
+    Mask(Vec<MaskEdit>),
+    Surface(Vec<SurfaceEdit>),
+}
+pub(super) enum Follow {
+    Mask { source: ObjectSetId },
+    Surface { source: ObjectSetId },
+    Refresh,
+}
+
+impl Edits {
+    fn push(&mut self, queued: Queued) {
+        self.queue.push_back(queued);
+    }
+
+    fn involves(&self, set: ObjectSetId) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(|running| running.queued.set == set)
+            || self.queue.iter().any(|queued| queued.set == set)
+    }
+
+    pub(super) fn busy(&self) -> bool {
+        self.running.is_some() || !self.queue.is_empty()
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.queue.clear();
+        self.running = None;
+    }
+
+    pub(super) fn retain(&mut self, keep: impl Fn(ObjectSetId) -> bool) {
+        self.queue.retain(|queued| keep(queued.set));
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|running| !keep(running.queued.set))
+        {
+            self.running = None;
+        }
+    }
+}
 
 pub(super) struct MaskPaint {
     pub set: ObjectSetId,
@@ -459,76 +527,259 @@ impl Session {
     }
 
     pub(super) fn refresh_edited(&mut self, set: ObjectSetId) -> bool {
-        if let Err(detail) = self.apply_edit_plan(set) {
-            self.message = Some(Message::error(detail));
-            return false;
-        }
-        self.defer_relations(set);
-        self.resume_relations(set);
-        self.start_tracks(set);
+        self.enqueue_edit(set, Rollback::Keep, Follow::Refresh);
         true
     }
 
-    pub(super) fn apply_edit_plan(&mut self, set: ObjectSetId) -> Result<(), String> {
-        let Some((source, voxel, channel, provenance)) = self
-            .scene
-            .as_ref()
-            .and_then(|scene| scene.objects.get(set))
-            .map(|object| {
-                (
-                    object.provenance().source(),
-                    object.voxel(),
-                    object.channel(),
-                    object.provenance().clone(),
-                )
-            })
-        else {
+    pub(super) fn enqueue_edit(&mut self, set: ObjectSetId, rollback: Rollback, follow: Follow) {
+        if self.edits.involves(set) {
+            return;
+        }
+        self.edits.push(Queued {
+            set,
+            rollback,
+            follow,
+        });
+    }
+
+    pub(super) fn poll_edits(&mut self) -> bool {
+        let mut repaint = false;
+        loop {
+            if let Some(running) = self.edits.running.as_mut() {
+                let outcome = match running.task.poll() {
+                    Poll::Event(outcome) => outcome,
+                    Poll::Empty => break,
+                    Poll::Closed => Err("the edit worker stopped".to_string()),
+                };
+                let running = self
+                    .edits
+                    .running
+                    .take()
+                    .expect("the finished edit holds its request");
+                self.finish_edit(running.queued, running.strokes, running.edits, outcome);
+                repaint = true;
+                continue;
+            }
+            let Some(queued) = self.edits.queue.pop_front() else {
+                break;
+            };
+            match self.start_edit(&queued) {
+                Ok((task, strokes, edits)) => {
+                    self.edits.running = Some(Running {
+                        queued,
+                        strokes,
+                        edits,
+                        task,
+                    });
+                    repaint = true;
+                }
+                Err(detail) => {
+                    self.message = Some(Message::error(detail));
+                    repaint = true;
+                }
+            }
+        }
+        repaint
+    }
+
+    fn start_edit(&self, queued: &Queued) -> Result<EditStart, String> {
+        let Some(scene) = self.scene.as_ref() else {
+            return Err("the scene left before its edit started".to_string());
+        };
+        let Some(object) = scene.objects.get(queued.set) else {
             return Err("the object set left the scene".to_string());
         };
-        let Some(source) = source else {
-            return Err("the object set carries no edits".to_string());
-        };
-        let objects = self
-            .scene
-            .as_ref()
-            .and_then(|scene| scene.objects.get(source))
+        let provenance = object.provenance().clone();
+        let voxel = object.voxel();
+        let channel = object.channel();
+        let source = provenance
+            .source()
+            .ok_or_else(|| "the object set carries no edits".to_string())?;
+        let objects = scene
+            .objects
+            .get(source)
             .map(|object| object.source())
             .ok_or_else(|| "the edited object set left the scene".to_string())?;
-        let edited = match provenance {
+        let strokes = provenance.strokes().len();
+        let edits = provenance.edits().len();
+        let task = match provenance {
             Provenance::Edited { edits, .. } => {
-                grana_pipeline::run::edit(&objects, &edits, voxel, Some(&self.store))?
+                let store = Some(self.store.clone());
+                Progress::spawn(grana_exec::Role::Compute, move |cancel, progress| {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Ok(Vec::new());
+                    }
+                    progress(0, 1);
+                    let edited =
+                        grana_pipeline::run::edit(&objects, &edits, voxel, store.as_ref())?;
+                    progress(1, 1);
+                    Ok(edited)
+                })
             }
             Provenance::Masked { strokes, .. } => {
-                let Some(reader) = self.analysis_channels() else {
-                    return Err("open a dataset before painting a mask".to_string());
-                };
-                let drifts = self
-                    .scene
-                    .as_ref()
-                    .map_or_else(Default::default, |scene| scene.drifts().clone());
-                grana_pipeline::run::mask(
-                    reader.as_ref(),
-                    &objects,
-                    voxel,
-                    &grana_pipeline::run::MaskRequest {
+                let channels = self
+                    .analysis_channels()
+                    .ok_or_else(|| "open a dataset before painting a mask".to_string())?;
+                let drifts = scene.drifts().clone();
+                Progress::spawn(grana_exec::Role::Compute, move |cancel, progress| {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Ok(Vec::new());
+                    }
+                    progress(0, 1);
+                    let request = grana_pipeline::run::MaskRequest {
                         channel,
                         strokes: &strokes,
                         drifts: &drifts,
-                    },
-                )?
+                    };
+                    let edited =
+                        grana_pipeline::run::mask(channels.as_ref(), &objects, voxel, &request)?;
+                    progress(1, 1);
+                    Ok(edited)
+                })
             }
             _ => return Err("the object set carries no edits".to_string()),
         };
-        if let Some(scene) = self.scene.as_mut() {
-            for (time, frame) in edited {
+        Ok((task, strokes, edits))
+    }
+
+    fn finish_edit(
+        &mut self,
+        queued: Queued,
+        strokes: usize,
+        edits: usize,
+        outcome: Result<Edited, String>,
+    ) {
+        let frames = match outcome {
+            Ok(frames) => frames,
+            Err(detail) => {
+                self.rollback_edit(&queued);
+                self.message = Some(Message::error(detail));
+                if self.recipe_matches_edit(queued.set) {
+                    self.abort_recipe();
+                }
+                return;
+            }
+        };
+        let installed = self.scene.as_mut().is_some_and(|scene| {
+            if scene.objects.get(queued.set).is_none() {
+                return false;
+            }
+            for (time, frame) in frames {
                 match frame {
-                    Some(frame) => scene.install_shared(set, time, frame),
-                    None => scene.install_optional(set, time, None),
+                    Some(frame) => scene.install_shared(queued.set, time, frame),
+                    None => scene.install_optional(queued.set, time, None),
                 }
             }
-            scene.clear_tracks(set);
+            scene.clear_tracks(queued.set);
+            true
+        });
+        if !installed {
+            return;
         }
-        Ok(())
+        match queued.follow {
+            Follow::Mask { source } => {
+                if let Some(source) = self.object_mut(source) {
+                    source.set_visible(false);
+                }
+                if let Some(scene) = self.scene.as_ref() {
+                    self.measure.select(queued.set, scene);
+                }
+                let painted = self.edit_strokes(queued.set);
+                self.message = Some(Message::info(format!(
+                    "painted {painted} mask strokes into a derived object set"
+                )));
+            }
+            Follow::Surface { source } => {
+                if let Some(source) = self.object_mut(source) {
+                    source.set_visible(false);
+                }
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.select(None);
+                }
+                if let Some(scene) = self.scene.as_ref() {
+                    self.measure.select(queued.set, scene);
+                }
+                let edited = self.edit_frames(queued.set);
+                self.message = Some(Message::info(format!(
+                    "edited the surfaces of {edited} frames into a derived object set"
+                )));
+            }
+            Follow::Refresh => {}
+        }
+        self.defer_relations(queued.set);
+        if self.recipe.is_none() {
+            self.resume_relations(queued.set);
+        }
+        self.start_tracks(queued.set);
+        if self.recipe_matches_edit(queued.set) {
+            self.advance_step();
+            self.drive_recipe();
+        }
+        self.refresh_running_edit(&queued, strokes, edits);
+        self.touch();
+    }
+
+    fn refresh_running_edit(&mut self, queued: &Queued, strokes: usize, edits: usize) {
+        let current = self
+            .scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(queued.set))
+            .map(|object| {
+                (
+                    object.provenance().strokes().len(),
+                    object.provenance().edits().len(),
+                )
+            });
+        if current != Some((strokes, edits)) && current.is_some() {
+            self.enqueue_edit(queued.set, Rollback::Keep, Follow::Refresh);
+        }
+    }
+
+    fn rollback_edit(&mut self, queued: &Queued) {
+        match &queued.rollback {
+            Rollback::Keep => {}
+            Rollback::Remove => self.remove_object(queued.set),
+            Rollback::Mask(strokes) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.replan_masked(queued.set, strokes.clone());
+                }
+            }
+            Rollback::Surface(edits) => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.replan_object(queued.set, edits.clone());
+                }
+            }
+        }
+    }
+
+    fn recipe_matches_edit(&self, set: ObjectSetId) -> bool {
+        self.recipe
+            .as_ref()
+            .is_some_and(|recipe| matches!(recipe.step(), grana_protocol::Step::Edit { set: edited, .. } if *edited == set))
+    }
+
+    fn edit_strokes(&self, set: ObjectSetId) -> usize {
+        self.scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .map_or(0, |object| object.provenance().strokes().len())
+    }
+
+    fn edit_frames(&self, set: ObjectSetId) -> usize {
+        self.scene
+            .as_ref()
+            .and_then(|scene| scene.objects.get(set))
+            .map_or(0, |object| {
+                let mut frames = object
+                    .provenance()
+                    .edits()
+                    .iter()
+                    .map(|edit| edit.frame())
+                    .collect::<Vec<_>>();
+                frames.sort_unstable();
+                frames.dedup();
+                frames.len()
+            })
     }
 
     pub(super) fn paint_mask(&mut self, request: MaskPaint) -> bool {
@@ -587,32 +838,19 @@ impl Session {
                 return false;
             }
         }
-        if let Err(detail) = self.apply_edit_plan(target) {
-            if created {
-                self.remove_object(target);
-            } else if let Some(scene) = self.scene.as_mut() {
-                scene.replan_masked(target, previous);
-            }
-            self.message = Some(Message::error(detail));
-            return false;
-        }
-        let painted = self
-            .scene
-            .as_ref()
-            .and_then(|scene| scene.objects.get(target))
-            .map_or(0, |object| object.provenance().strokes().len());
-        if let Some(source) = self.object_mut(request.set) {
-            source.set_visible(false);
-        }
-        self.defer_relations(target);
-        self.resume_relations(target);
-        self.start_tracks(target);
-        if let Some(scene) = self.scene.as_ref() {
-            self.measure.select(target, scene);
-        }
-        self.message = Some(Message::info(format!(
-            "painted {painted} mask strokes into a derived object set"
-        )));
+        let rollback = if created {
+            Rollback::Remove
+        } else {
+            Rollback::Mask(previous)
+        };
+        self.enqueue_edit(
+            target,
+            rollback,
+            Follow::Mask {
+                source: request.set,
+            },
+        );
+        self.message = None;
         true
     }
 
@@ -736,47 +974,13 @@ impl Session {
                 (set, edited)
             }
         };
-        if let Err(detail) = self.apply_edit_plan(target) {
-            if created {
-                self.remove_object(target);
-            } else if let Some(previous) = previous
-                && let Some(scene) = self.scene.as_mut()
-            {
-                scene.replan_object(target, previous);
-            }
-            self.message = Some(Message::error(detail));
-            return false;
-        }
-        let edited = self
-            .scene
-            .as_ref()
-            .and_then(|scene| scene.objects.get(target))
-            .map_or(0, |object| {
-                let mut frames = object
-                    .provenance()
-                    .edits()
-                    .iter()
-                    .map(|edit| edit.frame())
-                    .collect::<Vec<_>>();
-                frames.sort_unstable();
-                frames.dedup();
-                frames.len()
-            });
-        if let Some(source) = self.object_mut(source) {
-            source.set_visible(false);
-        }
-        if let Some(scene) = self.scene.as_mut() {
-            scene.select(None);
-        }
-        self.defer_relations(target);
-        self.resume_relations(target);
-        self.start_tracks(target);
-        if let Some(scene) = self.scene.as_ref() {
-            self.measure.select(target, scene);
-        }
-        self.message = Some(Message::info(format!(
-            "edited the surfaces of {edited} frames into a derived object set"
-        )));
+        let rollback = if created {
+            Rollback::Remove
+        } else {
+            Rollback::Surface(previous.unwrap_or_default())
+        };
+        self.enqueue_edit(target, rollback, Follow::Surface { source });
+        self.message = None;
         true
     }
 
@@ -821,6 +1025,7 @@ impl Session {
     }
 
     pub(super) fn remove_object(&mut self, set: ObjectSetId) {
+        self.edits.retain(|edited| edited != set);
         let _ = self.halt(Job::Detect(set));
         let _ = self.halt(Job::Import(set));
         let _ = self.halt(Job::Recut(set));

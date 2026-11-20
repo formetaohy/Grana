@@ -1,117 +1,143 @@
 use super::*;
 
+use crate::task::Progress;
+
+pub(super) enum Scan {
+    Discovered(Vec<grana_pipeline::DatasetEntry>),
+    Run { folder: PathBuf, read: Box<RunRead> },
+}
+
+pub(super) struct RunRead {
+    protocol: Protocol,
+    datasets: Vec<grana_pipeline::DatasetEntry>,
+    rows: Vec<BatchDataset>,
+    metrics: Vec<BatchMetric>,
+    comparison: Vec<BatchComparison>,
+    significance: Vec<BatchSignificance>,
+    interactions: Vec<BatchInteraction>,
+    jobs: usize,
+    project: bool,
+    channels: bool,
+}
+
 impl Session {
     pub(super) fn add_batch_datasets(&mut self) {
-        let Some(root) = rfd::FileDialog::new()
-            .set_title("Choose a folder of datasets")
-            .pick_folder()
-        else {
-            return;
-        };
+        self.ask(
+            Inquiry::folder("Choose a folder of datasets"),
+            |session, path| {
+                let Some(root) = path else {
+                    return;
+                };
+                session.scan_batch_folder(root);
+            },
+        );
+    }
+
+    fn scan_batch_folder(&mut self, root: PathBuf) {
         let tiles = self
             .protocol
             .as_ref()
             .is_some_and(|protocol| protocol.stitch().is_some());
-        match grana_pipeline::discover(&root, tiles) {
-            Ok(found) => {
-                let mut added = 0;
-                for dataset in found {
-                    if !self.batch_datasets.contains(&dataset) {
-                        self.batch_datasets.push(dataset);
-                        added += 1;
-                    }
-                }
-                if added == 0 {
-                    self.batch_message = Some("the folder holds no new dataset".to_string());
-                } else {
-                    self.batch_message = None;
-                }
-                self.reset_batch_rows();
+        let task = Progress::spawn(grana_exec::Role::Read, move |_, _| {
+            grana_pipeline::discover(&root, tiles)
+                .map(Scan::Discovered)
+                .map_err(|error| error.to_string())
+        });
+        self.tasks.batch = Some(task);
+        self.batch_message = None;
+    }
+
+    fn install_batch_datasets(&mut self, found: Vec<grana_pipeline::DatasetEntry>) {
+        let mut added = 0;
+        for dataset in found {
+            if !self.batch_datasets.contains(&dataset) {
+                self.batch_datasets.push(dataset);
+                added += 1;
             }
-            Err(error) => self.batch_message = Some(error.to_string()),
         }
+        self.batch_message = if added == 0 {
+            Some("the folder holds no new dataset".to_string())
+        } else {
+            None
+        };
+        self.reset_batch_rows();
     }
 
     pub(super) fn choose_batch_output(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose a folder for the batch statistics")
-            .pick_folder()
-        else {
-            return;
-        };
-        self.batch_output = Some(path);
-        self.batch_message = None;
+        self.ask(
+            Inquiry::folder("Choose a folder for the batch statistics"),
+            |session, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                session.batch_output = Some(path);
+                session.batch_message = None;
+            },
+        );
     }
 
     pub(super) fn open_batch_run(&mut self) {
         if self.batch_running {
             return;
         }
-        let Some(folder) = rfd::FileDialog::new()
-            .set_title("Open a batch run")
-            .pick_folder()
-        else {
-            return;
-        };
-        let run = match grana_pipeline::read_run(&folder) {
-            Ok(Some(run)) => run,
-            Ok(None) => {
-                self.batch_message = Some(format!("{} holds no run record", folder.display()));
-                return;
-            }
-            Err(detail) => {
-                self.batch_message = Some(detail);
-                return;
-            }
-        };
-        let protocol =
-            match grana_protocol::Protocol::read(&folder.join(grana_protocol::Protocol::FILE)) {
-                Ok(protocol) => protocol,
-                Err(error) => {
-                    self.batch_message =
-                        Some(format!("the run carries no readable protocol: {error}"));
-                    return;
-                }
-            };
-        let mut datasets = Vec::with_capacity(run.datasets().len());
-        for dataset in run.datasets() {
-            let Some(entry) = dataset.entry() else {
-                self.batch_message = Some(format!(
-                    "the run record names the dataset {} it cannot reopen",
-                    dataset.title()
-                ));
+        self.ask(Inquiry::folder("Open a batch run"), |session, path| {
+            let Some(folder) = path else {
                 return;
             };
-            datasets.push(entry);
-        }
+            session.read_batch_run(folder);
+        });
+    }
+
+    fn read_batch_run(&mut self, folder: PathBuf) {
+        let task = Progress::spawn(grana_exec::Role::Read, move |_, _| read_run(folder));
+        self.tasks.batch = Some(task);
+    }
+
+    fn install_batch_run(&mut self, folder: PathBuf, read: RunRead) {
         self.batch_output = Some(folder);
-        self.batch_datasets = datasets;
-        self.batch_rows = run
-            .datasets()
-            .iter()
-            .map(|dataset| BatchDataset {
-                name: dataset.title().to_string(),
-                state: if dataset.correction().is_some() {
-                    "corrected".to_string()
-                } else {
-                    run_state(dataset.status()).to_string()
-                },
-                detail: dataset.detail().to_string(),
-            })
-            .collect();
-        let report = run.comparison();
-        self.batch_metrics = report.metrics;
-        self.batch_comparison = report.groups;
-        self.batch_significance = report.tests;
-        self.batch_interactions = report.interactions;
-        self.batch_jobs = run.jobs().clamp(1, grana_pipeline::MAX_JOBS);
-        self.batch_project = run.project();
-        self.batch_channels = run.channels();
+        self.batch_datasets = read.datasets;
+        self.batch_rows = read.rows;
+        self.batch_metrics = read.metrics;
+        self.batch_comparison = read.comparison;
+        self.batch_significance = read.significance;
+        self.batch_interactions = read.interactions;
+        self.batch_jobs = read.jobs;
+        self.batch_project = read.project;
+        self.batch_channels = read.channels;
         self.batch_review = None;
         self.batch_review_pending = None;
-        self.protocol_text = Some(protocol.summary());
-        self.protocol = Some(protocol);
+        self.protocol_text = Some(read.protocol.summary());
+        self.protocol = Some(read.protocol);
         self.batch_message = None;
+    }
+
+    pub(super) fn poll_batch_scan(&mut self) -> bool {
+        let Some(slot) = self.tasks.batch.as_mut() else {
+            return false;
+        };
+        match slot.poll() {
+            Poll::Event(Ok(Scan::Discovered(found))) => {
+                self.tasks.batch = None;
+                self.install_batch_datasets(found);
+                true
+            }
+            Poll::Event(Ok(Scan::Run { folder, read })) => {
+                self.tasks.batch = None;
+                self.install_batch_run(folder, *read);
+                true
+            }
+            Poll::Event(Err(detail)) => {
+                self.tasks.batch = None;
+                self.batch_message = Some(detail);
+                true
+            }
+            Poll::Empty => false,
+            Poll::Closed => {
+                self.tasks.batch = None;
+                self.batch_message = Some("the batch reader stopped".to_string());
+                true
+            }
+        }
     }
 
     pub(super) fn review_batch_dataset(&mut self, index: usize) {
@@ -301,7 +327,9 @@ impl Session {
         let mut repaint = false;
         let mut finished = false;
         let mut fatal = false;
-        loop {
+        let mut budget = UPLOAD_BATCH;
+        while budget > 0 {
+            budget -= 1;
             let event = match batch.poll() {
                 BatchPoll::Event(event) => event,
                 BatchPoll::Empty => break,
@@ -381,4 +409,51 @@ fn run_state(status: &str) -> &str {
         "ok" => "done",
         other => other,
     }
+}
+
+fn read_run(folder: PathBuf) -> Result<Scan, String> {
+    let Some(run) = grana_pipeline::read_run(&folder)? else {
+        return Err(format!("{} holds no run record", folder.display()));
+    };
+    let protocol = grana_protocol::Protocol::read(&folder.join(grana_protocol::Protocol::FILE))
+        .map_err(|error| format!("the run carries no readable protocol: {error}"))?;
+    let mut datasets = Vec::with_capacity(run.datasets().len());
+    for dataset in run.datasets() {
+        let Some(entry) = dataset.entry() else {
+            return Err(format!(
+                "the run record names the dataset {} it cannot reopen",
+                dataset.title()
+            ));
+        };
+        datasets.push(entry);
+    }
+    let rows = run
+        .datasets()
+        .iter()
+        .map(|dataset| BatchDataset {
+            name: dataset.title().to_string(),
+            state: if dataset.correction().is_some() {
+                "corrected".to_string()
+            } else {
+                run_state(dataset.status()).to_string()
+            },
+            detail: dataset.detail().to_string(),
+        })
+        .collect();
+    let report = run.comparison();
+    Ok(Scan::Run {
+        folder,
+        read: Box::new(RunRead {
+            protocol,
+            datasets,
+            rows,
+            metrics: report.metrics,
+            comparison: report.groups,
+            significance: report.tests,
+            interactions: report.interactions,
+            jobs: run.jobs().clamp(1, grana_pipeline::MAX_JOBS),
+            project: run.project(),
+            channels: run.channels(),
+        }),
+    })
 }

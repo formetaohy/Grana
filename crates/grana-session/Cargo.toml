@@ -40,7 +40,6 @@ grana-text = { workspace = true }
 grana-tiff = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
-rfd = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

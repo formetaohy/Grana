@@ -598,13 +598,14 @@ fn relative(path: &Path) -> String {
 
 impl Session {
     pub(super) fn export_package(&mut self) {
-        let Some(parent) = rfd::FileDialog::new()
-            .set_title("Export the share package into a folder")
-            .pick_folder()
-        else {
-            return;
-        };
-        self.package_into(parent);
+        self.ask(
+            Inquiry::folder("Export the share package into a folder"),
+            |session, path| {
+                if let Some(parent) = path {
+                    session.package_into(parent);
+                }
+            },
+        );
     }
 
     pub fn package_into(&mut self, parent: PathBuf) -> bool {

@@ -956,6 +956,7 @@ impl Session {
         let Some((edit, snapshot)) = self.history.undo(current) else {
             return Effects::default();
         };
+        self.edits.clear();
         self.abandon(edit);
         self.restore(snapshot);
         self.touch();
@@ -975,6 +976,7 @@ impl Session {
         let Some((edit, snapshot)) = self.history.redo(current) else {
             return Effects::default();
         };
+        self.edits.clear();
         self.abandon(edit);
         self.restore(snapshot);
         self.touch();

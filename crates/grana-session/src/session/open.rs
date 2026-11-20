@@ -501,6 +501,7 @@ impl Session {
     pub(super) fn reset(&mut self) {
         self.measure.reset();
         self.tasks.clear();
+        self.edits.clear();
         self.labels_queue.clear();
         self.labels_failed.clear();
         self.abort_recipe();
@@ -510,6 +511,8 @@ impl Session {
         self.deferred = false;
         self.recut = None;
         self.message = None;
+        self.inquiry = None;
+        self.answer = None;
         self.discard_streamed();
         self.timeline = Timeline::new(30, 1.0);
         self.view = None;

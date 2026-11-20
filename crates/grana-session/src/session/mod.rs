@@ -64,7 +64,8 @@ use crate::view::{
     BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSignificance, BatchView,
     Held, HistoryView, ImportNote, IoView, Message, PlateView, SeriesView, StoreView, Transfer,
 };
-use crate::{Action, Analysis, Command, Series, Source};
+use crate::{Action, Analysis, Command, Inquiry, Series, Source};
+use edit::{Edits, Follow, Rollback};
 use field::{Fields, Recovered};
 use grana_pipeline::run::DetectRequest;
 use grana_pipeline::{
@@ -104,6 +105,8 @@ struct Pending {
     project: Project,
 }
 
+type Answer = Box<dyn FnOnce(&mut Session, Option<PathBuf>)>;
+
 #[derive(Default)]
 pub struct Effects {
     pub open_any: bool,
@@ -142,6 +145,8 @@ pub struct Session {
     failed: HashMap<BrickRequest, Failure>,
     bricks: Vec<(BrickRequest, PackedBrick)>,
     pending: Option<Pending>,
+    inquiry: Option<Inquiry>,
+    answer: Option<Answer>,
     loading: Option<String>,
     message: Option<Message>,
     project: Option<PathBuf>,
@@ -181,6 +186,7 @@ pub struct Session {
     export: Export,
     labels_queue: Vec<ObjectSetId>,
     labels_failed: Vec<String>,
+    edits: Edits,
     label_images: Vec<String>,
     resume: Vec<(ObjectSetId, ObjectSetId, i32)>,
     recut: Option<(ObjectSetId, SurfaceCut)>,
@@ -234,6 +240,8 @@ impl Session {
             failed: HashMap::new(),
             bricks: Vec::new(),
             pending: None,
+            inquiry: None,
+            answer: None,
             loading: None,
             message: None,
             project: None,
@@ -273,6 +281,7 @@ impl Session {
             export: Export::NATIVE,
             labels_queue: Vec::new(),
             labels_failed: Vec::new(),
+            edits: Edits::default(),
             label_images: Vec::new(),
             resume: Vec::new(),
             recut: None,
@@ -399,6 +408,52 @@ impl Session {
 
     pub fn pending(&self) -> usize {
         self.in_flight.len()
+    }
+
+    pub fn working(&self) -> bool {
+        self.loading.is_some() || !self.in_flight.is_empty() || self.running()
+    }
+
+    pub fn running(&self) -> bool {
+        !self.analysis.is_empty()
+            || !self.progress.is_empty()
+            || self.tasks.busy()
+            || self.edits.busy()
+            || self.stitch.as_ref().is_some_and(Stitch::busy)
+            || self.batch_running
+            || self.previewing()
+    }
+
+    pub(super) fn ask(
+        &mut self,
+        inquiry: Inquiry,
+        answer: impl FnOnce(&mut Session, Option<PathBuf>) + 'static,
+    ) {
+        assert!(
+            self.inquiry.is_none() && self.answer.is_none(),
+            "a session asks one inquiry at a time"
+        );
+        self.inquiry = Some(inquiry);
+        self.answer = Some(Box::new(answer));
+    }
+
+    pub fn take_inquiry(&mut self) -> Option<Inquiry> {
+        self.inquiry.take()
+    }
+
+    pub fn inquiry_pending(&self) -> bool {
+        self.inquiry.is_some()
+    }
+
+    pub fn answer_inquiry(&mut self, path: Option<PathBuf>) {
+        self.inquiry = None;
+        let Some(answer) = self.answer.take() else {
+            self.message = Some(Message::error(
+                "the answered inquiry no longer belongs to the session",
+            ));
+            return;
+        };
+        answer(self, path);
     }
     pub fn loading(&self) -> Option<&str> {
         self.loading.as_deref()
@@ -666,6 +721,8 @@ impl Session {
         }
         repaint |= stepped;
         repaint |= self.poll_analysis();
+        repaint |= self.poll_edits();
+        repaint |= self.poll_batch_scan();
         repaint |= self.poll_batch();
         repaint |= self.poll_stitch();
         repaint |= self.refresh_masks();

@@ -130,9 +130,11 @@ impl Session {
         }
         let mut repaint = false;
         let mut updates: Vec<(usize, Job, Update)> = Vec::new();
+        let mut budget = UPLOAD_BATCH;
         for (index, analysis) in self.analysis.iter().enumerate() {
             let job = analysis.job();
-            loop {
+            while budget > 0 {
+                budget -= 1;
                 match analysis.poll() {
                     Poll::Event(Event::Progress { time, done, total }) => {
                         updates.push((index, job, Update::Progress(time, done, total)));
@@ -262,6 +264,9 @@ impl Session {
                         break;
                     }
                 }
+            }
+            if budget == 0 {
+                break;
             }
         }
         let mut removed = Vec::new();

@@ -70,7 +70,9 @@ fn unproject(ndc: vec3<f32>) -> vec3<f32> {
 }
 
 fn lens_origin() -> vec3<f32> {
-    return frame.eye.xyz + frame.right.xyz * frame.lens.x + frame.up.xyz * frame.lens.y;
+    return frame.eye.xyz
+        + frame.right.xyz * (frame.lens.x * frame.projection.z)
+        + frame.up.xyz * (frame.lens.y * frame.projection.w);
 }
 
 fn camera_ray(ndc: vec2<f32>) -> CameraRay {

@@ -1,5 +1,6 @@
 mod access;
 mod command;
+mod dialog;
 mod document;
 mod history;
 mod input;
@@ -15,6 +16,7 @@ mod view;
 
 pub use access::Access;
 pub use command::{Action, Command};
+pub use dialog::{Filter, Inquiry, Kind as InquiryKind};
 pub use grana_analysis::localization::{
     Frc, GroupStat, Groups, LocalizationDepth, LocalizationFilter, LocalizationImage,
     LocalizationReport, LocalizationSpec, NeNa,

@@ -27,6 +27,10 @@ struct Running {
 }
 
 impl Stitch {
+    pub fn busy(&self) -> bool {
+        self.scanning.is_some() || self.running.is_some()
+    }
+
     pub fn view(&self) -> StitchView {
         let scan = self.scan.as_deref();
         StitchView {

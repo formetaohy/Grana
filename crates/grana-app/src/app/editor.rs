@@ -6,7 +6,7 @@ use grana_session::{Session, SessionView};
 
 use super::App;
 
-fn session_view<'a>(
+pub(super) fn session_view<'a>(
     session: &'a Session,
     export: Option<(u32, u32)>,
     export_message: Option<&str>,

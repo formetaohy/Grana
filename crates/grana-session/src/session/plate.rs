@@ -35,15 +35,14 @@ impl Session {
             return;
         };
         let name = format!("{}-plate.png", crate::slug(plate.name()));
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export the plate montage")
-            .set_file_name(name)
-            .add_filter("PNG", &["png"])
-            .save_file()
-        else {
-            return;
-        };
-        self.export_plate_montage(path);
+        self.ask(
+            Inquiry::save("Export the plate montage", name).filter("PNG", &["png"]),
+            |session, path| {
+                if let Some(path) = path {
+                    session.export_plate_montage(path);
+                }
+            },
+        );
     }
 
     pub fn export_plate_montage(&mut self, path: PathBuf) -> bool {

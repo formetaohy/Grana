@@ -10,9 +10,10 @@ use std::time::Instant;
 
 use grana_display::OutputSize;
 use grana_offline::{Destination, Pose};
-use grana_session::SessionView;
+use grana_session::{Inquiry, SessionView};
 
 use super::App;
+use super::editor::session_view;
 use crate::bricks::ImageBricks;
 
 pub(crate) enum Report {
@@ -197,15 +198,28 @@ impl App {
         } else {
             export.image
         };
-        let suggested = format!("{slug}-image.png");
         let language = self.workspace.language;
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(grana_i18n::app::save_image(language))
-            .set_file_name(suggested)
-            .add_filter(grana_i18n::app::png_8(language), &["png"])
-            .add_filter(grana_i18n::app::ome_tiff_16(language), &["tif", "tiff"])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save(
+                grana_i18n::app::save_image(language),
+                format!("{slug}-image.png"),
+            )
+            .filter(grana_i18n::app::png_8(language), &["png"])
+            .filter(grana_i18n::app::ome_tiff_16(language), &["tif", "tiff"]),
+            move |app, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                app.export_image(path, width);
+            },
+        );
+    }
+
+    fn export_image(&mut self, path: std::path::PathBuf, width: u32) {
+        if !self.export_ready() {
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
             return;
         };
         let size = self.output_size(width, false);
@@ -213,7 +227,7 @@ impl App {
         self.start_export(Plan {
             destination: Destination::Image { path },
             size,
-            transparent: export.transparent,
+            transparent: self.session.export().transparent,
             poses,
             fps: 0,
             region: scene.region,
@@ -227,37 +241,51 @@ impl App {
         let Some(scene) = self.session.scene() else {
             return;
         };
-        let export = self.session.export();
         let slug = grana_session::slug(scene.dataset.name());
-        let width = if export.image == 0 {
-            self.native_width()
-        } else {
-            export.image
-        };
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(grana_i18n::app::save_figure(self.workspace.language))
-            .set_file_name(format!("{slug}-figure.svg"))
-            .add_filter(
-                grana_i18n::app::svg_vector(self.workspace.language),
-                &["svg"],
+        let width = self.page_width();
+        let language = self.workspace.language;
+        self.ask(
+            Inquiry::save(
+                grana_i18n::app::save_figure(language),
+                format!("{slug}-figure.svg"),
             )
-            .add_filter(
-                grana_i18n::app::pdf_vector(self.workspace.language),
-                &["pdf"],
-            )
-            .save_file()
-        else {
+            .filter(grana_i18n::app::svg_vector(language), &["svg"])
+            .filter(grana_i18n::app::pdf_vector(language), &["pdf"]),
+            move |app, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                app.export_figure(path, width);
+            },
+        );
+    }
+
+    fn export_figure(&mut self, path: std::path::PathBuf, width: u32) {
+        if !self.export_ready() {
+            return;
+        }
+        let Some(scene) = self.session.scene() else {
             return;
         };
         let size = self.output_size(width, false);
+        let poses = vec![self.pose()];
         self.start_export(Plan {
             destination: Destination::Figure { path },
             size,
-            transparent: export.transparent,
-            poses: vec![self.pose()],
+            transparent: self.session.export().transparent,
+            poses,
             fps: 0,
             region: scene.region,
         });
+    }
+
+    fn page_width(&self) -> u32 {
+        let export = self.session.export();
+        if export.image == 0 {
+            self.native_width()
+        } else {
+            export.image
+        }
     }
 
     pub(super) fn begin_chart(&mut self) {
@@ -291,63 +319,61 @@ impl App {
         build: impl FnOnce(
             &SessionView<'_>,
             &grana_editor::Workspace,
-        ) -> Option<grana_editor::ChartPage>,
+        ) -> Option<grana_editor::ChartPage>
+        + Send
+        + 'static,
     ) {
         if !self.export_ready() {
             return;
         }
-        let prepared = {
-            let exporting = self.export.progress();
-            let export_message = self.output.clone();
-            let session = &self.session;
-            let view = SessionView {
-                access: session.access(),
-                revision: session.revision(),
-                scene: session.scene(),
-                measure: session.measure(),
-                measuring: session.measuring(),
-                timeline: session.timeline(),
-                jobs: session.progress(),
-                localizations: session.localizations(),
-                io: session.io(exporting, export_message, None),
-                batch: session.batch(),
-                stitch: session.stitch().map(|stitch| stitch.view()),
-                history: session.history(),
-                series: session.series(),
-                plate: session.plate(),
-                labels: session.label_images(),
-                views: session.views(),
-                recent: session.recent(),
-                import: session.import(),
-                recovery: session.recovery(),
-                export: session.export(),
-            };
-            self.session.scene().map(|scene| {
-                (
-                    build(&view, &self.workspace),
-                    scene.region,
-                    grana_session::slug(scene.dataset.name()),
-                )
-            })
-        };
-        let Some((page, region, slug)) = prepared else {
+        let Some(scene) = self.session.scene() else {
             self.set_output_message(grana_i18n::app::open_dataset_chart(self.workspace.language));
             return;
         };
-        let Some(page) = page else {
-            self.set_output_message(missing);
-            return;
-        };
+        let slug = grana_session::slug(scene.dataset.name());
         let language = self.workspace.language;
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(format!("{slug}-{stem}.svg"))
-            .add_filter(grana_i18n::app::svg_vector(language), &["svg"])
-            .add_filter(grana_i18n::app::pdf_vector(language), &["pdf"])
-            .save_file()
-        else {
-            return;
+        let missing = missing.to_string();
+        self.ask(
+            Inquiry::save(title, format!("{slug}-{stem}.svg"))
+                .filter(grana_i18n::app::svg_vector(language), &["svg"])
+                .filter(grana_i18n::app::pdf_vector(language), &["pdf"]),
+            move |app, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                if !app.export_page(path, build) {
+                    app.set_output_message(&missing);
+                }
+            },
+        );
+    }
+
+    fn export_page(
+        &mut self,
+        path: std::path::PathBuf,
+        build: impl FnOnce(
+            &SessionView<'_>,
+            &grana_editor::Workspace,
+        ) -> Option<grana_editor::ChartPage>,
+    ) -> bool {
+        if !self.export_ready() {
+            return true;
+        }
+        let App {
+            session,
+            workspace,
+            export,
+            output,
+            ..
+        } = self;
+        let view = session_view(session, export.progress(), output.as_deref(), None);
+        let Some(page) = build(&view, workspace) else {
+            return false;
         };
+        let Some(region) = session.scene().map(|scene| scene.region) else {
+            return false;
+        };
+        drop(view);
         let size = page.size();
         self.start_export(Plan {
             destination: Destination::Chart { path, page },
@@ -357,6 +383,7 @@ impl App {
             fps: 0,
             region,
         });
+        true
     }
 
     pub(super) fn begin_lineage(&mut self) {
@@ -374,27 +401,44 @@ impl App {
                 .filter(|set| set.tracks().is_some())
                 .or_else(|| scene.objects.iter().find(|set| set.tracks().is_some()))
                 .map(|set| {
-                    let tracks = set.tracks().expect("the tracked set carries its lineage");
                     (
                         set.id(),
-                        tracks.set().len(),
+                        set.tracks().map_or(0, |tracks| tracks.set().len()),
                         grana_session::slug(scene.dataset.name()),
-                        scene.region,
                     )
                 })
         };
-        let Some((set, tracks, slug, region)) = prepared else {
+        let Some((set, tracks, slug)) = prepared else {
             self.set_output_message(grana_i18n::app::open_tracked_set(self.workspace.language));
             return;
         };
         let language = self.workspace.language;
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(grana_i18n::app::save_lineage(language))
-            .set_file_name(format!("{slug}-lineage.svg"))
-            .add_filter(grana_i18n::app::svg_vector(language), &["svg"])
-            .add_filter(grana_i18n::app::pdf_vector(language), &["pdf"])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save(
+                grana_i18n::app::save_lineage(language),
+                format!("{slug}-lineage.svg"),
+            )
+            .filter(grana_i18n::app::svg_vector(language), &["svg"])
+            .filter(grana_i18n::app::pdf_vector(language), &["pdf"]),
+            move |app, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                app.export_lineage(path, set, tracks);
+            },
+        );
+    }
+
+    fn export_lineage(
+        &mut self,
+        path: std::path::PathBuf,
+        set: grana_scene::ObjectSetId,
+        tracks: usize,
+    ) {
+        if !self.export_ready() {
+            return;
+        }
+        let Some(region) = self.session.scene().map(|scene| scene.region) else {
             return;
         };
         let size =
@@ -443,12 +487,22 @@ impl App {
                 &["mp4"][..],
             )
         };
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(suggested)
-            .add_filter(filter, extensions)
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save(title, suggested).filter(filter, extensions),
+            move |app, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                app.export_movie(path, transparent, width);
+            },
+        );
+    }
+
+    fn export_movie(&mut self, path: std::path::PathBuf, transparent: bool, width: u32) {
+        if !self.export_ready() {
+            return;
+        }
+        let Some(region) = self.session.scene().map(|scene| scene.region) else {
             return;
         };
         let poses = grana_offline::poses(self.session.timeline());
@@ -460,7 +514,7 @@ impl App {
             transparent,
             poses,
             fps,
-            region: scene.region,
+            region,
         });
     }
 
@@ -471,37 +525,50 @@ impl App {
         let Some(scene) = self.session.scene() else {
             return;
         };
-        let export = self.session.export();
         let frames = scene.frame_count();
         if frames == 0 {
             self.set_output_message(grana_i18n::app::no_time_point(self.workspace.language));
             return;
         }
         let stem = grana_session::slug(scene.dataset.name());
-        let camera = self.camera.state();
-        let Some(parent) = rfd::FileDialog::new()
-            .set_title(grana_i18n::app::choose_sequence_folder(
+        let width = self.page_width();
+        self.ask(
+            Inquiry::folder(grana_i18n::app::choose_sequence_folder(
                 self.workspace.language,
-            ))
-            .pick_folder()
-        else {
+            )),
+            move |app, path| {
+                let Some(parent) = path else {
+                    return;
+                };
+                app.export_sequence(parent, stem, width, frames);
+            },
+        );
+    }
+
+    fn export_sequence(
+        &mut self,
+        parent: std::path::PathBuf,
+        stem: String,
+        width: u32,
+        frames: u32,
+    ) {
+        if !self.export_ready() {
+            return;
+        }
+        let Some(region) = self.session.scene().map(|scene| scene.region) else {
             return;
         };
-        let width = if export.image == 0 {
-            self.native_width()
-        } else {
-            export.image
-        };
         let directory = parent.join(format!("{stem}-sequence"));
+        let camera = self.camera.state();
         let poses = (0..frames).map(|time| Pose { time, camera }).collect();
         let size = self.output_size(width, false);
         self.start_export(Plan {
             destination: Destination::Sequence { directory, stem },
             size,
-            transparent: export.transparent,
+            transparent: self.session.export().transparent,
             poses,
             fps: 0,
-            region: scene.region,
+            region,
         });
     }
 

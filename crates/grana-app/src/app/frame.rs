@@ -207,19 +207,9 @@ impl App {
         let engine = self.engine.as_ref();
         let info = self.frame_info();
         self.pending_engine.is_some()
-            || self.session.batch().is_some_and(|batch| batch.running)
             || self.workspace.playback.playing
-            || self.session.loading().is_some()
-            || self.session.previewing()
-            || self.session.transferring()
-            || self.session.writing()
-            || !self.session.progress().is_empty()
-            || self.session.pending() > 0
-            || self.session.measuring()
-            || self.session.listing()
-            || self.session.materializing()
-            || self.session.plotting()
-            || self.session.deriving()
+            || self.session.working()
+            || self.session.inquiry_pending()
             || engine.is_some_and(|engine| engine.requests_pending() || engine.pick_pending())
             || (self.session.scene().is_some() && info.view.resident < info.view.demand)
     }

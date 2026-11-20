@@ -5,6 +5,7 @@ use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, Summary, cropped_levels};
 use grana_volume::Level;
 
+use crate::Inquiry;
 use crate::loader::Loader;
 use crate::task::{Poll, Progress};
 
@@ -176,32 +177,46 @@ impl super::Session {
         };
         let frames = scene.frame_count();
         let drift = (0..frames).map(|time| scene.drift_warps(time)).collect();
+        let placement = scene.dataset.pyramid().placement();
+        let calibration = scene.dataset.pyramid().calibration();
         let name = scene.dataset.name().to_string();
         let suggested = format!("{}.ome.zarr", crate::slug(&name));
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export the dataset as an OME-Zarr or OME-TIFF archive")
-            .set_file_name(&suggested)
-            .add_filter("OME-Zarr", &["zarr"])
-            .add_filter("OME-TIFF pyramid", &["tif", "tiff"])
-            .save_file()
-        else {
+        self.ask(
+            Inquiry::save(
+                "Export the dataset as an OME-Zarr or OME-TIFF archive",
+                suggested,
+            )
+            .filter("OME-Zarr", &["zarr"])
+            .filter("OME-TIFF pyramid", &["tif", "tiff"]),
+            move |session, path| {
+                let Some(path) = path else {
+                    return;
+                };
+                session.write_dataset(Request {
+                    path,
+                    name,
+                    channels,
+                    layers,
+                    labels,
+                    levels: cropped.levels,
+                    origins: cropped.origins,
+                    placement,
+                    frames,
+                    interval,
+                    calibration,
+                    drift,
+                });
+            },
+        );
+    }
+
+    fn write_dataset(&mut self, request: Request) {
+        if self.tasks.writing() {
+            self.message = Some(crate::Message::error("an export is already running"));
             return;
-        };
+        }
         self.message = None;
-        self.tasks.dataset = Some(DatasetExport::start(Request {
-            path,
-            name,
-            channels,
-            layers,
-            labels,
-            levels: cropped.levels,
-            origins: cropped.origins,
-            placement: scene.dataset.pyramid().placement(),
-            frames,
-            interval,
-            calibration: scene.dataset.pyramid().calibration(),
-            drift,
-        }));
+        self.tasks.dataset = Some(DatasetExport::start(request));
     }
 
     pub(super) fn finish_dataset(&mut self, outcome: Result<Summary, String>) {

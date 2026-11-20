@@ -320,13 +320,14 @@ impl Image {
         let format = self.channel_format(channel)?;
         let extent = self.level_extent(level)?;
         let info = self.pyramid.level(level);
+        let sampling = self.pyramid.channels()[channel].sampling();
         let limits = [extent.x(), extent.y(), extent.z()];
         let plan = align::plan(ranges, info, warp, limits);
         if plan.source().iter().any(|range| range.start >= range.end) {
             return Ok(align::zeros(format, ranges));
         }
         let data = self.region_at(time, level, channel, plan.source())?;
-        Ok(align::resample(&data, &plan, ranges))
+        Ok(align::resample(&data, &plan, ranges, sampling))
     }
 
     fn channel_format(&self, channel: usize) -> Result<VoxelFormat, Error> {

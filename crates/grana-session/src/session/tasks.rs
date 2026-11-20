@@ -167,6 +167,7 @@ pub(super) struct Tasks {
     pub package: Option<Package>,
     pub dataset: Option<DatasetExport>,
     pub montage: Option<Montage>,
+    pub batch: Option<Progress<Result<super::batch::Scan, String>>>,
     pub superres: Option<Writer>,
     previews: Option<Previews>,
     autosave: Option<Progress<Result<RecoveryEntry, String>>>,
@@ -457,6 +458,18 @@ impl Tasks {
         repaint
     }
 
+    pub(super) fn busy(&self) -> bool {
+        self.measure.is_some()
+            || self.rows.is_some()
+            || self.materialize.is_some()
+            || self.plot.is_some()
+            || self.writing()
+            || self.transferring()
+            || self.autosaving()
+            || self.batch.is_some()
+            || !self.channels.is_empty()
+    }
+
     pub(super) fn writing(&self) -> bool {
         self.labels.is_some()
             || self.csv.is_some()
@@ -614,6 +627,7 @@ impl Tasks {
         self.package = None;
         self.dataset = None;
         self.montage = None;
+        self.batch = None;
         self.superres = None;
         self.autosave = None;
         self.channels.clear();
