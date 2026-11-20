@@ -293,7 +293,7 @@ pub(crate) fn calibration<'a>(
     let scale = (0.90 + 0.10 * spatial).max(0.5);
     let slide = (1.0 - spatial) * -14.0;
     let width = (stage.width() - 64.0).clamp(420.0, 560.0);
-    let height = 292.0;
+    let height = 286.0;
     let rect = Rect::from_center_size(
         stage.center() + Vec2::new(0.0, slide),
         Vec2::new(width * scale, height * scale),
@@ -352,7 +352,6 @@ pub(crate) fn calibration<'a>(
         )
         .named("calibration.cell");
     let field_width = (width - 40.0 - 120.0 - 16.0 - 16.0) / 3.0;
-    let caption_style = TextStyle::new(font, palette.on_surface_variant);
     let mut fields = Vec::with_capacity(3);
     for (axis, text) in sheet.fields.iter().enumerate() {
         let name = format!("calibration.{}", AXES[axis].to_ascii_lowercase());
@@ -372,7 +371,7 @@ pub(crate) fn calibration<'a>(
                 text: text.to_string(),
             });
         let known_axis = known[axis];
-        let bar = grana_ui::canvas(Length::Fixed(field_width), 4.0).view(
+        let ruler = grana_ui::canvas(Length::Fixed(field_width), 8.0).view(
             known_axis,
             move |_, painter, info| {
                 paint_provenance(painter, info.rect, known_axis, palette);
@@ -398,26 +397,17 @@ pub(crate) fn calibration<'a>(
                         },
                     ),
                     field,
-                    bar,
+                    ruler,
                 ]),
         );
     }
-    let unit = grana_ui::canvas(Length::Fill, 14.0).view_static(move |painter, info| {
-        painter.text_in(
-            info.rect,
-            "µm",
-            caption_style.aligned(Align::End),
-            Align::Center,
-        );
-    });
-    let fields_column = grana_ui::column()
-        .width(Length::Fill)
-        .gap(6.0)
-        .children([grana_ui::row().gap(8.0).children(fields), unit]);
-    let body = grana_ui::row()
-        .gap(16.0)
-        .align(Align::Center)
-        .children([diagram, fields_column]);
+    let body = grana_ui::row().gap(16.0).align(Align::Center).children([
+        diagram,
+        grana_ui::row()
+            .width(Length::Fill)
+            .gap(8.0)
+            .children(fields),
+    ]);
     let actions = grana_ui::row().gap(8.0).children([
         crate::view::button_with(
             ctx,
@@ -512,6 +502,11 @@ fn paint_voxel_cell(
         };
         if known[axis] {
             painter.segment(origin, tip, 2.0, color);
+            let direction = (tip - origin).normalize_or_zero();
+            let perpendicular = Vec2::new(-direction.y, direction.x) * 4.0;
+            for point in [origin, tip] {
+                painter.segment(point - perpendicular, point + perpendicular, 1.5, color);
+            }
         } else {
             dashed(painter, origin, tip, 2.0, color);
         }
@@ -534,10 +529,28 @@ fn paint_provenance(
     let y = rect.center().y;
     let from = Vec2::new(rect.min.x, y);
     let to = Vec2::new(rect.max.x, y);
-    if known {
-        painter.segment(from, to, 2.0, palette.primary);
-    } else {
-        dashed(painter, from, to, 2.0, palette.warning);
+    if !known {
+        dashed(painter, from, to, 1.5, palette.warning);
+        return;
+    }
+    let color = palette.primary;
+    painter.segment(from, to, 1.5, color);
+    for point in [from, to] {
+        painter.segment(
+            Vec2::new(point.x, y - 4.0),
+            Vec2::new(point.x, y + 4.0),
+            1.5,
+            color,
+        );
+    }
+    for step in 1..5 {
+        let x = from.x + (to.x - from.x) * step as f32 / 5.0;
+        painter.segment(
+            Vec2::new(x, y - 2.0),
+            Vec2::new(x, y + 2.0),
+            1.0,
+            color.with_alpha(0.7),
+        );
     }
 }
 

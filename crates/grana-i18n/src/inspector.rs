@@ -28,7 +28,7 @@ labels! {
     no_field_of_view => "no field of view" / "无视野";
     series => "Series" / "序列";
     scene => "Scene" / "场景";
-    voxel_size => "Voxel size" / "体素尺寸";
+    voxel_size => "Voxel size (µm)" / "体素尺寸（µm）";
 
     iterations => "Iterations" / "迭代次数";
     emission => "Emission" / "发射波长";
