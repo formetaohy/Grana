@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+﻿use std::collections::HashMap;
 
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
@@ -6,7 +6,7 @@ use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatist
 use grana_volume::{Level, VoxelData};
 use rayon::prelude::*;
 
-use crate::table::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
+use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 
 const RELAX_ITERATIONS: usize = 8;
 const RELAX_TRIANGLE_FLOOR: usize = 12;

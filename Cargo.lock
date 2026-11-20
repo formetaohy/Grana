@@ -3493,6 +3493,7 @@ name = "grana-archive"
 version = "0.2.2"
 dependencies = [
  "grana-volume",
+ "serde_json",
 ]
 
 [[package]]

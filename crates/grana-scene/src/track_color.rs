@@ -58,7 +58,7 @@ impl TrackColor {
                         node.object(),
                     ));
                 }
-                aggregate.apply(&values)
+                aggregate.apply(&values).present().unwrap_or(f32::NAN)
             }
         }
     }

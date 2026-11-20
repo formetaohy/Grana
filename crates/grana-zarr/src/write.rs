@@ -489,7 +489,8 @@ fn shape(level: Level, frames: u32, channels: usize) -> Vec<u64> {
 }
 
 fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
-    let axes = crate::schema::axes();
+    let measured = spec.calibration.measured();
+    let axes = crate::schema::axes(measured);
     let matrix = crate::schema::placement(spec.levels[0], 3);
     let inverse = crate::schema::inverse(matrix);
     let rotated = crate::schema::rotated(spec.levels[0], 3);
@@ -500,7 +501,13 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
         .enumerate()
         .map(|(level, value)| {
             let basis = value.basis();
-            let spacing = [basis.step(0), basis.step(1), basis.step(2)].map(f64::from);
+            let step = [basis.step(0), basis.step(1), basis.step(2)].map(f64::from);
+            let spacing = if measured {
+                step
+            } else {
+                let base = spec.levels[0].voxel().map(f64::from);
+                [0, 1, 2].map(|axis| step[axis] / base[axis])
+            };
             let center = value.voxel_center([0.0, 0.0, 0.0]);
             let point =
                 [0, 1, 2].map(|axis| f64::from(spec.placement[axis]) + f64::from(center[axis]));
@@ -536,10 +543,10 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                     tint(channel.tint[2]),
                 ),
                 "window": {
-                    "min": f64::from(channel.intensity.min()),
-                    "max": f64::from(channel.intensity.max()),
-                    "start": f64::from(channel.intensity.min()),
-                    "end": f64::from(channel.intensity.max()),
+                    "min": f64::from(channel.data.min()),
+                    "max": f64::from(channel.data.max()),
+                    "start": f64::from(channel.window.min()),
+                    "end": f64::from(channel.window.max()),
                 },
             })
         })
@@ -555,6 +562,7 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                 matrix,
                 dropped: vec![0, 1],
                 spatial: 3,
+                measured,
             }),
         ),
         "omero": { "channels": channels },
@@ -563,7 +571,7 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
     attributes.insert("ome".to_string(), ome);
     attributes.insert(
         grana_archive::ANNOTATION.to_string(),
-        json!({ "calibration": grana_archive::calibration_name(spec.calibration) }),
+        Value::Object(grana_archive::annotation_values(spec.calibration)),
     );
     attributes
 }

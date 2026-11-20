@@ -1,11 +1,11 @@
-use std::ops::Range;
+﻿use std::ops::Range;
 
 use glam::Vec3;
 use grana_geometry::MeshVertex;
 
 use super::tile::Contact;
 use super::{EMPTY, OUTSIDE, Tile, find};
-use crate::table::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
+use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 
 const WORD: usize = 64;
 const SHIFT: usize = 1;

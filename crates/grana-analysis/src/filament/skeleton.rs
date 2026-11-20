@@ -21,6 +21,24 @@ pub(super) fn thin(mask: &mut [u8], distance: &[u16], grid: &Grid) {
     }
 }
 
+pub(super) fn rejects_sheet(mask: &[u8], grid: &Grid, distance: &[u16]) -> bool {
+    let mut foreground = 0usize;
+    let mut slabs = 0usize;
+    let stride = grid.stride;
+    let unit = grid.unit();
+    for index in 0..mask.len() {
+        if mask[index] == 0 {
+            continue;
+        }
+        foreground += 1;
+        let open = neighbour::faces(mask, index, stride).count_ones();
+        if open <= 2 && grid.radius(distance[index]) >= 1.5 * unit {
+            slabs += 1;
+        }
+    }
+    foreground > 0 && 2 * slabs > foreground
+}
+
 fn ordered(mask: &[u8], distance: &[u16]) -> Vec<u32> {
     const BUCKETS: usize = 1 << 16;
     let mut offsets = vec![0u32; BUCKETS + 1];

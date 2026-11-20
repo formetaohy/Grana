@@ -255,10 +255,21 @@ fn summarises_robust_statistics() {
     assert_eq!(rank.median_b(), 5.0);
 
     let median = Aggregate::quantile(50).expect("the median is a supported quantile");
-    assert_eq!(median.apply(&[1.0, 2.0, 3.0, 4.0]), 2.5);
-    assert_eq!(Aggregate::MAD.apply(&[1.0, 2.0, 3.0, 4.0]), 1.0);
+    let measured = |aggregate: Aggregate, values: &[f32]| {
+        aggregate
+            .apply(values)
+            .present()
+            .expect("the aggregate measures these values")
+    };
+    assert_eq!(measured(median, &[1.0, 2.0, 3.0, 4.0]), 2.5);
+    assert_eq!(measured(Aggregate::MAD, &[1.0, 2.0, 3.0, 4.0]), 1.0);
+    assert_eq!(
+        Aggregate::MAD.apply(&[f32::NAN]),
+        grana_measure::Measured::Absent,
+        "an aggregate over absent values reports no support rather than a NaN"
+    );
     let quartile = Aggregate::quantile(25).expect("the lower quartile is supported");
-    assert_eq!(quartile.apply(&[1.0, 2.0, 3.0, 4.0]), 1.75);
+    assert_eq!(measured(quartile, &[1.0, 2.0, 3.0, 4.0]), 1.75);
     assert_eq!(Aggregate::parse("median"), Some(median));
     assert_eq!(Aggregate::parse("p90"), Aggregate::quantile(90));
     assert_eq!(Aggregate::from_index(quartile.index()), Some(quartile));

@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 grana-volume = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

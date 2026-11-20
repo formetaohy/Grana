@@ -6,7 +6,7 @@ mod volume;
 
 use std::sync::Arc;
 
-use grana_geometry::{Mesh, push_sphere, push_tube};
+use grana_geometry::Mesh;
 use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
 use grana_store::SpillStore;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
@@ -209,6 +209,12 @@ impl FilamentScan {
         );
         self.tube.copy_from_slice(&self.mask);
         volume::distance(&self.mask, &self.grid, &mut self.distance);
+        if skeleton::rejects_sheet(&self.mask, &self.grid, &self.distance) {
+            return Err(
+                "the filament mask holds a sheet, and a sheet carries no thinned line to trace"
+                    .to_string(),
+            );
+        }
         skeleton::thin(&mut self.mask, &self.distance, &self.grid);
         let traced = graph::trace(
             &self.mask,
@@ -247,20 +253,13 @@ impl FilamentScan {
         let mut indices = Vec::new();
         for (index, filament) in traced.iter().enumerate() {
             let object = index as u32;
-            for path in &filament.paths {
-                let points = path.iter().map(|point| point.position).collect::<Vec<_>>();
-                let radii = path.iter().map(|point| point.radius).collect::<Vec<_>>();
-                push_tube(&mut vertices, &mut indices, &points, &radii, object);
-            }
-            for joint in &filament.joints {
-                push_sphere(
-                    &mut vertices,
-                    &mut indices,
-                    joint.position,
-                    joint.radius,
-                    object,
-                );
-            }
+            let Some((mut shaped, mut faces)) = graph::mesh(filament, object) else {
+                return Err(format!(
+                    "the filament {index} outruns the cells an implicit body may hold"
+                ));
+            };
+            vertices.append(&mut shaped);
+            indices.append(&mut faces);
         }
         let objects = traced
             .into_iter()

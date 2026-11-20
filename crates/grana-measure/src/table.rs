@@ -11,6 +11,7 @@ use crate::filter::Filter;
 use crate::frame::{Frame, FrameSource, Kind};
 use crate::lasso::Lasso;
 use crate::mask::Mask;
+use crate::measured::Measured;
 use crate::metric::{Measurement, TrackMeasurement};
 use crate::relation::{RelationField, RelationRow};
 use crate::sample::Sample;
@@ -20,6 +21,10 @@ pub const NEIGHBOUR_KEY: &str = "nearest_distance_um";
 pub const NEIGHBOUR_LABEL: &str = "nearest neighbour";
 
 pub type ColumnValues = Vec<(usize, Arc<Vec<f32>>)>;
+
+pub(crate) fn stored(measured: Measured) -> f32 {
+    measured.present().unwrap_or(f32::NAN)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -164,7 +169,7 @@ impl Aggregate {
             AggregateKind::Sum => "Sum".to_string(),
             AggregateKind::Minimum => "Min".to_string(),
             AggregateKind::Maximum => "Max".to_string(),
-            AggregateKind::Deviation => "SD (σ)".to_string(),
+            AggregateKind::Deviation => "SD (蟽)".to_string(),
             AggregateKind::Mad => "MAD".to_string(),
             AggregateKind::Quantile if self.percent == 50 => "Median".to_string(),
             AggregateKind::Quantile => format!("P{}", self.percent),
@@ -190,51 +195,27 @@ impl Aggregate {
             .find(|aggregate| aggregate.key() == key)
     }
 
-    pub fn apply(self, values: &[f32]) -> f32 {
-        let finite = || values.iter().copied().filter(|value| value.is_finite());
-        match self.kind {
-            AggregateKind::Mean => {
-                let mut count = 0u64;
-                let mut sum = 0.0f64;
-                for value in finite() {
-                    count += 1;
-                    sum += f64::from(value);
-                }
-                if count == 0 {
-                    f32::NAN
-                } else {
-                    (sum / count as f64) as f32
-                }
-            }
-            AggregateKind::Sum => {
-                let mut count = 0u64;
-                let mut sum = 0.0f64;
-                for value in finite() {
-                    count += 1;
-                    sum += f64::from(value);
-                }
-                if count == 0 { f32::NAN } else { sum as f32 }
-            }
-            AggregateKind::Minimum => finite().fold(f32::NAN, f32::min),
-            AggregateKind::Maximum => finite().fold(f32::NAN, f32::max),
-            AggregateKind::Deviation => {
-                let collected = finite().map(f64::from).collect::<Vec<_>>();
-                let Some(sample) = Sample::new(collected) else {
-                    return f32::NAN;
-                };
-                sample.deviation().unwrap_or(0.0) as f32
-            }
-            AggregateKind::Mad => {
-                let collected = finite().map(f64::from).collect::<Vec<_>>();
-                Sample::new(collected).map_or(f32::NAN, |sample| sample.mad() as f32)
-            }
-            AggregateKind::Quantile => {
-                let collected = finite().map(f64::from).collect::<Vec<_>>();
-                Sample::new(collected).map_or(f32::NAN, |sample| {
-                    sample.quantile(self.percent as f64) as f32
-                })
-            }
-        }
+    pub fn apply(self, values: &[f32]) -> Measured {
+        let collected = values
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+            .map(f64::from)
+            .collect::<Vec<_>>();
+        let Some(sample) = Sample::new(collected) else {
+            return Measured::Absent;
+        };
+        let support = u32::try_from(sample.len()).unwrap_or(u32::MAX);
+        let value = match self.kind {
+            AggregateKind::Mean => sample.mean(),
+            AggregateKind::Sum => sample.mean() * sample.len() as f64,
+            AggregateKind::Minimum => sample.minimum(),
+            AggregateKind::Maximum => sample.maximum(),
+            AggregateKind::Deviation => sample.deviation().unwrap_or(0.0),
+            AggregateKind::Mad => sample.mad(),
+            AggregateKind::Quantile => sample.quantile(self.percent as f64),
+        };
+        Measured::new(value as f32, support)
     }
 
     pub(crate) fn of_sample(self, sample: &Sample) -> (f64, Option<(f64, f64)>) {
@@ -923,7 +904,7 @@ impl Table {
             .into_iter()
             .map(|rows| {
                 rows.iter()
-                    .map(|values| self.aggregate.apply(values))
+                    .map(|values| stored(self.aggregate.apply(values)))
                     .collect()
             })
             .collect()
@@ -1190,7 +1171,7 @@ impl Table {
     fn aggregate_columns(&self, collected: Vec<Vec<f32>>) -> Vec<f32> {
         collected
             .iter()
-            .map(|values| self.aggregate.apply(values))
+            .map(|values| stored(self.aggregate.apply(values)))
             .collect()
     }
 
@@ -1233,7 +1214,7 @@ impl Table {
             for object in 0..frame.objects().count() {
                 collected.push(measurement.value(frame.objects(), object));
             }
-            aggregated.insert(frame.time(), self.aggregate.apply(&collected));
+            aggregated.insert(frame.time(), stored(self.aggregate.apply(&collected)));
         });
         self.observations
             .iter()
@@ -1254,7 +1235,7 @@ impl Table {
             for object in 0..frame.objects().count() {
                 collected.push(field.value(frame.relations()[index], object));
             }
-            aggregated.insert(frame.time(), self.aggregate.apply(&collected));
+            aggregated.insert(frame.time(), stored(self.aggregate.apply(&collected)));
         });
         self.observations
             .iter()
@@ -1400,7 +1381,7 @@ impl Table {
             .map(|observation| {
                 self.key(*observation)
                     .and_then(|key| buckets.get(&key))
-                    .map_or(f32::NAN, |values| self.aggregate.apply(values))
+                    .map_or(f32::NAN, |values| stored(self.aggregate.apply(values)))
             })
             .collect()
     }
@@ -1456,6 +1437,15 @@ impl Table {
             "the cell lies inside the table"
         );
         self.materialize(column)[row]
+    }
+
+    pub fn measured(&self, row: usize, column: usize) -> Measured {
+        let value = self.value(row, column);
+        if value.is_finite() {
+            Measured::new(value, 1)
+        } else {
+            Measured::Absent
+        }
     }
 
     pub fn observation(&self, row: usize) -> Observation {

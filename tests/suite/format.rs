@@ -93,7 +93,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [0.2, 0.7, 1.0],
-        intensity: Intensity::new(0.0, 4096.0),
+        data: Intensity::new(0.0, 4096.0),
+        window: Intensity::new(0.0, 4096.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let scale = 1u32 << block.level;
@@ -154,6 +155,16 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         image.pyramid().calibration(),
         Calibration::Assumed,
         "the archive keeps the calibration it was given"
+    );
+    assert_eq!(
+        image.pyramid().channels()[0].intensity(),
+        Intensity::new(0.0, 4096.0),
+        "the archive keeps the intensity range it was given"
+    );
+    assert_eq!(
+        image.pyramid().channels()[0].window(),
+        Some(Intensity::new(0.0, 4096.0)),
+        "the archive keeps the display window it was given"
     );
     for (axis, value) in image.pyramid().placement().into_iter().enumerate() {
         let expected = [1.5, -2.0, 3.0][axis];
@@ -217,7 +228,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                intensity: Intensity::new(0.0, 255.0),
+                data: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
             }],
             levels: image.pyramid().levels().to_vec(),
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],
@@ -265,7 +277,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                intensity: Intensity::new(0.0, 255.0),
+                data: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -309,7 +322,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                intensity: Intensity::new(0.0, 255.0),
+                data: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
             }],
             levels: vec![flipped],
             origins: vec![[0, 0, 0]],
@@ -344,7 +358,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                intensity: Intensity::new(0.0, 255.0),
+                data: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
             }],
             levels: shallow.to_vec(),
             origins: vec![[0, 0, 0]; 2],
@@ -391,7 +406,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                     index: 0,
                     name: "signal".to_string(),
                     tint: [1.0, 1.0, 1.0],
-                    intensity: Intensity::new(0.0, 20_000_000.0),
+                    data: Intensity::new(0.0, 20_000_000.0),
+                    window: Intensity::new(0.0, 20_000_000.0),
                 }],
                 levels: wide_image.pyramid().levels().to_vec(),
                 origins: vec![[0, 0, 0]; wide_image.pyramid().level_count()],
@@ -448,7 +464,8 @@ fn writes_a_sixteen_bit_ome_tiff() {
             "Green" => [0.0, 1.0, 0.0],
             _ => [0.0, 0.0, 1.0],
         },
-        intensity: Intensity::new(0.0, 1.0),
+        data: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     });
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;
@@ -531,7 +548,8 @@ fn writes_a_sharded_ome_zarr_level() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
-        intensity: Intensity::new(0.0, 1.0),
+        data: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;
@@ -633,12 +651,14 @@ fn write_zarr(root: &std::path::Path) {
         WriteChannel {
             name: "DAPI",
             tint: [0.0, 0.0, 1.0],
-            intensity: Intensity::new(0.0, 2048.0),
+            data: Intensity::new(0.0, 2048.0),
+            window: Intensity::new(0.0, 2048.0),
         },
         WriteChannel {
             name: "GFP",
             tint: [0.0, 1.0, 0.0],
-            intensity: Intensity::new(0.0, 1024.0),
+            data: Intensity::new(0.0, 1024.0),
+            window: Intensity::new(0.0, 1024.0),
         },
     ];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
@@ -829,7 +849,8 @@ fn writes_and_reads_a_tiny_ome_zarr() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
-        intensity: Intensity::new(0.0, 255.0),
+        data: Intensity::new(0.0, 255.0),
+        window: Intensity::new(0.0, 255.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![
@@ -898,7 +919,8 @@ fn round_trips_a_rotated_basis_through_ome_tiff() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
-        intensity: Intensity::new(0.0, 1.0),
+        data: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![block.level as f32; block.voxels()]))
@@ -950,6 +972,81 @@ fn round_trips_a_rotated_basis_through_ome_tiff() {
             "level {index} keeps its origin: {read:?} against {written:?}"
         );
     }
+
+    let plain = temp.path().join("uncalibrated.ome.tif");
+    let uncalibrated = [Level::new(
+        Extent::new(8, 6, 4),
+        Spacing::new(1.0, 1.0, 1.0),
+    )];
+    let mut progress = |_, _| {};
+    grana_tiff::write_archive(
+        &plain,
+        &mut ImageSpec {
+            name: "plain",
+            channels: &channels,
+            levels: &uncalibrated,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::F32,
+            calibration: Calibration::Uncalibrated,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("an uncalibrated basis writes an OME-TIFF");
+    let bytes = std::fs::read(&plain).expect("the uncalibrated archive reads back");
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(1 << 16)]).into_owned();
+    assert!(
+        !text.contains("PhysicalSizeX") && !text.contains("PositionX"),
+        "an uncalibrated archive writes no physical size and no plane position"
+    );
+    let reopened = grana_tiff::Image::open(&plain, 0).expect("the uncalibrated archive opens");
+    assert_eq!(
+        reopened.pyramid().calibration(),
+        Calibration::Uncalibrated,
+        "an uncalibrated archive reads back uncalibrated"
+    );
+
+    let unmeasured = temp.path().join("uncalibrated.ome.zarr");
+    let mut progress = |_, _| {};
+    write_image(
+        &unmeasured,
+        &mut ImageSpec {
+            name: "plain",
+            channels: &channels,
+            levels: &uncalibrated,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::F32,
+            calibration: Calibration::Uncalibrated,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &std::sync::atomic::AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("an uncalibrated basis writes an OME-Zarr");
+    let attributes = std::fs::read_to_string(unmeasured.join("zarr.json"))
+        .expect("the uncalibrated group metadata reads back");
+    let metadata: serde_json::Value =
+        serde_json::from_str(&attributes).expect("the group metadata is json");
+    let text = metadata.to_string();
+    assert!(
+        !text.contains("micrometer"),
+        "an uncalibrated archive declares no physical unit"
+    );
+    let scale =
+        metadata["attributes"]["ome"]["multiscales"][0]["datasets"][0]["coordinateTransformations"]
+            [0]["scale"]
+            .as_array()
+            .expect("the level declares its scale");
+    assert_eq!(
+        scale[2].as_f64(),
+        Some(1.0),
+        "an uncalibrated archive records the downsample factor of its finest level"
+    );
 }
 
 fn write_derived_zarr(root: &std::path::Path, value: f32) {
@@ -960,7 +1057,8 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
     let channels = [WriteChannel {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
-        intensity: Intensity::new(0.0, 255.0),
+        data: Intensity::new(0.0, 255.0),
+        window: Intensity::new(0.0, 255.0),
     }];
     let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
         let mut values = Vec::with_capacity(block.voxels());
@@ -1216,7 +1314,8 @@ fn exports_a_region_of_the_channels_and_labels() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                intensity: Intensity::new(0.0, 1000.0),
+                data: Intensity::new(0.0, 1000.0),
+                window: Intensity::new(0.0, 1000.0),
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -1598,7 +1697,8 @@ fn writes_and_reads_a_label_image() {
     let channels = [WriteChannel {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
-        intensity: Intensity::new(0.0, 1.0),
+        data: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     }];
     let image_fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![0.0; block.voxels()]))
@@ -2006,7 +2106,8 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                intensity: Intensity::new(0.0, 10.0),
+                data: Intensity::new(0.0, 10.0),
+                window: Intensity::new(0.0, 10.0),
             }],
             levels,
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],

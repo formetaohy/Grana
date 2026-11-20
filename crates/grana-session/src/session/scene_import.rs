@@ -1,8 +1,8 @@
 use glam::Vec3;
-use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape, ends, push_graph};
+use grana_geometry::{Ball, Bounds, Mesh, MeshVertex, SurfaceShape, Union, ends};
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentSweep, FilamentTopology, IntensityTable,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
+    SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_readout::{
     Imported, ImportedFilament, ImportedFrame, ImportedKind, ImportedObject, ImportedSample,
@@ -414,15 +414,14 @@ fn filaments(
                 continue;
             }
             let index = objects.len() as u32;
-            let branches = push_graph(
-                &mut vertices,
-                &mut indices,
-                filament.positions(),
-                filament.radii(),
-                &edges,
-                index,
-            );
-            objects.push(measures(filament, &edges, branches)?);
+            let balls = balls(filament, &edges);
+            let Some(union) = Union::new(balls.clone()) else {
+                continue;
+            };
+            let (mut shaped, mut faces) = union.mesh(index);
+            vertices.append(&mut shaped);
+            indices.append(&mut faces);
+            objects.push(measures(filament, &edges, &union)?);
             let samples = match filament.intensities() {
                 Some(samples) if samples.len() == channels => {
                     samples.iter().copied().map(statistics_sample).collect()
@@ -454,14 +453,46 @@ fn joins(positions: &[[f32; 3]], edge: [u32; 2]) -> bool {
     edge[0] != edge[1] && first != second
 }
 
+fn balls(filament: &ImportedFilament, edges: &[[u32; 2]]) -> Vec<Ball> {
+    let positions = filament.positions();
+    let radii = filament.radii();
+    let mut balls = Vec::new();
+    for edge in edges {
+        let first = positions[edge[0] as usize];
+        let second = positions[edge[1] as usize];
+        let reach = Vec3::from(first).distance(Vec3::from(second));
+        if !(reach.is_finite() && reach > 0.0) {
+            continue;
+        }
+        let step = radii[edge[0] as usize].min(radii[edge[1] as usize]);
+        let count = (reach / step).ceil().max(1.0);
+        for index in 0..count as usize {
+            let fraction = index as f32 / count;
+            let center =
+                [0, 1, 2].map(|axis| first[axis] + (second[axis] - first[axis]) * fraction);
+            let radius = radii[edge[0] as usize]
+                + (radii[edge[1] as usize] - radii[edge[0] as usize]) * fraction;
+            balls.push(Ball::new(center, radius));
+        }
+    }
+    if let Some(last) = edges.last() {
+        balls.push(Ball::new(
+            positions[last[1] as usize],
+            radii[last[1] as usize],
+        ));
+    }
+    balls
+}
+
 fn measures(
     filament: &ImportedFilament,
     edges: &[[u32; 2]],
-    branches: usize,
+    union: &Union,
 ) -> Result<FilamentStatistics, String> {
     let positions = filament.positions();
     let radii = filament.radii();
-    let mut sweep = FilamentSweep::new();
+    let mut length = 0.0f64;
+    let mut weighted = 0.0f64;
     let mut moment = Vec3::ZERO;
     for edge in edges {
         let (first, second) = (
@@ -472,7 +503,8 @@ fn measures(
         if !(distance.is_finite() && distance > 0.0) {
             continue;
         }
-        sweep.segment(distance, radii[edge[0] as usize], radii[edge[1] as usize]);
+        length += distance;
+        weighted += distance * f64::from(radii[edge[0] as usize] + radii[edge[1] as usize]);
         moment += (first + second) * (0.5 * distance as f32);
     }
     let mut degree = vec![0u32; positions.len()];
@@ -480,13 +512,8 @@ fn measures(
         degree[edge[0] as usize] += 1;
         degree[edge[1] as usize] += 1;
     }
-    for (node, degree) in degree.iter().enumerate() {
-        if *degree >= 3 {
-            sweep.joint(radii[node]);
-        }
-    }
-    let length = sweep.length();
-    let volume = sweep.volume();
+    let branches = degree.iter().filter(|degree| **degree != 2).count();
+    let volume = union.volume();
     if !(length.is_finite() && length > 0.0 && volume.is_finite() && volume > 0.0) {
         return Err("a filament holds no measurable length".to_string());
     }
@@ -503,9 +530,14 @@ fn measures(
     let centroid = moment / length as f32;
     Ok(FilamentStatistics::new(
         length,
-        sweep.diameter(),
+        weighted / length,
         volume,
-        FilamentTopology::new(branches as u32, ends.terminals, ends.junctions, nodes),
+        FilamentTopology::new(
+            branches.max(1) as u32,
+            ends.terminals,
+            ends.junctions,
+            nodes,
+        ),
         centroid.to_array(),
         Bounds::new(low, high),
     ))

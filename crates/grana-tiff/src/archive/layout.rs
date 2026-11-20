@@ -252,7 +252,6 @@ fn block(at: u64, entries: Vec<Entry>) -> (Vec<u8>, Spots) {
 pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
     let level = spec.levels[0];
     let extent = level.extent();
-    let basis = level.basis();
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     xml.push_str(
         "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n <Image ID=\"Image:0\"",
@@ -267,7 +266,8 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
         spec.channels.len(),
         spec.frames
     ));
-    if spec.calibration != grana_volume::Calibration::Uncalibrated {
+    if spec.calibration.measured() {
+        let basis = level.basis();
         xml.push_str(&format!(
             " PhysicalSizeX=\"{}\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"{}\" PhysicalSizeYUnit=\"µm\" PhysicalSizeZ=\"{}\" PhysicalSizeZUnit=\"µm\"",
             number(basis.step(0)),
@@ -289,29 +289,49 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
             color(channel.tint)
         ));
     }
-    let mut ifd = 0usize;
+    let planes = plane_positions(spec);
+    xml.push_str(&plane_positions(spec));
+    xml.push_str(&channels(spec));
+    xml.push_str(&planes);
+    xml.push_str("  </Pixels>\n </Image>\n");
+    xml.push_str(&annotations(spec));
+    xml.push_str("</OME>");
+    xml
+}
+
+fn plane_positions(spec: &ImageSpec<'_>) -> String {
+    let level = spec.levels[0];
+    let extent = level.extent();
+    let basis = level.basis();
     let columns = [basis.column(0), basis.column(1), basis.column(2)];
     let corner = level.origin();
     let middle = [0.5 * extent.x() as f32, 0.5 * extent.y() as f32];
     let mut data = String::new();
     let mut planes = String::new();
+    let mut ifd = 0usize;
     for frame in 0..spec.frames {
         for channel in 0..spec.channels.len() {
             for z in 0..extent.z() {
-                let local = [middle[0], middle[1], z as f32 + 0.5];
-                let centre = [0, 1, 2].map(|axis| {
-                    corner[axis]
-                        + columns[0][axis] * local[0]
-                        + columns[1][axis] * local[1]
-                        + columns[2][axis] * local[2]
-                        + spec.placement[axis]
-                });
-                planes.push_str(&format!(
-                    "   <Plane TheT=\"{frame}\" TheC=\"{channel}\" TheZ=\"{z}\" PositionX=\"{}\" PositionXUnit=\"µm\" PositionY=\"{}\" PositionYUnit=\"µm\" PositionZ=\"{}\" PositionZUnit=\"µm\"/>\n",
-                    located(centre[0]),
-                    located(centre[1]),
-                    located(centre[2])
-                ));
+                if spec.calibration.measured() {
+                    let local = [middle[0], middle[1], z as f32 + 0.5];
+                    let centre = [0, 1, 2].map(|axis| {
+                        corner[axis]
+                            + columns[0][axis] * local[0]
+                            + columns[1][axis] * local[1]
+                            + columns[2][axis] * local[2]
+                            + spec.placement[axis]
+                    });
+                    planes.push_str(&format!(
+                        "   <Plane TheT=\"{frame}\" TheC=\"{channel}\" TheZ=\"{z}\" PositionX=\"{}\" PositionXUnit=\"µm\" PositionY=\"{}\" PositionYUnit=\"µm\" PositionZ=\"{}\" PositionZUnit=\"µm\"/>\n",
+                        located(centre[0]),
+                        located(centre[1]),
+                        located(centre[2])
+                    ));
+                } else {
+                    planes.push_str(&format!(
+                        "   <Plane TheT=\"{frame}\" TheC=\"{channel}\" TheZ=\"{z}\"/>\n"
+                    ));
+                }
                 data.push_str(&format!(
                     "   <TiffData IFD=\"{ifd}\" PlaneCount=\"1\" FirstT=\"{frame}\" FirstC=\"{channel}\" FirstZ=\"{z}\"/>\n"
                 ));
@@ -319,12 +339,25 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
             }
         }
     }
-    xml.push_str(&data);
-    xml.push_str(&planes);
-    xml.push_str("  </Pixels>\n </Image>\n");
-    xml.push_str(&annotations(spec));
-    xml.push_str("</OME>");
-    xml
+    format!("{data}{planes}")
+}
+
+fn channels(spec: &ImageSpec<'_>) -> String {
+    let mut values = String::new();
+    for (channel, held) in spec.channels.iter().enumerate() {
+        for (key, value) in [
+            ("data.min", held.data.min()),
+            ("data.max", held.data.max()),
+            ("window.min", held.window.min()),
+            ("window.max", held.window.max()),
+        ] {
+            values.push_str(&format!(
+                "   <Value><M>channel.{channel}.{key}</M><S>{}</S></Value>\n",
+                number(value)
+            ));
+        }
+    }
+    values
 }
 
 fn annotations(spec: &ImageSpec<'_>) -> String {
@@ -338,6 +371,7 @@ fn annotations(spec: &ImageSpec<'_>) -> String {
             escape(&value)
         ));
     }
+    xml.push_str(&channels(spec));
     xml.push_str("   <Value><M>image</M><S>0</S></Value>\n");
     xml.push_str("  </MapAnnotation>\n </StructuredAnnotations>\n");
     xml

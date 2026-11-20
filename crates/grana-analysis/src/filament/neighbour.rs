@@ -6,6 +6,8 @@ pub(super) const ADJACENT: [u32; COUNT] = adjacent();
 
 pub(super) const HALF: [usize; 13] = half();
 
+pub(super) const FACE: [usize; 6] = face();
+
 const fn offsets() -> [[isize; 3]; COUNT] {
     let mut table = [[0isize; 3]; COUNT];
     let mut index = 0;
@@ -72,6 +74,24 @@ const fn half() -> [usize; 13] {
     table
 }
 
+const fn face() -> [usize; 6] {
+    let mut table = [0usize; 6];
+    let mut index = 0;
+    let mut found = 0;
+    while index < COUNT {
+        let offset = OFFSET[index];
+        let reach = (if offset[0] < 0 { -offset[0] } else { offset[0] })
+            + (if offset[1] < 0 { -offset[1] } else { offset[1] })
+            + (if offset[2] < 0 { -offset[2] } else { offset[2] });
+        if reach == 1 {
+            table[found] = index;
+            found += 1;
+        }
+        index += 1;
+    }
+    table
+}
+
 pub(super) fn components(mut neighbours: u32) -> u32 {
     let mut count = 0;
     while neighbours != 0 {
@@ -87,6 +107,21 @@ pub(super) fn components(mut neighbours: u32) -> u32 {
         }
     }
     count
+}
+
+pub(super) fn faces(mask: &[u8], index: usize, stride: [usize; 3]) -> u32 {
+    let mut neighbours = 0u32;
+    for (position, offset) in FACE.iter().enumerate() {
+        let neighbour = OFFSET[*offset];
+        let target = (index as isize
+            + neighbour[0] * stride[0] as isize
+            + neighbour[1] * stride[1] as isize
+            + neighbour[2] * stride[2] as isize) as usize;
+        if mask[target] != 0 {
+            neighbours |= 1u32 << position;
+        }
+    }
+    neighbours
 }
 
 pub(super) fn neighbourhood(mask: &[u8], index: usize, stride: [usize; 3]) -> u32 {

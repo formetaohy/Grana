@@ -359,7 +359,7 @@ fn aggregate_scores(
             });
             collected
                 .iter()
-                .map(|values| aggregate.apply(values))
+                .map(|values| aggregate.apply(values).present().unwrap_or(f32::NAN))
                 .collect()
         }
         Group::Timepoint => {
@@ -378,7 +378,7 @@ fn aggregate_scores(
             });
             collected
                 .iter()
-                .map(|values| aggregate.apply(values))
+                .map(|values| aggregate.apply(values).present().unwrap_or(f32::NAN))
                 .collect()
         }
         Group::Molecule => aggregate_members(source, aggregate, table, |_, objects, index| {
@@ -419,7 +419,7 @@ fn aggregate_coloc(
                                 .map(|v| v as f32)
                         })
                         .collect::<Vec<_>>();
-                    aggregate.apply(&values)
+                    aggregate.apply(&values).present().unwrap_or(f32::NAN)
                 })
                 .collect()
         }
@@ -433,7 +433,7 @@ fn aggregate_coloc(
                     .iter()
                     .filter_map(|value| value.metric(metric).map(|value| value as f32))
                     .collect::<Vec<_>>();
-                aggregate.apply(&collected)
+                aggregate.apply(&collected).present().unwrap_or(f32::NAN)
             })
             .collect(),
         Group::Molecule => aggregate_members(source, aggregate, table, |time, _, index| {
@@ -471,7 +471,7 @@ fn aggregate_members(
     });
     collected
         .iter()
-        .map(|values| aggregate.apply(values))
+        .map(|values| aggregate.apply(values).present().unwrap_or(f32::NAN))
         .collect()
 }
 

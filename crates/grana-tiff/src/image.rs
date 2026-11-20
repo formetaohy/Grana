@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    Calibration, Census, ChannelInfo, Extent, Level, Placement, Pyramid, Spacing, Statistics,
-    VoxelData, VoxelFormat, VoxelSemantics, name_of, tint_of,
+    Calibration, Census, ChannelInfo, Extent, Intensity, Level, Placement, Pyramid, Spacing,
+    Statistics, VoxelData, VoxelFormat, VoxelSemantics, name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
@@ -302,6 +302,10 @@ impl Image {
         }
         let (spacing, derived) = spacing(ome, &files[0], path, sizes[2])?;
         let extents = levels.iter().map(|level| level.extent).collect::<Vec<_>>();
+        let lookup = |key: &str| ome.and_then(|ome| ome.annotation(key));
+        let calibration = grana_archive::calibration_from(lookup)
+            .map_err(|detail| Error::metadata(path, detail))?
+            .unwrap_or(derived);
         let mut fallback = Vec::with_capacity(extents.len());
         let mut held = spacing;
         for (index, extent) in extents.iter().enumerate() {
@@ -317,10 +321,6 @@ impl Image {
         }
         let (pyramid_levels, placement, calibration) = match ome {
             Some(ome) => {
-                let lookup = |key: &str| ome.annotation(key);
-                let calibration = grana_archive::calibration_from(lookup)
-                    .map_err(|detail| Error::metadata(path, detail))?
-                    .unwrap_or(derived);
                 let placed = grana_archive::levels_from(lookup, &extents)
                     .map_err(|detail| Error::metadata(path, detail))?;
                 match placed {
@@ -330,15 +330,37 @@ impl Image {
                         calibration,
                     ),
                     None => {
-                        let described = grana_archive::spacings_from(lookup, &extents)
-                            .map_err(|detail| Error::metadata(path, detail))?;
-                        let levels = match described {
-                            Some(spacings) => extents
-                                .iter()
-                                .zip(spacings)
-                                .map(|(extent, spacing)| Level::new(*extent, spacing))
-                                .collect::<Vec<_>>(),
-                            None => fallback,
+                        let levels = if calibration.measured() {
+                            match grana_archive::spacings_from(lookup, &extents)
+                                .map_err(|detail| Error::metadata(path, detail))?
+                            {
+                                Some(spacings) => extents
+                                    .iter()
+                                    .zip(spacings)
+                                    .map(|(extent, spacing)| Level::new(*extent, spacing))
+                                    .collect::<Vec<_>>(),
+                                None => fallback,
+                            }
+                        } else {
+                            match grana_archive::relatives_from(lookup, &extents)
+                                .map_err(|detail| Error::metadata(path, detail))?
+                            {
+                                Some(factors) => extents
+                                    .iter()
+                                    .zip(factors)
+                                    .map(|(extent, factor)| {
+                                        Level::new(
+                                            *extent,
+                                            Spacing::new(
+                                                spacing.x() * factor[0],
+                                                spacing.y() * factor[1],
+                                                spacing.z() * factor[2],
+                                            ),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                                None => fallback,
+                            }
                         };
                         let placement = placement(Some(ome), levels[0], sizes[2], path)?;
                         (levels, placement, calibration)
@@ -358,6 +380,7 @@ impl Image {
             let tint = info
                 .and_then(|channel| channel.tint)
                 .unwrap_or_else(|| sample_tint(samples, index));
+            let window = window(lookup, index as usize, path)?;
             let sampled = sample_range(&files, &levels, &cache, index, sizes[0])?;
             let sampled = sampled.ok_or_else(|| {
                 Error::metadata(path, "a TIFF channel exposes no voxel to census")
@@ -367,7 +390,17 @@ impl Image {
             } else {
                 sampled
             };
-            channels.push(ChannelInfo::new(name, tint, sampled, format));
+            let info = match window {
+                Some((data, window)) => ChannelInfo::new(
+                    name,
+                    tint,
+                    Statistics::declared(data, sampled.semantics()),
+                    format,
+                )
+                .with_window(window),
+                None => ChannelInfo::new(name, tint, sampled, format),
+            };
+            channels.push(info);
         }
         let interval = ome.and_then(|ome| ome.interval).unwrap_or(1.0);
         let name = ome
@@ -1050,10 +1083,9 @@ fn sample_range(
     channel: u32,
     frames: u32,
 ) -> Result<Option<Statistics>, Error> {
-    let Some(level) = levels.last() else {
+    let Some(level) = levels.first() else {
         return Ok(None);
     };
-    let index = levels.len() - 1;
     let mut census = Census::of(level.extent, frames);
     let measured = census.measure(|time, ranges| {
         region(
@@ -1062,7 +1094,7 @@ fn sample_range(
             levels,
             &Request {
                 time,
-                level: index,
+                level: 0,
                 channel,
                 x: ranges[0].clone(),
                 y: ranges[1].clone(),
@@ -1071,6 +1103,43 @@ fn sample_range(
         )
     })?;
     Ok(Some(measured))
+}
+
+fn window<'a>(
+    lookup: impl Fn(&str) -> Option<&'a str>,
+    channel: usize,
+    path: &Path,
+) -> Result<Option<(Intensity, Intensity)>, Error> {
+    let read = |key: &str| -> Result<Option<f32>, Error> {
+        let Some(text) = lookup(&format!("channel.{channel}.{key}")) else {
+            return Ok(None);
+        };
+        let value = text.parse::<f32>().map_err(|error| {
+            Error::metadata(
+                path,
+                format!("the recorded channel {key} is invalid: {error}"),
+            )
+        })?;
+        if !value.is_finite() {
+            return Err(Error::metadata(
+                path,
+                format!("the recorded channel {key} is not finite"),
+            ));
+        }
+        Ok(Some(value))
+    };
+    let range = |low: Option<f32>, high: Option<f32>| match (low, high) {
+        (Some(low), Some(high)) if low < high => Some(Intensity::new(low, high)),
+        (Some(_), Some(_)) => None,
+        (None, None) => None,
+        _ => None,
+    };
+    let data = range(read("data.min")?, read("data.max")?);
+    let window = range(read("window.min")?, read("window.max")?);
+    Ok(match (data, window) {
+        (Some(data), Some(window)) => Some((data, window)),
+        _ => None,
+    })
 }
 
 pub fn dataset_name(path: &Path) -> String {

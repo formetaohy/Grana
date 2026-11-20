@@ -902,7 +902,7 @@ fn table<'a>(
                             value: state
                                 .measure
                                 .value(index as usize, *column_index)
-                                .map(f32::to_bits),
+                                .and_then(|value| (value.is_finite()).then(|| f32::to_bits(value))),
                         })
                         .collect::<Vec<_>>();
                     children.push(
@@ -954,7 +954,7 @@ fn table<'a>(
                                                     f32::from_bits(bits)
                                                 );
                                             }
-                                            None => text.push('\u{2026}'),
+                                            None => text.push('\u{2014}'),
                                         }
                                         painter.text_in(
                                             area.shrink2(Vec2::new(8.0, 0.0)),

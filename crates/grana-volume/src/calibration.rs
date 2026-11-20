@@ -11,6 +11,10 @@ impl Calibration {
         self == Self::Recorded
     }
 
+    pub fn measured(self) -> bool {
+        matches!(self, Self::Recorded | Self::Inferred | Self::Assumed)
+    }
+
     pub fn index(self) -> u8 {
         match self {
             Self::Recorded => 0,

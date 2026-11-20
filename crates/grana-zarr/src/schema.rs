@@ -39,20 +39,28 @@ impl Schema {
     }
 }
 
-pub(crate) fn axes() -> Vec<Value> {
+pub(crate) fn axes(measured: bool) -> Vec<Value> {
     vec![
         json!({ "name": "t", "type": "time", "unit": "second" }),
         json!({ "name": "c", "type": "channel" }),
-        json!({ "name": "z", "type": "space", "unit": "micrometer" }),
-        json!({ "name": "y", "type": "space", "unit": "micrometer" }),
-        json!({ "name": "x", "type": "space", "unit": "micrometer" }),
+        space("z", measured),
+        space("y", measured),
+        space("x", measured),
     ]
 }
 
-fn display_axes(spatial: usize) -> Vec<Value> {
+fn space(name: &str, measured: bool) -> Value {
+    if measured {
+        json!({ "name": name, "type": "space", "unit": "micrometer" })
+    } else {
+        json!({ "name": name, "type": "space" })
+    }
+}
+
+fn display_axes(spatial: usize, measured: bool) -> Vec<Value> {
     ["x", "y", "z"][..spatial]
         .iter()
-        .map(|name| json!({ "name": name, "type": "space", "unit": "micrometer" }))
+        .map(|name| space(name, measured))
         .collect()
 }
 
@@ -129,6 +137,7 @@ pub(crate) struct Display {
     pub(crate) matrix: [[f64; 3]; 3],
     pub(crate) dropped: Vec<usize>,
     pub(crate) spatial: usize,
+    pub(crate) measured: bool,
 }
 
 pub(crate) fn multiscales(
@@ -156,6 +165,7 @@ pub(crate) fn multiscales(
         matrix,
         dropped,
         spatial,
+        measured,
     } = display;
     let rows = (0..spatial)
         .map(|row| {
@@ -179,7 +189,7 @@ pub(crate) fn multiscales(
         "name": name,
         "coordinateSystems": [
             { "name": INTRINSIC, "axes": axes },
-            { "name": DISPLAY, "axes": display_axes(spatial) },
+            { "name": DISPLAY, "axes": display_axes(spatial, measured) },
         ],
         "datasets": datasets,
         "coordinateTransformations": [{

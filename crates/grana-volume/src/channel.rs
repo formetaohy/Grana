@@ -73,6 +73,7 @@ pub struct ChannelInfo {
     tint: [f32; 3],
     statistics: Statistics,
     format: VoxelFormat,
+    window: Option<Intensity>,
 }
 
 impl ChannelInfo {
@@ -91,7 +92,25 @@ impl ChannelInfo {
             tint,
             statistics,
             format,
+            window: None,
         }
+    }
+
+    pub fn with_window(mut self, window: Intensity) -> Self {
+        assert!(
+            window.span() > 0.0,
+            "a channel display window spans a positive intensity"
+        );
+        self.window = Some(window);
+        self
+    }
+
+    pub fn window(&self) -> Option<Intensity> {
+        self.window
+    }
+
+    pub fn display(&self) -> Intensity {
+        self.window.unwrap_or(self.statistics.intensity())
     }
 
     pub fn declared(

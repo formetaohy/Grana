@@ -21,7 +21,7 @@ mod weight;
 pub use algorithm::Algorithm;
 pub use anchor::{ObjectAnchor, assign, match_anchor};
 pub use cell::CellSet;
-pub use filament::{FilamentSet, FilamentStatistics, FilamentSweep, FilamentTopology};
+pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
 pub use layout::TrackLayout;

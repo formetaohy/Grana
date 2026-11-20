@@ -64,8 +64,11 @@ pub(crate) fn write(
                 if index > 0 {
                     text.push(',');
                 }
-                write!(text, "{:.*}", column.decimals() as usize, block[index][row])
-                    .expect("a csv field writes into a string");
+                let value = block[index][row];
+                if value.is_finite() {
+                    write!(text, "{:.*}", column.decimals() as usize, value)
+                        .expect("a csv field writes into a string");
+                }
             }
             text.push('\n');
         }

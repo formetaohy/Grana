@@ -321,7 +321,8 @@ impl Mosaic {
                 WriteChannel {
                     name: base[channel].name(),
                     tint: base[channel].tint(),
-                    intensity: merged(grana_volume::ChannelInfo::intensity),
+                    data: merged(grana_volume::ChannelInfo::intensity),
+                    window: merged(grana_volume::ChannelInfo::display),
                 }
             })
             .collect()

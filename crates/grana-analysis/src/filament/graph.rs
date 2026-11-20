@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use glam::Vec3;
-use grana_geometry::Bounds;
-use grana_object::{FilamentStatistics, FilamentSweep, FilamentTopology};
+use grana_geometry::{Ball, Bounds, Union};
+use grana_object::{FilamentStatistics, FilamentTopology};
 
 use super::Grid;
 use super::spanning::Spanning;
@@ -14,8 +14,7 @@ pub(super) struct Point {
 
 pub(super) struct Filament {
     pub nodes: Vec<usize>,
-    pub paths: Vec<Vec<Point>>,
-    pub joints: Vec<Point>,
+    pub balls: Vec<Ball>,
     pub statistics: FilamentStatistics,
 }
 
@@ -41,6 +40,14 @@ pub(super) fn trace(mask: &[u8], distance: &[u16], grid: &Grid, min_length: f32)
             .total_cmp(&left.statistics.length())
     });
     filaments
+}
+
+pub(super) fn mesh(
+    filament: &Filament,
+    object: u32,
+) -> Option<(Vec<grana_geometry::MeshVertex>, Vec<u32>)> {
+    let union = Union::new(filament.balls.clone())?;
+    Some(union.mesh(object))
 }
 
 struct Node {
@@ -351,23 +358,16 @@ impl Graph {
             return None;
         }
         let mut shaped = Vec::with_capacity(paths.len());
-        let mut sweep = FilamentSweep::new();
         for path in &paths {
             let mut points = path
                 .iter()
                 .map(|node| self.point(*node, radius))
                 .collect::<Vec<_>>();
             smooth(&mut points);
-            for pair in points.windows(2) {
-                let distance =
-                    f64::from(Vec3::from(pair[1].position).distance(Vec3::from(pair[0].position)));
-                if distance > 0.0 {
-                    sweep.segment(distance, pair[0].radius, pair[1].radius);
-                }
-            }
             shaped.push(points);
         }
-        if sweep.length() <= 0.0 {
+        let balls = body(&shaped);
+        if balls.is_empty() {
             return None;
         }
         let mut alive = Vec::new();
@@ -398,17 +398,10 @@ impl Graph {
             }
         }
         let centroid = [0, 1, 2].map(|axis| (sum[axis] / voxels as f64) as f32);
-        let joints = (0..self.nodes.len() as u32)
-            .filter(|node| self.nodes[*node as usize].alive && self.degree(*node) >= 3)
-            .map(|node| self.point(node, radius))
-            .collect::<Vec<_>>();
-        for joint in &joints {
-            sweep.joint(joint.radius);
-        }
         let statistics = FilamentStatistics::new(
-            sweep.length(),
-            sweep.diameter(),
-            sweep.volume(),
+            length(&shaped),
+            diameter(&shaped),
+            Union::new(balls.clone()).map_or(0.0, |union| union.volume()),
             FilamentTopology::new(
                 shaped.len() as u32,
                 terminals,
@@ -420,11 +413,61 @@ impl Graph {
         );
         Some(Filament {
             nodes: alive,
-            paths: shaped,
-            joints,
+            balls,
             statistics,
         })
     }
+}
+
+fn body(paths: &[Vec<Point>]) -> Vec<Ball> {
+    let mut balls = Vec::new();
+    for path in paths {
+        for pair in path.windows(2) {
+            balls.push(Ball::new(pair[0].position, pair[0].radius));
+            let distance = Vec3::from(pair[1].position).distance(Vec3::from(pair[0].position));
+            let step = pair[0].radius.min(pair[1].radius);
+            let count = (distance / step).ceil() as usize;
+            for step in 1..count {
+                let fraction = step as f32 / count as f32;
+                let center = [0, 1, 2].map(|axis| {
+                    pair[0].position[axis]
+                        + (pair[1].position[axis] - pair[0].position[axis]) * fraction
+                });
+                balls.push(Ball::new(
+                    center,
+                    pair[0].radius + (pair[1].radius - pair[0].radius) * fraction,
+                ));
+            }
+        }
+        if let Some(last) = path.last() {
+            balls.push(Ball::new(last.position, last.radius));
+        }
+    }
+    balls
+}
+
+fn length(paths: &[Vec<Point>]) -> f64 {
+    paths
+        .iter()
+        .flat_map(|path| path.windows(2))
+        .map(|pair| f64::from(Vec3::from(pair[1].position).distance(Vec3::from(pair[0].position))))
+        .sum()
+}
+
+fn diameter(paths: &[Vec<Point>]) -> f64 {
+    let mut length = 0.0f64;
+    let mut weighted = 0.0f64;
+    for path in paths {
+        for pair in path.windows(2) {
+            let distance =
+                f64::from(Vec3::from(pair[1].position).distance(Vec3::from(pair[0].position)));
+            if distance > 0.0 {
+                length += distance;
+                weighted += distance * f64::from(pair[0].radius + pair[1].radius);
+            }
+        }
+    }
+    weighted / length
 }
 
 fn smooth(points: &mut [Point]) {

@@ -4,6 +4,7 @@ mod ellipsoid;
 mod geometry;
 mod graph;
 mod hull;
+pub mod marching;
 mod mesh;
 mod packed;
 mod ray;
@@ -12,6 +13,7 @@ mod shape;
 mod simplify;
 mod slice;
 mod tube;
+mod union;
 mod volume;
 
 pub use bounds::Bounds;
@@ -28,6 +30,7 @@ pub use shape::SurfaceShape;
 pub use simplify::simplify;
 pub use slice::{SECTION_QUADS, SectionCutter, SectionIndex, SectionPlane, is_closed};
 pub use tube::{TUBE_SIDES, push_sphere, push_tube};
+pub use union::{Ball, Union};
 pub use volume::{enclosed_volume, signed_volume};
 
 pub use grana_store::{Decode, Error, Payload};

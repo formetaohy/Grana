@@ -46,7 +46,8 @@ pub struct ChannelLayer {
     pub index: usize,
     pub name: String,
     pub tint: [f32; 3],
-    pub intensity: Intensity,
+    pub data: Intensity,
+    pub window: Intensity,
 }
 
 pub struct LabelLayer {
@@ -240,7 +241,8 @@ pub fn write_dataset(
         .map(|layer| WriteChannel {
             name: &layer.name,
             tint: layer.tint,
-            intensity: layer.intensity,
+            data: layer.data,
+            window: layer.window,
         })
         .collect::<Vec<_>>();
     let fill = |block: Block| -> Result<VoxelData, String> {

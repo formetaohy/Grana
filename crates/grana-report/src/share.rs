@@ -262,7 +262,7 @@ fn statistics(page: &mut String, table: &Table, name: &str) {
             escape(column.unit().suffix())
         );
         for (_, aggregate) in &aggregates {
-            let value = aggregate.apply(&values);
+            let value = aggregate.apply(&values).present().unwrap_or(f32::NAN);
             let _ = write!(page, "<td>{}</td>", number(value, decimals));
         }
         let _ = writeln!(page, "<td>{}</td></tr>", values.len());

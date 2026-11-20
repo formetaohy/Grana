@@ -31,7 +31,8 @@ pub(super) fn write(
             index,
             name: info.name().to_string(),
             tint: info.tint(),
-            intensity: info.intensity(),
+            data: info.intensity(),
+            window: info.window().unwrap_or(info.intensity()),
         })
         .collect::<Vec<_>>();
     let labels = scene

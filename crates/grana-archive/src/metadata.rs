@@ -1,7 +1,9 @@
 use grana_volume::{Basis, Calibration, Extent, Level, Spacing};
+use serde_json::{Map, Value};
 
 pub const ANNOTATION: &str = "grana";
-pub const MARKER: &str = "1";
+
+const MARKER: &str = "1";
 
 const LABELS: [&str; 4] = ["recorded", "inferred", "assumed", "uncalibrated"];
 const BASIS_LENGTH: usize = 9;
@@ -16,6 +18,26 @@ pub fn calibration_of(name: &str) -> Option<Calibration> {
         .iter()
         .position(|label| *label == name)
         .and_then(|index| Calibration::from_index(index as u8))
+}
+
+pub fn annotation_values(calibration: Calibration) -> Map<String, Value> {
+    let mut values = Map::new();
+    values.insert(
+        "calibration".to_string(),
+        Value::String(calibration_name(calibration).to_string()),
+    );
+    values
+}
+
+pub fn calibration_from<'a>(
+    lookup: impl Fn(&str) -> Option<&'a str>,
+) -> Result<Option<Calibration>, String> {
+    let Some(name) = lookup("calibration") else {
+        return Ok(None);
+    };
+    calibration_of(name)
+        .map(Some)
+        .ok_or_else(|| format!("the archive names the unknown calibration `{name}`"))
 }
 
 pub fn annotations(
@@ -45,11 +67,15 @@ pub fn annotations(
             format!("level.{index}.extent"),
             format!("{},{},{}", extent.x(), extent.y(), extent.z()),
         ));
-        let spacing = level.spacing();
-        entries.push((
-            format!("level.{index}.spacing"),
-            format!("{},{},{}", spacing.x(), spacing.y(), spacing.z()),
-        ));
+        if calibration.measured() {
+            let spacing = level.spacing();
+            entries.push((
+                format!("level.{index}.spacing"),
+                format!("{},{},{}", spacing.x(), spacing.y(), spacing.z()),
+            ));
+        } else {
+            entries.push((format!("level.{index}.relative"), factor(levels[0], *level)));
+        }
         let basis = level.basis();
         let columns = [0, 1, 2].map(|axis| basis.column(axis));
         entries.push((
@@ -74,15 +100,15 @@ pub fn annotations(
     entries
 }
 
-pub fn calibration_from<'a>(
-    lookup: impl Fn(&str) -> Option<&'a str>,
-) -> Result<Option<Calibration>, String> {
-    let Some(name) = lookup("calibration") else {
-        return Ok(None);
-    };
-    calibration_of(name)
-        .map(Some)
-        .ok_or_else(|| format!("the archive names the unknown calibration `{name}`"))
+fn factor(finest: Level, level: Level) -> String {
+    let base = finest.voxel();
+    let held = level.voxel();
+    [0, 1, 2]
+        .map(|axis| held[axis] / base[axis])
+        .iter()
+        .map(f32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub struct Geometry {
@@ -175,6 +201,31 @@ pub fn spacings_from<'a>(
         spacings.push(Spacing::new(spacing[0], spacing[1], spacing[2]));
     }
     Ok(Some(spacings))
+}
+
+pub fn relatives_from<'a>(
+    lookup: impl Fn(&str) -> Option<&'a str>,
+    resolved: &[Extent],
+) -> Result<Option<Vec<[f32; 3]>>, String> {
+    let Some(count) = level_count(&lookup, resolved.len())? else {
+        return Ok(None);
+    };
+    let mut factors = Vec::with_capacity(count);
+    for index in 0..count {
+        let relative = values(&lookup, &format!("level.{index}.relative"), 3)?;
+        if index == 0 && relative != [1.0, 1.0, 1.0] {
+            return Err(
+                "the archive scales its finest level away from one against itself".to_string(),
+            );
+        }
+        if !relative.iter().all(|value| *value > 0.0) {
+            return Err(format!(
+                "the archive level {index} carries a downsample factor that is not positive"
+            ));
+        }
+        factors.push([relative[0], relative[1], relative[2]]);
+    }
+    Ok(Some(factors))
 }
 
 fn level_count<'a>(

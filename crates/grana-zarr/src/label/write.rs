@@ -386,6 +386,7 @@ fn build(
                     .filter_map(|(index, kind)| (*kind != Kind::Space).then_some(index))
                     .collect(),
                 spatial,
+                measured: image.pyramid().calibration().measured(),
             })
         }
     };
