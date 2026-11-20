@@ -64,5 +64,24 @@ fn ordered(mask: &[u8], distance: &[u16]) -> Vec<u32> {
 
 fn simple(mask: &[u8], index: usize, stride: [usize; 3]) -> bool {
     let neighbours = neighbour::neighbourhood(mask, index, stride);
-    neighbours.count_ones() >= 2 && neighbour::components(neighbours) == 1
+    neighbours.count_ones() >= 2
+        && neighbour::components(neighbours) == 1
+        && keeps_background(mask, index, neighbours, stride)
+}
+
+fn keeps_background(mask: &[u8], index: usize, neighbours: u32, stride: [usize; 3]) -> bool {
+    let mut cavity = 0u32;
+    for (position, offset) in neighbour::OFFSET.iter().enumerate() {
+        if neighbours & (1 << position) != 0 {
+            continue;
+        }
+        let target = (index as isize
+            + offset[0] * stride[0] as isize
+            + offset[1] * stride[1] as isize
+            + offset[2] * stride[2] as isize) as usize;
+        if mask[target] == 0 {
+            cavity |= 1 << position;
+        }
+    }
+    neighbour::six_components(cavity) <= 1
 }

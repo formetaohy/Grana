@@ -2,7 +2,9 @@ pub(super) const COUNT: usize = 26;
 
 pub(super) const OFFSET: [[isize; 3]; COUNT] = offsets();
 
-pub(super) const ADJACENT: [u32; COUNT] = adjacent();
+pub(super) const ADJACENT: [u32; COUNT] = adjacent(1);
+
+pub(super) const SIX_ADJACENT: [u32; COUNT] = adjacent(2);
 
 pub(super) const HALF: [usize; 13] = half();
 
@@ -30,7 +32,7 @@ const fn offsets() -> [[isize; 3]; COUNT] {
     table
 }
 
-const fn adjacent() -> [u32; COUNT] {
+const fn adjacent(kind: u8) -> [u32; COUNT] {
     let mut table = [0u32; COUNT];
     let mut left = 0;
     while left < COUNT {
@@ -38,6 +40,7 @@ const fn adjacent() -> [u32; COUNT] {
         while right < COUNT {
             if left != right {
                 let mut reach = 0isize;
+                let mut changed = 0;
                 let mut axis = 0;
                 while axis < 3 {
                     let delta = OFFSET[left][axis] - OFFSET[right][axis];
@@ -45,9 +48,17 @@ const fn adjacent() -> [u32; COUNT] {
                     if magnitude > reach {
                         reach = magnitude;
                     }
+                    if magnitude != 0 {
+                        changed += 1;
+                    }
                     axis += 1;
                 }
-                if reach <= 1 {
+                let joined = if kind == 1 {
+                    reach <= 1
+                } else {
+                    reach == 1 && changed == 1
+                };
+                if joined {
                     table[left] |= 1u32 << right;
                 }
             }
@@ -93,16 +104,24 @@ const fn face() -> [usize; 6] {
 }
 
 pub(super) fn components(mut neighbours: u32) -> u32 {
+    connected(&mut neighbours, &ADJACENT)
+}
+
+pub(super) fn six_components(mut neighbours: u32) -> u32 {
+    connected(&mut neighbours, &SIX_ADJACENT)
+}
+
+fn connected(neighbours: &mut u32, table: &[u32; COUNT]) -> u32 {
     let mut count = 0;
-    while neighbours != 0 {
+    while *neighbours != 0 {
         count += 1;
         let mut stack = 1u32 << neighbours.trailing_zeros();
-        neighbours &= !stack;
+        *neighbours &= !stack;
         while stack != 0 {
             let position = stack.trailing_zeros();
             stack &= stack - 1;
-            let joined = ADJACENT[position as usize] & neighbours;
-            neighbours &= !joined;
+            let joined = table[position as usize] & *neighbours;
+            *neighbours &= !joined;
             stack |= joined;
         }
     }
