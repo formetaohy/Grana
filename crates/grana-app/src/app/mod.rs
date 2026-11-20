@@ -36,6 +36,7 @@ use self::export::Export;
 use self::placement::{Fit, Placement};
 use self::release::{Deferred, Release};
 use self::surface::Surface;
+use self::viewport::AnnotationKey;
 use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
 use crate::stream::Stream;
@@ -129,6 +130,7 @@ pub struct App {
     cursor: Option<winit::window::CursorIcon>,
     closing: bool,
     placement: Placement,
+    annotation_placement: Option<(AnnotationKey, Vec<grana_figure::PlacedAnnotation>)>,
 }
 
 impl App {
@@ -203,6 +205,7 @@ impl App {
             cursor: None,
             closing: false,
             placement: Placement::new(fit),
+            annotation_placement: None,
         }
     }
 

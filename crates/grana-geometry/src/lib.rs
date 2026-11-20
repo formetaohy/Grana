@@ -11,6 +11,7 @@ mod shape;
 mod simplify;
 mod slice;
 mod tube;
+mod volume;
 
 pub use bounds::Bounds;
 pub use bvh::{Bvh, Primitive};
@@ -25,5 +26,6 @@ pub use shape::SurfaceShape;
 pub use simplify::simplify;
 pub use slice::{SECTION_QUADS, SectionCutter, SectionIndex, SectionPlane, is_closed};
 pub use tube::{TUBE_SIDES, push_sphere, push_tube};
+pub use volume::{enclosed_volume, signed_volume};
 
 pub use grana_store::{Decode, Error, Payload};

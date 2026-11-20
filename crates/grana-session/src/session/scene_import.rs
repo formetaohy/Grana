@@ -411,9 +411,10 @@ fn measures(
         if !(distance.is_finite() && distance > 0.0) {
             continue;
         }
-        let radius = 0.5 * (radii[edge[0] as usize] + radii[edge[1] as usize]);
+        let head = f64::from(radii[edge[0] as usize]);
+        let tail = f64::from(radii[edge[1] as usize]);
         length += distance;
-        volume += std::f64::consts::PI * f64::from(radius).powi(2) * distance;
+        volume += std::f64::consts::PI * distance * (head * head + head * tail + tail * tail) / 3.0;
         moment += (first + second) * (0.5 * distance as f32);
     }
     if !(length.is_finite() && length > 0.0 && volume.is_finite() && volume > 0.0) {

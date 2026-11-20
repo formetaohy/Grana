@@ -357,6 +357,26 @@ impl Camera {
         self.pivot = self.pivot.clamp(-half, half);
     }
 
+    pub fn digest(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let state = self.state();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.pivot.map(f32::to_bits).hash(&mut hasher);
+        state.yaw.to_bits().hash(&mut hasher);
+        state.pitch.to_bits().hash(&mut hasher);
+        state.distance.to_bits().hash(&mut hasher);
+        state.fov_y.to_bits().hash(&mut hasher);
+        state.projection.index().hash(&mut hasher);
+        state.aperture.to_bits().hash(&mut hasher);
+        state.focus.to_bits().hash(&mut hasher);
+        if let Some(slice) = state.slice {
+            slice.axis().hash(&mut hasher);
+            slice.right().to_array().map(f32::to_bits).hash(&mut hasher);
+            slice.up().to_array().map(f32::to_bits).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     pub fn state(&self) -> CameraState {
         CameraState {
             pivot: self.pivot.to_array(),

@@ -382,13 +382,6 @@ pub(super) fn mesh_piece(
     let info = topology.info();
     let patches = topology.patches();
     let node = piece.node;
-    let count = node.voxels() as f64;
-    let volume = count * info.voxel_volume();
-    if let Some(spec) = filter
-        && volume < f64::from(spec.min_volume())
-    {
-        return None;
-    }
     let mean = piece.accumulators[info.detection()].statistics().mean();
     if let Some(spec) = filter
         && info.span() > 0.0
@@ -431,6 +424,7 @@ pub(super) fn mesh_piece(
     for triangle in &mesh {
         area += triangle_area(&positions, triangle);
     }
+    let mut signed = grana_geometry::signed_volume(&positions, &mesh);
     let cut = if cap_open {
         let components = Components::new(positions.len(), &mesh);
         let open = (0..mesh.len())
@@ -438,6 +432,7 @@ pub(super) fn mesh_piece(
             .collect::<Vec<_>>();
         let cut = cap::build(&positions, &mesh, &open);
         area += cut.area;
+        signed += grana_geometry::signed_volume(&cut.positions, cut.triangles.as_chunks::<3>().0);
         cut
     } else {
         cap::Cap::default()
@@ -445,6 +440,13 @@ pub(super) fn mesh_piece(
     if area <= 0.0 {
         return None;
     }
+    let volume = signed.abs();
+    if let Some(spec) = filter
+        && volume < f64::from(spec.min_volume())
+    {
+        return None;
+    }
+    let count = node.voxels() as f64;
     let placement = info.placement();
     let centroid = placement.voxel_center([0, 1, 2].map(|axis| (node.sum()[axis] / count) as f32));
     let (low, high) = placement.cell_bounds(node.low(), node.high().map(|value| value + 1));

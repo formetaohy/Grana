@@ -95,7 +95,6 @@ impl LabelBuilder {
         let mut indices = Vec::new();
         let mut statistics = Vec::with_capacity(objects.len());
         let mut intensities = Vec::with_capacity(objects.len() * self.channels);
-        let voxel_volume = self.info.voxel_volume();
         let relaxed = objects
             .par_iter()
             .map(|object| relaxed_surface(&object.positions, &object.indices))
@@ -146,7 +145,7 @@ impl LabelBuilder {
             let shape = SurfaceShape::of(positions, object.indices.as_chunks::<3>().0);
             statistics.push(SurfaceStatistics::new(
                 object.voxels,
-                count * voxel_volume,
+                grana_geometry::enclosed_volume(positions, object.indices.as_chunks::<3>().0),
                 area,
                 centroid,
                 bounds,

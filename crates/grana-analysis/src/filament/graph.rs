@@ -362,18 +362,18 @@ impl Graph {
                 .collect::<Vec<_>>();
             smooth(&mut points);
             let mut length = 0.0f64;
+            let mut bore = 0.0f64;
             for pair in points.windows(2) {
-                length +=
+                let distance =
                     f64::from(Vec3::from(pair[1].position).distance(Vec3::from(pair[0].position)));
+                let first = f64::from(pair[0].radius);
+                let second = f64::from(pair[1].radius);
+                length += distance;
+                weighted += distance * (first + second);
+                bore += PI * distance * (first * first + first * second + second * second) / 3.0;
             }
-            let mean = points
-                .iter()
-                .map(|point| f64::from(point.radius))
-                .sum::<f64>()
-                / points.len() as f64;
             total_length += length;
-            weighted += 2.0 * mean * length;
-            volume += PI * mean * mean * length;
+            volume += bore;
             shaped.push(points);
         }
         if total_length <= 0.0 {
@@ -407,6 +407,14 @@ impl Graph {
             }
         }
         let centroid = [0, 1, 2].map(|axis| (sum[axis] / voxels as f64) as f32);
+        let joints = (0..self.nodes.len() as u32)
+            .filter(|node| self.nodes[*node as usize].alive && self.degree(*node) >= 3)
+            .map(|node| self.point(node, radius))
+            .collect::<Vec<_>>();
+        for joint in &joints {
+            let radius = f64::from(joint.radius);
+            volume += 4.0 * PI * radius * radius * radius / 3.0;
+        }
         let statistics = FilamentStatistics::new(
             total_length,
             weighted / total_length,
@@ -420,10 +428,6 @@ impl Graph {
             centroid,
             Bounds::new(low, high),
         );
-        let joints = (0..self.nodes.len() as u32)
-            .filter(|node| self.nodes[*node as usize].alive && self.degree(*node) >= 3)
-            .map(|node| self.point(node, radius))
-            .collect();
         Some(Filament {
             nodes: alive,
             paths: shaped,

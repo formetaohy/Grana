@@ -167,10 +167,6 @@ impl TopologyInfo {
         self.placement
     }
 
-    pub fn voxel_volume(self) -> f64 {
-        self.placement.voxel_volume()
-    }
-
     pub fn span(self) -> f32 {
         self.span
     }

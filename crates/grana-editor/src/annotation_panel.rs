@@ -3,7 +3,7 @@ use grana_i18n::Language;
 use grana_scene::AnnotationTag;
 use grana_session::Command;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Icon, IconStyle, Key, Length, Level, Rect, Role,
+    Align, Axis, BuildContext, Corners, Element, Icon, IconStyle, Key, Length, Level, Rect, Role,
     TextStyle, icon,
 };
 
@@ -13,6 +13,7 @@ use crate::view;
 
 const ROW_HEIGHT: f32 = 34.0;
 const ROW_PAD: f32 = 4.0;
+const VISIBLE_ROWS: usize = 12;
 
 pub fn view<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {
     if !state.access.author() {
@@ -113,12 +114,35 @@ fn list_card<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> El
         return view::card(ctx, 8.0, children);
     }
     let count = scene.annotations.len();
-    let mut rows = Vec::with_capacity(count);
-    for index in 0..count {
+    let group_gap = ctx.theme().metrics.group_gap;
+    let index_key = Key::new("annotation.rows");
+    let window = ctx.window(index_key, ROW_HEIGHT + group_gap, count);
+    let shown = window.last - window.first;
+    let height = (shown as f32 * ROW_HEIGHT + shown.saturating_sub(1) as f32 * group_gap)
+        .min(VISIBLE_ROWS as f32 * (ROW_HEIGHT + group_gap));
+    let mut rows = Vec::with_capacity(shown + 2);
+    if window.first > 0 {
+        rows.push(grana_ui::spacer(
+            window.first as f32 * (ROW_HEIGHT + group_gap) - group_gap,
+        ));
+    }
+    for index in window.span() {
         rows.push(row(ctx, state, index, count));
     }
-    let group_gap = ctx.theme().metrics.group_gap;
-    children.push(grana_ui::column().gap(group_gap).children(rows));
+    if window.last < count {
+        rows.push(grana_ui::spacer(
+            (count - window.last) as f32 * (ROW_HEIGHT + group_gap) - group_gap,
+        ));
+    }
+    let content = count as f32 * ROW_HEIGHT + count.saturating_sub(1) as f32 * group_gap;
+    children.push(
+        grana_ui::column()
+            .gap(group_gap)
+            .children(rows)
+            .key(index_key)
+            .scroll(Axis::Column, Length::Fixed(height), Some(content))
+            .clipped(),
+    );
     if !state.access.author() {
         return view::card(ctx, 8.0, children);
     }

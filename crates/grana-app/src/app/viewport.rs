@@ -29,6 +29,7 @@ impl App {
                 camera,
                 stage,
                 workspace,
+                annotation_placement,
                 ..
             } = self;
             let Some(surface) = surface.as_mut() else {
@@ -43,7 +44,7 @@ impl App {
                 || surface.ui.pointer_over_widget()
                 || surface.ui.pointer_captured();
             let hovered = (!blocked && !slice && tool.is_none() && workspace.seed.is_none())
-                .then(|| annotation_hit(surface, session, camera, stage))
+                .then(|| annotation_hit(surface, session, camera, stage, annotation_placement))
                 .flatten();
             let pressed = surface.ui.input().button(UiButton::Primary).pressed;
             let grabbed = hovered.is_some() && pressed;
@@ -495,23 +496,49 @@ fn annotation_hit(
     session: &Session,
     camera: &Camera,
     stage: &Stage,
+    placement: &mut Option<(AnnotationKey, Vec<grana_figure::PlacedAnnotation>)>,
 ) -> Option<(usize, grana_figure::AnnotationPart)> {
     let pointer = surface.ui.input().position();
     if !stage.contains(pointer) {
         return None;
     }
     let scene = session.scene()?;
-    let items = grana_figure::annotations(scene, scene.time());
-    if items.is_empty() {
-        return None;
-    }
     let rect = stage.viewport();
     if rect.height() <= 0.0 {
         return None;
     }
-    let world = scene.dataset.world_size();
-    let aspect = rect.width() / rect.height();
-    let view_projection = camera.view_projection(aspect, 0.5 * world.length());
-    let placed = grana_figure::volume_annotations(&items, view_projection, rect);
-    grana_figure::pick_annotation(&placed, pointer)
+    let key = AnnotationKey {
+        revision: session.revision(),
+        time: scene.time(),
+        camera: camera.digest(),
+        rect: [
+            rect.min.x.to_bits(),
+            rect.min.y.to_bits(),
+            rect.max.x.to_bits(),
+            rect.max.y.to_bits(),
+        ],
+    };
+    if placement.as_ref().is_none_or(|(held, _)| *held != key) {
+        let items = grana_figure::annotations(scene, scene.time());
+        let world = scene.dataset.world_size();
+        let aspect = rect.width() / rect.height();
+        let view_projection = camera.view_projection(aspect, 0.5 * world.length());
+        *placement = Some((
+            key,
+            grana_figure::volume_annotations(&items, view_projection, rect),
+        ));
+    }
+    let placed = &placement
+        .as_ref()
+        .expect("the annotation placement is cached")
+        .1;
+    grana_figure::pick_annotation(placed, pointer)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct AnnotationKey {
+    revision: grana_scene::Revision,
+    time: u32,
+    camera: u64,
+    rect: [u32; 4],
 }

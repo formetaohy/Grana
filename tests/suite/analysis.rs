@@ -166,6 +166,7 @@ fn extracts_measured_surfaces_from_two_balls() {
             "a ball volume {} is off from {expected}",
             object.volume()
         );
+
         assert!(object.area() > 0.0, "the object carries an area");
         assert!(
             (0.6..=1.0).contains(&object.sphericity()),
@@ -242,6 +243,27 @@ fn extracts_measured_surfaces_from_two_balls() {
         small.object_count(),
         1,
         "a region too small to estimate local background still detects its bright voxels"
+    );
+    let clipped = small.object(0).expect("the clipped surface exists");
+    assert!(
+        clipped.sphericity() < 0.99,
+        "a clipped fragment of a ball reads its own sphericity {}, not a saturated 1",
+        clipped.sphericity()
+    );
+    let geometry = small.geometry().expect("the clipped geometry loads");
+    let group = &geometry.groups()[0];
+    let positions = (0..group.vertex_count() as usize)
+        .map(|vertex| geometry.position(0, vertex))
+        .collect::<Vec<_>>();
+    let triangles = (0..group.index_count() as usize / 3)
+        .map(|triangle| geometry.triangle_vertices(0, triangle))
+        .collect::<Vec<_>>();
+    let enclosed = grana_geometry::enclosed_volume(&positions, &triangles);
+    assert!(
+        (clipped.volume() - enclosed).abs() <= 1.0e-3 * enclosed,
+        "the reported volume {} belongs to the closed mesh that encloses {enclosed} and carries the area {}",
+        clipped.volume(),
+        clipped.area()
     );
 }
 
@@ -611,11 +633,24 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
     let extent = Extent::new(40, 40, 30);
     let spacing = Spacing::new(0.3, 0.3, 0.1);
     let mut values = vec![0u16; extent.voxel_count() as usize];
+    let segment = |x: f32, y: f32, from: (f32, f32), to: (f32, f32)| {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let (px, py) = (x - from.0, y - from.1);
+        let along = ((px * dx + py * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+        ((px - along * dx).powi(2) + (py - along * dy).powi(2)).sqrt()
+    };
     for z in 0..extent.z() {
         for y in 0..extent.y() {
             for x in 0..extent.x() {
-                let offset = ((y as f32 - 20.0).powi(2) + (z as f32 - 15.0).powi(2)).sqrt();
-                let intensity = 300.0 + 4_000.0 * (-0.5 * (offset / 0.9).powi(2)).exp();
+                let across = segment(x as f32, y as f32, (4.0, 20.0), (36.0, 20.0)).min(segment(
+                    x as f32,
+                    y as f32,
+                    (20.0, 20.0),
+                    (20.0, 36.0),
+                ));
+                let offset = across.hypot(z as f32 - 15.0);
+                let width = 0.35 + 1.35 * x as f32 / extent.x() as f32;
+                let intensity = 300.0 + 4_000.0 * (-0.5 * (offset / width).powi(2)).exp();
                 values[extent.index(x, y, z) as usize] = intensity as u16;
             }
         }
@@ -636,11 +671,18 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
         .frame(&data, None, &SpillStore::memory(), |_| Ok(data.clone()))
         .expect("the filament scan traces the frame");
     assert_eq!(set.object_count(), 1, "the dim filament survives");
-    let length = set.object(0).expect("the filament exists").length();
+    let filament = set.object(0).expect("the filament exists");
+    let length = filament.length();
     let expected = f64::from(extent.x()) * f64::from(spacing.x());
     assert!(
         length > 0.5 * expected,
         "the traced length {length:.2} keeps most of {expected:.2}"
+    );
+    let cylinder = std::f64::consts::PI / 4.0 * filament.diameter().powi(2) * length;
+    assert!(
+        filament.volume() > 1.04 * cylinder && filament.volume() < 1.2 * cylinder,
+        "the volume {} follows the tapered tube that keeps {cylinder}, not a mean radius cylinder",
+        filament.volume()
     );
 }
 

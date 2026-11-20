@@ -652,7 +652,7 @@ impl OverlayKey {
         Self {
             revision: state.revision,
             labels: state.workspace.overlay.stamp(),
-            camera: camera_digest(state.camera),
+            camera: state.camera.digest(),
             viewport: edges(layout.viewport),
             safe: edges(layout.safe.shrink(STAGE_INSET)),
             world: state
@@ -667,26 +667,6 @@ impl OverlayKey {
             language: state.workspace.language,
         }
     }
-}
-
-fn camera_digest(camera: &grana_display::Camera) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let state = camera.state();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    state.pivot.map(f32::to_bits).hash(&mut hasher);
-    state.yaw.to_bits().hash(&mut hasher);
-    state.pitch.to_bits().hash(&mut hasher);
-    state.distance.to_bits().hash(&mut hasher);
-    state.fov_y.to_bits().hash(&mut hasher);
-    state.projection.index().hash(&mut hasher);
-    state.aperture.to_bits().hash(&mut hasher);
-    state.focus.to_bits().hash(&mut hasher);
-    if let Some(slice) = state.slice {
-        slice.axis().hash(&mut hasher);
-        slice.right().to_array().map(f32::to_bits).hash(&mut hasher);
-        slice.up().to_array().map(f32::to_bits).hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 fn edges(rect: Rect) -> [u32; 4] {
