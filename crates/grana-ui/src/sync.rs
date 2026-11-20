@@ -133,6 +133,32 @@ impl<A: Clone> Ui<A> {
         }
     }
 
+    pub(crate) fn rebuild_modal(&mut self) {
+        let mut stack = vec![self.tree.root];
+        let mut held: Option<(usize, NodeId)> = None;
+        while let Some(id) = stack.pop() {
+            let node = &self.tree.nodes[id];
+            if node.modal && node.visible {
+                let layer = node.layer.index();
+                if held.is_none_or(|(best, _)| layer >= best) {
+                    held = Some((layer, id));
+                }
+            }
+            for child in node.children.iter().rev() {
+                stack.push(*child);
+            }
+        }
+        let next = held.map(|(_, id)| id);
+        if next != self.modal {
+            self.modal = next;
+            self.tree.focus = true;
+        }
+        if self.focus.is_some_and(|focus| !self.inside_modal(focus)) {
+            self.focus = None;
+            self.focus_visible = false;
+        }
+    }
+
     pub(crate) fn rebuild_popup_anchors(&mut self) {
         self.popup_anchors.clear();
         for (id, node) in self.tree.nodes.iter() {
@@ -160,6 +186,7 @@ impl<A: Clone> Ui<A> {
         cleared(&mut self.drag);
         cleared(&mut self.focus);
         cleared(&mut self.edit);
+        cleared(&mut self.modal);
         if self.scrollbar.is_some_and(|(id, _, _)| gone.contains(&id)) {
             self.scrollbar = None;
         }

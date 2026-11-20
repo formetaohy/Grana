@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use grana_geometry::PackedMesh;
+use grana_geometry::{Ellipsoid, PackedMesh};
 use grana_volume::Level;
 
 use crate::Shape;
@@ -32,10 +32,7 @@ impl<'a> LabelRaster<'a> {
         match shape {
             Shape::Spots(spots) => {
                 for spot in spots.iter() {
-                    let center = spot.center();
-                    let radius = spot.radius();
-                    let low = [0, 1, 2].map(|axis| center[axis] - radius);
-                    let high = [0, 1, 2].map(|axis| center[axis] + radius);
+                    let (low, high) = spot.ellipsoid().bounds();
                     bounds.push(cells(low, high, level, extent));
                     planes.push([0, 1, 2]);
                 }
@@ -109,12 +106,9 @@ impl<'a> LabelRaster<'a> {
             let label = u32::try_from(object + 1)
                 .expect("a label raster numbers the objects its constructor counted");
             match self.shape {
-                Shape::Spots(spots) => area.sphere(
-                    spots[object].center(),
-                    spots[object].radius(),
-                    label,
-                    &mut labels,
-                ),
+                Shape::Spots(spots) => {
+                    area.ellipsoid(spots[object].ellipsoid(), label, &mut labels)
+                }
                 Shape::Mesh(mesh) => self.mesh(mesh, object, overlap, &area, label, &mut labels),
             }
         }
@@ -271,16 +265,15 @@ impl Area {
         self.level.voxel_of(point)
     }
 
-    fn sphere(&self, center: [f32; 3], radius: f32, label: u32, labels: &mut [u32]) {
-        if !(radius.is_finite() && radius > 0.0) {
-            return;
-        }
+    fn ellipsoid(&self, ellipsoid: Ellipsoid, label: u32, labels: &mut [u32]) {
+        let center = ellipsoid.center();
+        let radii = ellipsoid.radii();
         let continuous = self.continuous(center);
         let spacing = self.level.voxel();
         let mut low = [0u32; 3];
         let mut high = [0u32; 3];
         for axis in 0..3 {
-            let reach = radius / spacing[axis];
+            let reach = radii[axis] / spacing[axis];
             low[axis] = ((continuous[axis] - reach).floor() as i64)
                 .max(i64::from(self.origin[axis])) as u32;
             high[axis] = (((continuous[axis] + reach).ceil() as i64) + 1)
@@ -297,8 +290,7 @@ impl Area {
                 cell[0] = low[0];
                 while cell[0] < high[0] {
                     let point = self.level.voxel_center(cell.map(|value| value as f32));
-                    let offset = [0, 1, 2].map(|axis| point[axis] - center[axis]);
-                    if offset.iter().map(|value| value * value).sum::<f32>() <= radius * radius {
+                    if ellipsoid.contains(point) {
                         self.set(cell.map(i64::from), label, labels);
                     }
                     cell[0] += 1;

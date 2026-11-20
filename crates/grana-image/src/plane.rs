@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grana_volume::{Extent, VoxelData, VoxelFormat};
+use grana_volume::{Extent, Sampling, VoxelData, VoxelFormat};
 
 const SOURCE_BUDGET: u64 = 512 << 20;
 const TOTAL_BUDGET: u64 = 1536 << 20;
@@ -128,6 +128,7 @@ impl Caches {
 
 pub(crate) fn reduce(
     format: VoxelFormat,
+    sampling: Sampling,
     extent: Extent,
     width: usize,
     rows: Range<usize>,
@@ -137,6 +138,9 @@ pub(crate) fn reduce(
         !sources.is_empty(),
         "a reduced plane averages at least one source plane"
     );
+    if sampling == Sampling::Nearest {
+        return nearest(sources[0], extent, width, rows);
+    }
     let height = rows.end - rows.start;
     let voxels = width * height;
     let mut sums = vec![0.0f64; voxels];
@@ -148,6 +152,44 @@ pub(crate) fn reduce(
     let depths = u32::try_from(sources.len()).expect("a plane stack counts fewer than 4G planes");
     counts.iter_mut().for_each(|count| *count *= depths);
     finish(format, sums, counts)
+}
+
+fn nearest(source: &VoxelData, extent: Extent, width: usize, rows: Range<usize>) -> VoxelData {
+    macro_rules! arm {
+        ($variant:ident, $values:expr) => {
+            VoxelData::$variant(stride($values, extent, width, rows))
+        };
+    }
+    match source {
+        VoxelData::U8(values) => arm!(U8, values),
+        VoxelData::U16(values) => arm!(U16, values),
+        VoxelData::U32(values) => arm!(U32, values),
+        VoxelData::U64(values) => arm!(U64, values),
+        VoxelData::I8(values) => arm!(I8, values),
+        VoxelData::I16(values) => arm!(I16, values),
+        VoxelData::I32(values) => arm!(I32, values),
+        VoxelData::I64(values) => arm!(I64, values),
+        VoxelData::F32(values) => arm!(F32, values),
+        VoxelData::F64(values) => arm!(F64, values),
+    }
+}
+
+fn stride<T: Copy>(values: &[T], extent: Extent, width: usize, rows: Range<usize>) -> Vec<T> {
+    let source_width = extent.x() as usize;
+    let source_height = extent.y() as usize;
+    assert!(
+        values.len() >= source_width * source_height,
+        "the source plane spans its extent"
+    );
+    let ratio = RATIO as usize;
+    let mut output = Vec::with_capacity(width * (rows.end - rows.start));
+    for row in rows {
+        let source = (row * ratio).min(source_height - 1) * source_width;
+        for column in 0..width {
+            output.push(values[source + (column * ratio).min(source_width - 1)]);
+        }
+    }
+    output
 }
 
 fn add(source: &VoxelData, extent: Extent, width: usize, rows: Range<usize>, sums: &mut [f64]) {

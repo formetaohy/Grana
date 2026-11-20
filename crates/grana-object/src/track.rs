@@ -29,7 +29,7 @@ impl TrackDetection {
     }
 
     pub fn radius(self) -> f32 {
-        (self.radii[0] * self.radii[1] * self.radii[2]).cbrt()
+        grana_geometry::Ellipsoid::new(self.centroid, self.radii).equivalent_radius()
     }
 }
 

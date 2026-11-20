@@ -3,7 +3,10 @@ use crate::ui::Ui;
 
 impl<A: Clone> Ui<A> {
     pub(crate) fn collect_focus(&mut self) {
-        let root = self.tree.root;
+        let root = self
+            .modal
+            .filter(|modal| self.tree.nodes.contains_key(*modal))
+            .unwrap_or(self.tree.root);
         let mut focus = std::mem::take(&mut self.focus_order);
         focus.clear();
         self.collect_focus_in(root, &mut focus);

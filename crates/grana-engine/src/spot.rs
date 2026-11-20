@@ -129,7 +129,7 @@ impl Ladder {
         for frame in frames {
             for spot in frame.spots.spots() {
                 if seen.is_multiple_of(stride) {
-                    radii.push(spot.radius());
+                    radii.push(spot.equivalent_radius());
                 }
                 seen += 1;
             }

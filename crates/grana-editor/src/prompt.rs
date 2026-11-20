@@ -216,7 +216,8 @@ pub fn view<'a>(
         .background(surface)
         .children([title_element, body_element, actions])
         .layer(Layer::Hud)
-        .blocks_pointer();
+        .blocks_pointer()
+        .modal();
     vec![backdrop, dialog]
 }
 

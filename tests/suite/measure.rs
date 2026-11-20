@@ -161,6 +161,31 @@ fn materialises_measurement_columns_on_demand() {
     );
     assert_eq!(table.value(0, diameter), 1.0);
     assert!(table.cached(diameter));
+    let radii = [3.0f32, 1.0, 1.0];
+    let anisotropic = Spot::gaussian(
+        [0.5, 0.5, 0.5],
+        radii.map(|radius| radius / grana_object::RADIUS_PER_SIGMA),
+        1.0,
+    );
+    let equivalent = 2.0 * (radii[0] * radii[1] * radii[2]).cbrt();
+    assert!(
+        (2.0 * anisotropic.equivalent_radius() - equivalent).abs() < 1.0e-5,
+        "an anisotropic spot measures its equivalent diameter, not its longest semi axis"
+    );
+    let level = grana_volume::Level::new(
+        grana_volume::Extent::new(8, 8, 8),
+        grana_volume::Spacing::new(1.0, 1.0, 1.0),
+    );
+    let frame = grana_object::Shape::spots(Arc::from([anisotropic]));
+    let mask = grana_object::rasterize(&frame, level, 0.0).expect("the spot masks");
+    assert!(
+        mask.contains_cell([6, 4, 4]),
+        "the mask reaches two voxels along the long semi axis"
+    );
+    assert!(
+        !mask.contains_cell([4, 6, 4]),
+        "the mask ends before two voxels along a short semi axis"
+    );
 }
 
 #[test]

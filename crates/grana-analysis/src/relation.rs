@@ -39,12 +39,12 @@ impl Reference {
         };
         let bvh = match shape {
             Shape::Mesh(mesh) => Self::mesh(mesh),
-            Shape::Spots(spots) => Bvh::new(spots.iter().enumerate().map(|(index, spot)| {
-                (
-                    index as u32,
-                    Primitive::sphere(Vec3::from(spot.center()), spot.radius()),
-                )
-            })),
+            Shape::Spots(spots) => Bvh::new(
+                spots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, spot)| (index as u32, Primitive::ellipsoid(spot.ellipsoid()))),
+            ),
         };
         Self { bvh, centers }
     }
@@ -106,7 +106,7 @@ impl Reference {
             let touched = if contained {
                 0.0
             } else {
-                cap(spot.radius(), reach, gate)
+                cap(spot.equivalent_radius(), reach, gate)
             };
             distance.push(reach);
             center.push(if measured {

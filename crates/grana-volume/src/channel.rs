@@ -67,6 +67,22 @@ impl ChannelSet {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Sampling {
+    #[default]
+    Mean,
+    Nearest,
+}
+
+impl Sampling {
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Mean => 0,
+            Self::Nearest => 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
     name: String,
@@ -74,6 +90,7 @@ pub struct ChannelInfo {
     intensity: Intensity,
     window: Intensity,
     format: VoxelFormat,
+    sampling: Sampling,
 }
 
 impl ChannelInfo {
@@ -98,7 +115,13 @@ impl ChannelInfo {
             intensity,
             window,
             format,
+            sampling: Sampling::Mean,
         }
+    }
+
+    pub fn with_sampling(mut self, sampling: Sampling) -> Self {
+        self.sampling = sampling;
+        self
     }
 
     pub fn resolve(
@@ -134,6 +157,10 @@ impl ChannelInfo {
 
     pub fn format(&self) -> VoxelFormat {
         self.format
+    }
+
+    pub fn sampling(&self) -> Sampling {
+        self.sampling
     }
 }
 

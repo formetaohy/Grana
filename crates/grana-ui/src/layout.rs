@@ -454,6 +454,7 @@ impl LayoutEngine<'_> {
         }
         if hit_change {
             tree.hits = true;
+            tree.modal = true;
         }
         if restored {
             tree.focus = true;
@@ -674,6 +675,7 @@ impl LayoutEngine<'_> {
         }
         if changed {
             tree.hits = true;
+            tree.modal = true;
         }
         let mut cursor = rect.min + Vec2::new(padding.left, padding.top);
         for index in 0..tree.nodes[id].children.len() {
@@ -706,6 +708,7 @@ fn hide<A>(tree: &mut Tree<A>, id: NodeId) {
     tree.nodes[id].visible = false;
     tree.hits = true;
     tree.focus = true;
+    tree.modal = true;
     if tree.nodes[id].runtime.edit.is_some() {
         tree.fields = true;
     }

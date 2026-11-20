@@ -26,7 +26,7 @@ pub use brick::{
     CELL_SIDE, CHANNEL_LIMIT, PADDED_SIDE, blank_brick, pad_brick,
 };
 pub use calibration::Calibration;
-pub use channel::{ChannelInfo, ChannelSet, name_of, tint_of};
+pub use channel::{ChannelInfo, ChannelSet, Sampling, name_of, tint_of};
 pub use clip::Clip;
 pub use damage::Damage;
 pub use extent::Extent;

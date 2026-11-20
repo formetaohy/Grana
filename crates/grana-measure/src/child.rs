@@ -139,7 +139,7 @@ impl ChildMetric {
             Objects::Spots(set) => {
                 let spot = set.spots()[object];
                 match self {
-                    Self::Diameter => 2.0 * spot.radius(),
+                    Self::Diameter => 2.0 * spot.equivalent_radius(),
                     Self::Contrast => spot.quality(),
                     Self::Intensity(channel) => intensities.object(object, channel).mean(),
                     Self::Volume

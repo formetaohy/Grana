@@ -1,5 +1,7 @@
 use glam::Vec3;
 
+use crate::Ellipsoid;
+
 const LEAF: usize = 8;
 const DEPTH: usize = 128;
 const PARALLEL: f32 = 1.0e-12;
@@ -9,7 +11,7 @@ const PROBE: [f32; 3] = [0.7231, -0.4127, 0.5533];
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Primitive {
     Triangle([Vec3; 3]),
-    Sphere { center: Vec3, radius: f32 },
+    Ellipsoid(Ellipsoid),
 }
 
 impl Primitive {
@@ -21,18 +23,14 @@ impl Primitive {
         Self::Triangle(points)
     }
 
-    pub fn sphere(center: Vec3, radius: f32) -> Self {
-        assert!(
-            center.is_finite() && radius.is_finite() && radius > 0.0,
-            "a primitive sphere is a positive finite sphere"
-        );
-        Self::Sphere { center, radius }
+    pub fn ellipsoid(ellipsoid: Ellipsoid) -> Self {
+        Self::Ellipsoid(ellipsoid)
     }
 
     pub fn distance(self, point: Vec3) -> f32 {
         match self {
             Self::Triangle(points) => point.distance(closest(points, point)),
-            Self::Sphere { center, radius } => point.distance(center) - radius,
+            Self::Ellipsoid(ellipsoid) => ellipsoid.distance(point.to_array()),
         }
         .max(0.0)
     }
@@ -43,9 +41,9 @@ impl Primitive {
                 (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
                 |(low, high), point| (low.min(point), high.max(point)),
             ),
-            Self::Sphere { center, radius } => {
-                let reach = Vec3::splat(radius);
-                (center - reach, center + reach)
+            Self::Ellipsoid(ellipsoid) => {
+                let (low, high) = ellipsoid.bounds();
+                (Vec3::from(low), Vec3::from(high))
             }
         }
     }
@@ -53,7 +51,7 @@ impl Primitive {
     fn centre(self) -> Vec3 {
         match self {
             Self::Triangle(points) => (points[0] + points[1] + points[2]) / 3.0,
-            Self::Sphere { center, .. } => center,
+            Self::Ellipsoid(ellipsoid) => Vec3::from(ellipsoid.center()),
         }
     }
 
@@ -67,38 +65,17 @@ impl Primitive {
             Self::Triangle(points) => {
                 triangle_ray(points, origin, direction).map(|distance| (distance, distance))
             }
-            Self::Sphere { center, radius } => {
-                let offset = origin - center;
-                let squared = direction.length_squared();
-                let projection = offset.dot(direction);
-                let constant = offset.length_squared() - radius * radius;
-                let discriminant = projection * projection - squared * constant;
-                if discriminant <= 0.0 {
-                    return None;
-                }
-                let root = discriminant.sqrt();
-                Some((
-                    (-projection - root) / squared,
-                    (-projection + root) / squared,
-                ))
-            }
+            Self::Ellipsoid(ellipsoid) => ellipsoid.span(origin, direction),
         }
     }
 
     fn crossings(self, origin: Vec3, direction: Vec3) -> u32 {
         match self {
             Self::Triangle(points) => u32::from(triangle_ray(points, origin, direction).is_some()),
-            Self::Sphere { center, radius } => {
-                let offset = origin - center;
-                let b = offset.dot(direction);
-                let c = offset.length_squared() - radius * radius;
-                let discriminant = b * b - c;
-                if discriminant <= 0.0 {
-                    return 0;
-                }
-                let root = discriminant.sqrt();
-                u32::from(-b - root > REACH) + u32::from(-b + root > REACH)
-            }
+            Self::Ellipsoid(_) => match self.span(origin, direction) {
+                Some((near, far)) => u32::from(near > REACH) + u32::from(far > REACH),
+                None => 0,
+            },
         }
     }
 }

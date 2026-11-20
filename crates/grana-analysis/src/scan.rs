@@ -559,32 +559,25 @@ impl SpotScan {
             .iter()
             .map(|spot| {
                 let center = spot.center();
-                let radius = spot.radius();
+                let ellipsoid = spot.ellipsoid();
+                let radii = ellipsoid.radii();
                 let mut accumulator = SampleAccumulator::new();
                 let mut low = [0u32; 3];
                 let mut high = [0u32; 3];
                 for axis in 0..3 {
                     let voxel = self.level.voxel_of(center)[axis] - 0.5;
-                    let reach = radius / self.spacing[axis];
+                    let reach = radii[axis] / self.spacing[axis];
                     let minimum = origin[axis] as f32;
                     let maximum = (origin[axis] + dims[axis] as u32 - 1) as f32;
                     low[axis] = (voxel - reach).floor().clamp(minimum, maximum) as u32;
                     high[axis] = (voxel + reach).ceil().clamp(minimum, maximum) as u32;
                 }
-                let squared_radius = radius * radius;
                 let mut sampled = false;
                 for z in low[2]..=high[2] {
                     for y in low[1]..=high[1] {
                         for x in low[0]..=high[0] {
-                            let squared = (0..3)
-                                .map(|axis| {
-                                    let world = self
-                                        .level
-                                        .voxel_center([x as f32, y as f32, z as f32])[axis];
-                                    (world - center[axis]).powi(2)
-                                })
-                                .sum::<f32>();
-                            if squared > squared_radius {
+                            let world = self.level.voxel_center([x as f32, y as f32, z as f32]);
+                            if !ellipsoid.contains(world) {
                                 continue;
                             }
                             let index = (x - origin[0]) as usize

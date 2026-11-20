@@ -1,4 +1,5 @@
 use glam::Vec3;
+use grana_geometry::Ellipsoid;
 use grana_object::{SampleAccumulator, SampleStatistics};
 use grana_pipeline::Channels;
 use grana_readout::{ImportedFilament, ImportedSpot, ImportedSurface};
@@ -61,11 +62,10 @@ impl<'a> Sampler<'a> {
     }
 
     pub(super) fn spot(&mut self, time: u32, spot: &ImportedSpot) -> Result<Sampled, String> {
-        let center = spot.center();
-        let reach = [0, 1, 2].map(|axis| center[axis] + spot.radius());
-        let low = [0, 1, 2].map(|axis| center[axis] - spot.radius());
-        self.sample(time, low, reach, |level, low, high, mask| {
-            spot_mask(level, low, high, center, spot.radius(), mask)
+        let ellipsoid = Ellipsoid::sphere(spot.center(), spot.radius());
+        let (low, high) = ellipsoid.bounds();
+        self.sample(time, low, high, |level, low, high, mask| {
+            spot_mask(level, low, high, ellipsoid, mask)
         })
     }
 
@@ -333,24 +333,15 @@ fn surface_mask(
     }
 }
 
-fn spot_mask(
-    level: Level,
-    low: [u32; 3],
-    high: [u32; 3],
-    center: [f32; 3],
-    radius: f32,
-    mask: &mut [bool],
-) {
+fn spot_mask(level: Level, low: [u32; 3], high: [u32; 3], ellipsoid: Ellipsoid, mask: &mut [bool]) {
     let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
     let width = dims[0] as usize;
     let height = dims[1] as usize;
-    let center = Vec3::from(center);
-    let reach = radius * radius;
     for z in low[2]..high[2] {
         for y in low[1]..high[1] {
             for x in low[0]..high[0] {
-                let world = Vec3::from(level.voxel_center([x as f32, y as f32, z as f32]));
-                if world.distance_squared(center) <= reach {
+                let world = level.voxel_center([x as f32, y as f32, z as f32]);
+                if ellipsoid.contains(world) {
                     let index = (x - low[0]) as usize
                         + width * ((y - low[1]) as usize + height * (z - low[2]) as usize);
                     mask[index] = true;

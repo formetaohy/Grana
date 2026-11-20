@@ -49,7 +49,7 @@ impl<A: Clone> Ui<A> {
 
     pub(crate) fn paint_overlays(&mut self) {
         let tooltip = self.tooltip.take();
-        let focus = self.focus;
+        let focus = self.focus.filter(|node| self.inside_modal(*node));
         let focus_visible = self.focus_visible;
         let pointer = self.pointer;
         let size = self.size;

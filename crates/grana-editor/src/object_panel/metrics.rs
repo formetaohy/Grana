@@ -202,7 +202,7 @@ pub(super) fn measure<'a>(
                 ),
                 (
                     property("Diameter"),
-                    format!("{:.3} µm", spot.radius() * 2.0),
+                    format!("{:.3} µm", spot.equivalent_radius() * 2.0),
                 ),
                 (property("Contrast"), format!("{:.3}", spot.quality())),
                 (property("Intensity"), intensity_text(intensity)),

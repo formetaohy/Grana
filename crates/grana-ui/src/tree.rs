@@ -22,6 +22,7 @@ pub struct Tree<A> {
     pub fields: bool,
     pub popups: bool,
     pub hits: bool,
+    pub modal: bool,
     pub activated: Vec<NodeId>,
     pub removed_damage: Option<crate::geometry::Rect>,
     pub scrolls: Vec<NodeId>,
@@ -50,6 +51,7 @@ impl<A> Tree<A> {
             fields: false,
             popups: false,
             hits: false,
+            modal: false,
             activated: Vec::new(),
             removed_damage: None,
             scrolls: Vec::new(),
@@ -155,6 +157,7 @@ impl<A> Tree<A> {
                         self.structure = true;
                         self.focus = true;
                         self.hits = true;
+                        self.modal = true;
                         let mut element = element;
                         let fields = matches!(element.content, Content::Field(_));
                         let popups = element.popup.is_some();
@@ -244,6 +247,9 @@ impl<A> Tree<A> {
         if patch.hits {
             self.hits = true;
         }
+        if patch.modal {
+            self.modal = true;
+        }
         if patch.animate {
             self.activate(id);
         }
@@ -331,6 +337,7 @@ impl<A> Tree<A> {
         self.fields = true;
         self.popups = true;
         self.hits = true;
+        self.modal = true;
         reconciled.removed.push(id);
         self.nodes.remove(id);
     }
@@ -378,5 +385,6 @@ impl<A> Tree<A> {
         self.layout = true;
         self.hits = true;
         self.focus = true;
+        self.modal = true;
     }
 }

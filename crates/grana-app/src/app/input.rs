@@ -81,6 +81,18 @@ impl App {
             self.request_redraw();
             return;
         }
+        if self
+            .workspace
+            .calibration
+            .as_ref()
+            .is_some_and(|sheet| sheet.open)
+        {
+            if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+                self.dispatch(grana_editor::Message::DismissCalibration);
+            }
+            self.request_redraw();
+            return;
+        }
         if claimed {
             self.request_redraw();
             return;

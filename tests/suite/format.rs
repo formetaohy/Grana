@@ -1618,6 +1618,59 @@ fn writes_and_reads_a_label_image() {
             }
         }
     }
+    let labelled = Image::open_with_cache(
+        &Source::file_group(path.clone(), 0, "/labels/cells".to_string()),
+        None,
+    )
+    .expect("the label image opens as a dataset");
+    assert_eq!(
+        labelled.pyramid().channels()[0].sampling(),
+        grana_volume::Sampling::Nearest,
+        "a label image samples its nearest child instead of averaging its ids"
+    );
+    let coarse = Extent::new(
+        extent.x().div_ceil(2),
+        extent.y().div_ceil(2),
+        extent.z().div_ceil(2),
+    );
+    let stored = labelled
+        .read_region(
+            0,
+            0,
+            0,
+            &[0..extent.x(), 0..extent.y(), 0..extent.z()],
+            &grana_warp::Warp::IDENTITY,
+        )
+        .expect("the stored label level reads");
+    let derived = labelled
+        .read_region(
+            0,
+            1,
+            0,
+            &[0..coarse.x(), 0..coarse.y(), 0..coarse.z()],
+            &grana_warp::Warp::IDENTITY,
+        )
+        .expect("the derived label level reads");
+    let mut fine = vec![0.0f32; stored.voxel_count()];
+    stored.write_values(&mut fine);
+    let mut sampled = vec![0.0f32; derived.voxel_count()];
+    derived.write_values(&mut sampled);
+    for z in 0..coarse.z() {
+        for y in 0..coarse.y() {
+            for x in 0..coarse.x() {
+                let child = extent.index(
+                    (2 * x).min(extent.x() - 1),
+                    (2 * y).min(extent.y() - 1),
+                    (2 * z).min(extent.z() - 1),
+                ) as usize;
+                assert_eq!(
+                    sampled[coarse.index(x, y, z) as usize],
+                    fine[child],
+                    "the derived label at {x},{y},{z} keeps the nearest id"
+                );
+            }
+        }
+    }
     grana_zarr::write_group_labels(
         &path,
         "/",

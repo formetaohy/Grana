@@ -227,6 +227,7 @@ pub(crate) struct Dirty {
     pub popup: bool,
     pub hits: bool,
     pub animate: bool,
+    pub modal: bool,
 }
 
 impl Dirty {
@@ -238,6 +239,7 @@ impl Dirty {
         popup: false,
         hits: false,
         animate: false,
+        modal: false,
     };
 
     pub const GEOMETRY: Self = Self {
@@ -273,6 +275,7 @@ impl Dirty {
             popup: self.popup | other.popup,
             hits: self.hits | other.hits,
             animate: self.animate | other.animate,
+            modal: self.modal | other.modal,
         }
     }
 }
@@ -296,6 +299,7 @@ pub struct Element<'a, A> {
     pub(crate) enabled: bool,
     pub(crate) focus_ring: Option<Corners>,
     pub(crate) blocks_pointer: bool,
+    pub(crate) modal: bool,
 }
 
 impl<'a, A> Element<'a, A> {
@@ -319,6 +323,7 @@ impl<'a, A> Element<'a, A> {
             enabled: true,
             focus_ring: None,
             blocks_pointer: false,
+            modal: false,
         }
     }
 
@@ -455,6 +460,11 @@ impl<'a, A> Element<'a, A> {
 
     pub fn blocks_pointer(mut self) -> Self {
         self.blocks_pointer = true;
+        self
+    }
+
+    pub fn modal(mut self) -> Self {
+        self.modal = true;
         self
     }
 
@@ -651,6 +661,7 @@ impl<'a, A> Element<'a, A> {
         node.enabled = self.enabled;
         node.focus_ring = self.focus_ring;
         node.blocks_pointer = self.blocks_pointer;
+        node.modal = self.modal;
         node.canvas = self
             .canvas
             .as_ref()
@@ -678,6 +689,7 @@ impl<'a, A> Element<'a, A> {
             enabled,
             focus_ring,
             blocks_pointer,
+            modal,
         } = self;
         let mut dirty = Dirty::NONE;
         if node.popup_spec != popup {
@@ -730,6 +742,10 @@ impl<'a, A> Element<'a, A> {
         if node.blocks_pointer != blocks_pointer {
             node.blocks_pointer = blocks_pointer;
             dirty.hits = true;
+        }
+        if node.modal != modal {
+            node.modal = modal;
+            dirty.modal = true;
         }
         dirty
     }

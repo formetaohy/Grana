@@ -275,7 +275,7 @@ impl Measurement {
                 let spot = set.spots()[object];
                 match self {
                     Self::Position(axis) => spot.center()[axis],
-                    Self::Diameter => 2.0 * spot.radius(),
+                    Self::Diameter => 2.0 * spot.equivalent_radius(),
                     Self::Contrast => spot.quality(),
                     Self::Precision(axis) => spot.sigma()[axis],
                     Self::Intensity { channel, statistic } => {

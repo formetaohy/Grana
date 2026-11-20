@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_geometry::PackedMesh;
+use grana_geometry::{Ellipsoid, PackedMesh};
 use grana_volume::{Level, Region};
 
 use crate::Shape;
@@ -445,7 +445,7 @@ pub fn rasterize(frame: &Shape, level: Level, radius: f32) -> Result<Mask, Strin
     match frame {
         Shape::Spots(spots) => {
             for spot in spots.iter() {
-                area.sphere(spot.center(), spot.radius());
+                area.ellipsoid(spot.ellipsoid());
             }
         }
         Shape::Mesh(mesh) => cut_mesh(mesh, &mut area),
@@ -485,16 +485,22 @@ impl Area {
         self.level.voxel_of(point)
     }
 
-    fn sphere(&mut self, center: [f32; 3], radius: f32) {
-        if !(radius.is_finite() && radius > 0.0) {
+    fn ellipsoid(&mut self, ellipsoid: Ellipsoid) {
+        let center = ellipsoid.center();
+        let radii = ellipsoid.radii();
+        assert!(
+            radii.iter().all(|value| *value > 0.0),
+            "a mask paints a positive radius on every axis"
+        );
+        let continuous = self.continuous(center);
+        if continuous.iter().any(|value| !value.is_finite()) {
             return;
         }
-        let continuous = self.continuous(center);
         let spacing = self.level.voxel();
         let mut low = [0i64; 3];
         let mut high = [0i64; 3];
         for axis in 0..3 {
-            let reach = radius / spacing[axis];
+            let reach = radii[axis] / spacing[axis];
             low[axis] = self.clip_axis((continuous[axis] - reach).floor() as i64, axis);
             high[axis] = self.clip_axis((continuous[axis] + reach).ceil() as i64 + 1, axis);
             if high[axis] <= low[axis] {
@@ -507,8 +513,7 @@ impl Area {
             while cell[1] < high[1] {
                 cell[0] = low[0];
                 while cell[0] < high[0] {
-                    let offset = Vec3::from(center) - Vec3::from(self.cell_center(cell));
-                    if offset.length_squared() <= radius * radius {
+                    if ellipsoid.contains(self.cell_center(cell)) {
                         self.set(cell);
                     }
                     cell[0] += 1;

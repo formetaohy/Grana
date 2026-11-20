@@ -252,7 +252,9 @@ pub(crate) fn remote<'a>(
         .clipped()
         .children([head, field])
         .at(rect)
-        .layer(Layer::Popup);
+        .layer(Layer::Popup)
+        .blocks_pointer()
+        .modal();
     vec![backdrop, sheet]
 }
 
@@ -452,7 +454,9 @@ pub(crate) fn calibration<'a>(
         .clipped()
         .children([head, crate::view::caption(ctx, &detail), body, actions])
         .at(rect)
-        .layer(Layer::Popup);
+        .layer(Layer::Popup)
+        .blocks_pointer()
+        .modal();
     vec![backdrop, sheet_element]
 }
 

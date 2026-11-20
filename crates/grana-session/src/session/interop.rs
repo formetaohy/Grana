@@ -357,7 +357,7 @@ fn lineage(
                     let size = anchor.bounds().size();
                     (0.5 * size[0].max(size[1]).max(size[2])).max(floor)
                 },
-                |spot| spot.radius().max(floor),
+                |spot| spot.equivalent_radius().max(floor),
             );
             let quality = spot.map_or(DEFAULT_QUALITY, |spot| spot.quality());
             detections.push(Detection::new(

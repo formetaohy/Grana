@@ -161,6 +161,31 @@ fn the_unsaved_prompt_covers_the_editor_and_resolves_its_choice() {
         .bounds("behind")
         .expect("the editor target is laid out")
         .center();
+    let element = prompt_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Key {
+        key: InputKey::Tab,
+        pressed: true,
+        repeat: false,
+    });
+    let focused = ui.update(PROMPT_SIZE, 1.0, 0.05);
+    assert!(focused.is_empty(), "tab alone activates nothing");
+    let element = prompt_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Key {
+        key: InputKey::Enter,
+        pressed: true,
+        repeat: false,
+    });
+    let entered = ui.update(PROMPT_SIZE, 1.0, 0.06);
+    assert!(
+        !matches!(entered.as_slice(), [Message::FitView]),
+        "enter inside the prompt never reaches the control behind it"
+    );
+    assert!(
+        matches!(entered.as_slice(), [Message::ResolvePrompt(_)]),
+        "enter activates the prompt action the focus ring names"
+    );
     for event in [Event::Moved(behind), Event::Down(Button::Primary)] {
         ui.input_mut().push(event);
     }

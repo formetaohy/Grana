@@ -300,13 +300,14 @@ fn measure(
     for channel in 0..channels {
         for (slot, spot) in spots.iter().enumerate() {
             let center = spot.center();
-            let radius = spot.radius();
+            let ellipsoid = spot.ellipsoid();
+            let radii = ellipsoid.radii();
             let mut voxel = [0.0f32; 3];
             let mut low = [0u32; 3];
             let mut high = [0u32; 3];
             for axis in 0..3 {
                 voxel[axis] = info.voxel_of(center)[axis] - 0.5;
-                let reach = radius / step[axis];
+                let reach = radii[axis] / step[axis];
                 low[axis] = (voxel[axis] - reach)
                     .floor()
                     .clamp(0.0, (dims[axis] - 1) as f32) as u32;
@@ -329,23 +330,17 @@ fn measure(
                 (ranges[1].end - ranges[1].start) as usize,
                 (ranges[2].end - ranges[2].start) as usize,
             ];
-            let squared_radius = radius * radius;
             let mut accumulator = grana_object::SampleAccumulator::new();
             let mut sampled = false;
             for z in 0..size[2] {
                 for y in 0..size[1] {
                     for x in 0..size[0] {
-                        let squared = (0..3)
-                            .map(|axis| {
-                                let position = info.voxel_center([
-                                    (low[0] + x as u32) as f32,
-                                    (low[1] + y as u32) as f32,
-                                    (low[2] + z as u32) as f32,
-                                ])[axis];
-                                (position - center[axis]).powi(2)
-                            })
-                            .sum::<f32>();
-                        if squared <= squared_radius {
+                        let position = info.voxel_center([
+                            (low[0] + x as u32) as f32,
+                            (low[1] + y as u32) as f32,
+                            (low[2] + z as u32) as f32,
+                        ]);
+                        if ellipsoid.contains(position) {
                             accumulator.push(samples[x + size[0] * (y + size[1] * z)]);
                             sampled = true;
                         }

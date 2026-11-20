@@ -19,7 +19,7 @@ use crate::plane;
 use crate::region;
 use crate::{Error, Series, Source};
 
-const RESOLVED_VERSION: u32 = 3;
+const RESOLVED_VERSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -486,6 +486,11 @@ impl Image {
         let mut planes = Vec::with_capacity(channels);
         for channel in 0..channels {
             let format = self.channel_format(channel)?;
+            let sampling = self
+                .pyramid
+                .channels()
+                .get(channel)
+                .map_or(grana_volume::Sampling::Mean, |info| info.sampling());
             let sources = held
                 .iter()
                 .map(|plane| plane.channel(channel))
@@ -494,7 +499,7 @@ impl Image {
             let mut row = 0;
             while row < height {
                 let next = (row + plane::STRIP_ROWS).min(height);
-                let strip = plane::reduce(format, source, width, row..next, &sources);
+                let strip = plane::reduce(format, sampling, source, width, row..next, &sources);
                 output.blit(
                     &strip,
                     Placement::new(width as u32, [0, 0]),
@@ -642,6 +647,7 @@ fn geometry(pyramid: &Pyramid) -> Vec<u8> {
     for channel in pyramid.channels() {
         bytes.extend_from_slice(channel.name().as_bytes());
         bytes.push(channel.format().code());
+        bytes.push(channel.sampling().code());
     }
     bytes
 }

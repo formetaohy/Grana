@@ -95,6 +95,7 @@ pub(crate) fn view<'a>(
             .clipped()
             .layer(Layer::Popup)
             .blocks_pointer()
+            .modal()
             .children(children),
     ]
 }

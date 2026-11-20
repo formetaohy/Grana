@@ -75,6 +75,7 @@ pub struct Metadata {
     pub axes: Vec<Axis>,
     pub datasets: Vec<Dataset>,
     pub channels: Vec<ChannelMetadata>,
+    pub label_image: bool,
     pub calibration: Option<Calibration>,
 }
 
@@ -143,6 +144,7 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
         axes: frame.source,
         datasets,
         channels,
+        label_image: fields.contains_key("image-label"),
         calibration: calibration(path, attributes)?,
     })
 }

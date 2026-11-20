@@ -25,6 +25,9 @@ impl<A: Clone> Ui<A> {
             self.edit_drag = false;
             self.scrollbar = None;
         }
+        if self.edit.is_some_and(|edit| !self.inside_modal(edit)) {
+            self.finish_edit(Finish::Write);
+        }
         self.hover_scrollbars();
         if self.drag_scrollbar() {
             self.wheel();
@@ -832,14 +835,16 @@ impl<A: Clone> Ui<A> {
             return;
         }
         if keys.contains(&InputKey::Escape) {
-            self.close_popups();
-            self.focus = None;
-            self.focus_visible = false;
+            if self.modal.is_none() {
+                self.close_popups();
+                self.focus = None;
+                self.focus_visible = false;
+            }
             return;
         }
-        let focused = self
-            .focus
-            .filter(|node| self.tree.nodes.get(*node).is_some_and(|node| node.visible));
+        let focused = self.focus.filter(|node| {
+            self.tree.nodes.get(*node).is_some_and(|node| node.visible) && self.inside_modal(*node)
+        });
         for key in &keys {
             if !matches!(key, InputKey::PageUp | InputKey::PageDown) {
                 continue;
@@ -872,7 +877,10 @@ impl<A: Clone> Ui<A> {
     }
 
     fn scroll_keys(&mut self, anchor: Option<NodeId>, key: InputKey) {
-        let Some(node) = anchor.or(self.hover) else {
+        let Some(node) = anchor
+            .or(self.hover)
+            .filter(|node| self.inside_modal(*node))
+        else {
             return;
         };
         let Some(scroller) = self.scroll_ancestor(node) else {
@@ -995,7 +1003,7 @@ pub(crate) fn accepts(content: &Content, key: InputKey) -> bool {
     traverses(content) && step(key).is_some()
 }
 
-fn is_inside<A>(tree: &crate::tree::Tree<A>, root: NodeId, node: NodeId) -> bool {
+pub(crate) fn is_inside<A>(tree: &crate::tree::Tree<A>, root: NodeId, node: NodeId) -> bool {
     let mut current = Some(node);
     while let Some(id) = current {
         if id == root {

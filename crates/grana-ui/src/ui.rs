@@ -59,6 +59,7 @@ pub struct Ui<A = ()> {
     pub(crate) focus: Option<NodeId>,
     pub(crate) focus_visible: bool,
     pub(crate) focus_order: Vec<NodeId>,
+    pub(crate) modal: Option<NodeId>,
     pub(crate) edit: Option<NodeId>,
     pub(crate) edit_drag: bool,
     pub(crate) edit_caret: Option<Rect>,
@@ -117,6 +118,7 @@ impl<A: Clone> Ui<A> {
             focus: None,
             focus_visible: false,
             focus_order: Vec::new(),
+            modal: None,
             edit: None,
             edit_drag: false,
             edit_caret: None,
@@ -266,6 +268,15 @@ impl<A: Clone> Ui<A> {
             .any(|id| self.tree.nodes[*id].runtime.open)
     }
 
+    pub fn modal_open(&self) -> bool {
+        self.modal.is_some()
+    }
+
+    pub(crate) fn inside_modal(&self, node: NodeId) -> bool {
+        self.modal
+            .is_none_or(|modal| crate::dispatch::is_inside(&self.tree, modal, node))
+    }
+
     pub fn claims_key(&self, key: InputKey) -> bool {
         let modifiers = self.input.modifiers();
         let command = modifiers.control || modifiers.logo;
@@ -289,7 +300,7 @@ impl<A: Clone> Ui<A> {
                 InputKey::PageUp | InputKey::PageDown => false,
             };
         }
-        if self.focus_visible || self.popup_open_any() {
+        if self.focus_visible || self.popup_open_any() || self.modal_open() {
             return matches!(
                 key,
                 InputKey::Tab
@@ -357,6 +368,10 @@ impl<A: Clone> Ui<A> {
         let removed = self.tree.apply(element, &mut canvases);
         self.prune(&removed.removed);
         self.actions.extend(removed.committed);
+        if self.tree.modal {
+            self.rebuild_modal();
+            self.tree.modal = false;
+        }
         if self.tree.fields {
             self.sync_fields();
             self.tree.fields = false;

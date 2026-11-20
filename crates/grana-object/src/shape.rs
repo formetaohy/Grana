@@ -39,12 +39,8 @@ impl Shape {
         match self {
             Self::Spots(spots) => {
                 for spot in spots.iter() {
-                    let center = spot.center();
-                    let radius = spot.radius();
-                    take(
-                        [0, 1, 2].map(|axis| center[axis] - radius),
-                        [0, 1, 2].map(|axis| center[axis] + radius),
-                    );
+                    let (minimum, maximum) = spot.ellipsoid().bounds();
+                    take(minimum, maximum);
                 }
             }
             Self::Mesh(mesh) => {

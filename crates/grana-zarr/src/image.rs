@@ -3,7 +3,8 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use grana_volume::{
-    Calibration, ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
+    Calibration, ChannelInfo, Intensity, Probe, Pyramid, Sampling, VoxelData, VoxelFormat, name_of,
+    tint_of,
 };
 use zarrs::array::data_type::{
     float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
@@ -132,6 +133,11 @@ impl Image {
             });
         }
         let format = format.expect("a multiscale image has at least one dataset");
+        let sampling = if metadata.label_image {
+            Sampling::Nearest
+        } else {
+            Sampling::Mean
+        };
         let channels = channels(
             &root.tag(group),
             &metadata.channels,
@@ -139,6 +145,7 @@ impl Image {
             format,
             &levels,
             frames,
+            sampling,
         )?;
         let name = metadata
             .name
@@ -473,6 +480,7 @@ fn channels(
     format: VoxelFormat,
     levels: &[LevelArray],
     frames: u32,
+    sampling: Sampling,
 ) -> Result<Vec<ChannelInfo>, Error> {
     if !metadata.is_empty() && metadata.len() != count as usize {
         return Err(Error::Metadata {
@@ -499,16 +507,15 @@ fn channels(
                 .and_then(valid);
             if let Some(intensity) = data_range.or(omero_window) {
                 let window = omero_window.or(data_range).unwrap_or(intensity);
-                return Ok(ChannelInfo::new(name, tint, intensity, window, format));
+                return Ok(
+                    ChannelInfo::new(name, tint, intensity, window, format).with_sampling(sampling)
+                );
             }
             let sampled = sample_range(levels, index as usize, frames)?;
-            Ok(ChannelInfo::resolve(
-                name,
-                tint,
-                format,
-                &[sampled],
-                &[sampled],
-            ))
+            Ok(
+                ChannelInfo::resolve(name, tint, format, &[sampled], &[sampled])
+                    .with_sampling(sampling),
+            )
         })
         .collect()
 }

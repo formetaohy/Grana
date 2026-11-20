@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use grana_geometry::Ellipsoid;
+
 use crate::IntensityTable;
 
 pub const RADIUS_PER_SIGMA: f32 = 1.177_410_1;
@@ -55,12 +57,16 @@ impl Spot {
         self.sigma
     }
 
-    pub fn radius(self) -> f32 {
-        self.radii().into_iter().fold(0.0, f32::max)
-    }
-
     pub fn radii(self) -> [f32; 3] {
         self.sigma.map(|value| value * RADIUS_PER_SIGMA)
+    }
+
+    pub fn ellipsoid(self) -> Ellipsoid {
+        Ellipsoid::new(self.center, self.radii())
+    }
+
+    pub fn equivalent_radius(self) -> f32 {
+        self.ellipsoid().equivalent_radius()
     }
 
     pub fn quality(self) -> f32 {

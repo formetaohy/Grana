@@ -1,5 +1,6 @@
 mod bounds;
 mod bvh;
+mod ellipsoid;
 mod geometry;
 mod graph;
 mod hull;
@@ -15,6 +16,7 @@ mod volume;
 
 pub use bounds::Bounds;
 pub use bvh::{Bvh, Primitive};
+pub use ellipsoid::Ellipsoid;
 pub use geometry::Geometry;
 pub use graph::{ends, push_graph};
 pub use hull::Hull;
