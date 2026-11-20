@@ -41,14 +41,14 @@ pub(crate) struct Resident {
 #[derive(Clone, Copy)]
 struct Slot {
     brick: Option<ResidentBrick>,
-    held: bool,
+    holds: u8,
     referenced: bool,
 }
 
 impl Slot {
     const EMPTY: Self = Self {
         brick: None,
-        held: false,
+        holds: 0,
         referenced: false,
     };
 }
@@ -69,7 +69,7 @@ pub(crate) struct Atlas {
     free: Vec<u32>,
     slots: Vec<Slot>,
     hand: usize,
-    held: Vec<u32>,
+    hold_generation: u8,
     versions: Vec<u32>,
     writes: u64,
     now: u32,
@@ -211,7 +211,7 @@ impl Atlas {
             free: (0..capacity as u32).rev().collect(),
             slots: vec![Slot::EMPTY; capacity],
             hand: 0,
-            held: Vec::new(),
+            hold_generation: 0,
             versions: vec![0; capacity],
             writes: 0,
             now: 0,
@@ -348,7 +348,7 @@ impl Atlas {
         self.free = (0..capacity).rev().collect();
         self.slots.fill(Slot::EMPTY);
         self.hand = 0;
-        self.held.clear();
+        self.hold_generation = 0;
         self.identity.clear();
         self.frames.clear();
         self.hollow.clear();
@@ -384,26 +384,24 @@ impl Atlas {
             let Some(slot) = self.identity.get(&(time, level, index as usize)).copied() else {
                 continue;
             };
-            self.hold(slot, true);
+            self.hold(slot);
             self.slots[slot as usize].referenced = true;
         }
     }
 
-    fn hold(&mut self, slot: u32, hold: bool) {
-        let placed = &mut self.slots[slot as usize];
-        if !hold {
-            placed.held = false;
-            return;
-        }
-        if !placed.held {
-            placed.held = true;
-            self.held.push(slot);
-        }
+    fn hold(&mut self, slot: u32) {
+        self.slots[slot as usize].holds |= 1 << self.hold_generation;
     }
 
-    pub fn clear_holds(&mut self) {
-        for slot in self.held.drain(..) {
-            self.slots[slot as usize].held = false;
+    fn held(&self, slot: u32) -> bool {
+        self.slots[slot as usize].holds & (1 << self.hold_generation) != 0
+    }
+
+    pub fn advance_holds(&mut self) {
+        self.hold_generation ^= 1;
+        let bit = !(1 << self.hold_generation);
+        for slot in &mut self.slots {
+            slot.holds &= bit;
         }
     }
 
@@ -447,7 +445,7 @@ impl Atlas {
             let slot = self.hand;
             self.hand = (self.hand + 1) % self.slots.len();
             let candidate = self.slots[slot];
-            if candidate.brick.is_none() || candidate.held {
+            if candidate.brick.is_none() || self.held(slot as u32) {
                 continue;
             }
             if self.future(slot as u32) != future {
@@ -482,10 +480,14 @@ impl Atlas {
             .entry((brick.time, brick.level))
             .or_default()
             .push(slot);
-        let placed = &mut self.slots[slot as usize];
-        placed.brick = Some(brick);
-        placed.referenced = true;
-        self.hold(slot, hold);
+        {
+            let placed = &mut self.slots[slot as usize];
+            placed.brick = Some(brick);
+            placed.referenced = true;
+        }
+        if hold {
+            self.hold(slot);
+        }
         self.written(slot);
     }
 

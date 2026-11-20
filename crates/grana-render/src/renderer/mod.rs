@@ -41,8 +41,8 @@ use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, FitView, Ladder, Limits, Planner, Schedule, VolumeFit, bucket_scale, capacities,
-    fit_measured, fit_volume, volume_dispatch,
+    self, BAND, FitView, Ladder, Limits, Measured, Planner, Schedule, VolumeFit, bucket_scale,
+    capacities, fit_measured, fit_volume, volume_dispatch,
 };
 use crate::present::Present;
 use crate::schema::SceneFrame;

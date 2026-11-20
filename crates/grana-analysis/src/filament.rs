@@ -89,7 +89,6 @@ impl Grid {
 pub struct FilamentScan {
     level: usize,
     extent: [u32; 3],
-    step: [u32; 3],
     params: FilamentParams,
     intensity: Intensity,
     threshold: f32,
@@ -99,7 +98,9 @@ pub struct FilamentScan {
     empty: bool,
     budget: Budget,
     mask: Vec<u8>,
+    tube: Vec<u8>,
     distance: Vec<u16>,
+    owner: Vec<u32>,
 }
 
 impl FilamentScan {
@@ -141,7 +142,6 @@ impl FilamentScan {
         Self {
             level,
             extent,
-            step,
             params,
             intensity,
             threshold: params.threshold(),
@@ -159,7 +159,9 @@ impl FilamentScan {
             empty,
             budget,
             mask: vec![0; voxel_count as usize],
+            tube: vec![0; voxel_count as usize],
             distance: vec![0; voxel_count as usize],
+            owner: vec![0; voxel_count as usize],
         }
     }
 
@@ -205,6 +207,7 @@ impl FilamentScan {
             },
             &mut self.mask,
         );
+        self.tube.copy_from_slice(&self.mask);
         volume::distance(&self.mask, &self.grid, &mut self.distance);
         skeleton::thin(&mut self.mask, &self.distance, &self.grid);
         let traced = graph::trace(
@@ -213,6 +216,7 @@ impl FilamentScan {
             &self.grid,
             self.params.min_length(),
         );
+        self.label(&traced);
         let mut accumulators = vec![SampleAccumulator::new(); traced.len() * self.channels.count()];
         for channel in 0..self.channels.count() {
             let measured = if channel == self.channels.detection() {
@@ -231,11 +235,12 @@ impl FilamentScan {
                 }
                 None => detection,
             };
-            for (index, filament) in traced.iter().enumerate() {
-                for node in &filament.nodes {
-                    accumulators[index * self.channels.count() + channel]
-                        .push(self.sample(data, *node));
+            for (cell, owner) in self.owner.iter().enumerate() {
+                if *owner == 0 || self.tube[cell] == 0 {
+                    continue;
                 }
+                let slot = (*owner as usize - 1) * self.channels.count() + channel;
+                self.measure(data, cell, &mut accumulators[slot]);
             }
         }
         let mut vertices = Vec::new();
@@ -278,23 +283,56 @@ impl FilamentScan {
         .map_err(|error| error.to_string())
     }
 
-    fn sample(&self, data: &VoxelData, node: usize) -> f32 {
-        let voxel = self.grid.voxel(node);
+    fn label(&mut self, traced: &[graph::Filament]) {
+        for (cell, value) in self.tube.iter().enumerate() {
+            if *value != 0 {
+                self.owner[cell] = 0;
+            }
+        }
+        let mut frontier = Vec::new();
+        for (slot, filament) in traced.iter().enumerate() {
+            for node in &filament.nodes {
+                self.owner[*node] = slot as u32 + 1;
+                frontier.push(*node as u32);
+            }
+        }
+        let stride = self.grid.stride;
+        let offsets = neighbour::OFFSET.map(|offset| {
+            offset[0] * stride[0] as isize
+                + offset[1] * stride[1] as isize
+                + offset[2] * stride[2] as isize
+        });
+        let mut head = 0;
+        while head < frontier.len() {
+            let cell = frontier[head];
+            head += 1;
+            let label = self.owner[cell as usize];
+            for offset in offsets {
+                let target = (cell as isize + offset) as usize;
+                if self.tube[target] == 0 || self.owner[target] != 0 {
+                    continue;
+                }
+                self.owner[target] = label;
+                frontier.push(target as u32);
+            }
+        }
+    }
+
+    fn measure(&self, data: &VoxelData, cell: usize, accumulator: &mut SampleAccumulator) {
+        let voxel = self.grid.voxel(cell);
         let extent = self.extent;
-        let step = self.step;
+        let step = self.grid.step;
         let width = extent[0] as usize;
         let height = extent[1] as usize;
         let low = [0, 1, 2].map(|axis| voxel[axis] as u32 * step[axis]);
         let high = [0, 1, 2].map(|axis| ((voxel[axis] as u32 + 1) * step[axis]).min(extent[axis]));
-        let mut maximum = f32::NEG_INFINITY;
         for z in low[2]..high[2] {
             for y in low[1]..high[1] {
                 let base = width * (z as usize * height + y as usize);
                 for x in low[0]..high[0] {
-                    maximum = maximum.max(data.value(base + x as usize));
+                    accumulator.push(data.value(base + x as usize));
                 }
             }
         }
-        maximum
     }
 }

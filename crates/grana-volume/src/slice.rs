@@ -29,7 +29,7 @@ impl Level {
         let raw = basis.inverse().row(axis);
         let normal = raw.normalize() * if axis == 1 { -1.0 } else { 1.0 };
         let reference = match axis {
-            1 | 2 => basis.column(1),
+            2 => basis.column(1),
             _ => basis.column(2),
         };
         let mut up = Vec3::from(reference);

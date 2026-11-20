@@ -130,6 +130,32 @@ fn rasterises_an_oriented_region_exactly() {
         inside < extent.voxel_count() as usize,
         "the tilted box holds the whole volume"
     );
+    let shaped = Level::new(Extent::new(40, 24, 12), Spacing::new(0.2, 0.3, 0.7));
+    for (axis, up, right, count, half_width, half_height) in [
+        (0, Vec3::Z, Vec3::Y, 40u32, 3.6f32, 4.2f32),
+        (1, Vec3::Z, Vec3::X, 24u32, 4.0f32, 4.2f32),
+        (2, Vec3::Y, Vec3::X, 12u32, 4.0f32, 3.6f32),
+    ] {
+        let frame = shaped.slice_frame(axis);
+        assert_eq!(frame.count(), count, "the slice spans axis {axis}");
+        assert!(
+            (Vec3::from(frame.up()) - up).length() < 1.0e-5,
+            "slice {axis} raises {up:?} but holds {:?}",
+            frame.up()
+        );
+        assert!(
+            (Vec3::from(frame.right()) - right).length() < 1.0e-5,
+            "slice {axis} runs {right:?} but holds {:?}",
+            frame.right()
+        );
+        assert!(
+            (frame.half_width() - half_width).abs() < 1.0e-4
+                && (frame.half_height() - half_height).abs() < 1.0e-4,
+            "slice {axis} covers {} by {}",
+            frame.half_width(),
+            frame.half_height()
+        );
+    }
 }
 
 #[test]

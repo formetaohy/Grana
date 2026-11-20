@@ -1,8 +1,8 @@
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, ends, push_graph};
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics,
+    FilamentSet, FilamentStatistics, FilamentSweep, FilamentTopology, IntensityTable,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_readout::{
     Imported, ImportedFilament, ImportedFrame, ImportedKind, ImportedObject, ImportedSample,
@@ -399,8 +399,7 @@ fn measures(
 ) -> Result<FilamentStatistics, String> {
     let positions = filament.positions();
     let radii = filament.radii();
-    let mut length = 0.0f64;
-    let mut volume = 0.0f64;
+    let mut sweep = FilamentSweep::new();
     let mut moment = Vec3::ZERO;
     for edge in edges {
         let (first, second) = (
@@ -411,12 +410,21 @@ fn measures(
         if !(distance.is_finite() && distance > 0.0) {
             continue;
         }
-        let head = f64::from(radii[edge[0] as usize]);
-        let tail = f64::from(radii[edge[1] as usize]);
-        length += distance;
-        volume += std::f64::consts::PI * distance * (head * head + head * tail + tail * tail) / 3.0;
+        sweep.segment(distance, radii[edge[0] as usize], radii[edge[1] as usize]);
         moment += (first + second) * (0.5 * distance as f32);
     }
+    let mut degree = vec![0u32; positions.len()];
+    for edge in edges {
+        degree[edge[0] as usize] += 1;
+        degree[edge[1] as usize] += 1;
+    }
+    for (node, degree) in degree.iter().enumerate() {
+        if *degree >= 3 {
+            sweep.joint(radii[node]);
+        }
+    }
+    let length = sweep.length();
+    let volume = sweep.volume();
     if !(length.is_finite() && length > 0.0 && volume.is_finite() && volume > 0.0) {
         return Err("a filament holds no measurable length".to_string());
     }
@@ -428,13 +436,12 @@ fn measures(
             high[axis] = high[axis].max(*value);
         }
     }
-    let diameter = 2.0 * (volume / (std::f64::consts::PI * length)).sqrt();
     let ends = ends(edges, positions.len());
     let nodes = positions.len().min(u32::MAX as usize) as u32;
     let centroid = moment / length as f32;
     Ok(FilamentStatistics::new(
         length,
-        diameter,
+        sweep.diameter(),
         volume,
         FilamentTopology::new(branches as u32, ends.terminals, ends.junctions, nodes),
         centroid.to_array(),

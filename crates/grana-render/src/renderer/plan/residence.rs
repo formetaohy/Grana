@@ -6,7 +6,7 @@ use super::super::signature::digest;
 use super::super::view::View;
 use super::super::*;
 use super::{Input, levels};
-use crate::planner::{Demand, decode_plan};
+use crate::planner::{Demand, Measured, decode_plan};
 use crate::schema::Versions;
 
 const FEEDBACK_SLOTS: usize = 4;
@@ -35,7 +35,7 @@ impl ResidencyDemand {
 
 pub(crate) struct Residence {
     feedback: Option<Readback>,
-    frames: Vec<Option<ViewKey>>,
+    frames: Vec<Option<(ViewKey, u64)>>,
     words: usize,
     bytes: u64,
     epoch: u64,
@@ -55,7 +55,7 @@ pub(crate) struct Residence {
     passes: Option<Passes>,
     cap: Option<usize>,
     level: Option<usize>,
-    measure: Vec<Option<usize>>,
+    measure: Vec<Option<Measured>>,
     rejection: Option<(u64, usize)>,
     cache: Option<(u64, VolumeFit)>,
     view: ViewInfo,
@@ -167,6 +167,7 @@ pub(crate) struct Outlook {
     pub(crate) ladder: Ladder,
     pub(crate) levels: Levels,
     pub(crate) key: ViewKey,
+    pub(crate) pose: u64,
     pub(crate) replan: bool,
     pub(crate) settled: bool,
     pub(crate) truncated: bool,
@@ -256,6 +257,9 @@ impl Residence {
         self.prefetch_key = None;
         self.prefetch_issued.clear();
         self.refreshes.clear();
+        self.measure.fill(None);
+        self.rejection = None;
+        self.cache = None;
         self.bump();
     }
 
@@ -283,6 +287,8 @@ impl Residence {
         self.refreshes.clear();
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
+        self.measure.fill(None);
+        self.cache = None;
         self.view = ViewInfo::default();
     }
 
@@ -364,9 +370,16 @@ impl Residence {
             prefetch,
             overflow,
         } = adapt;
+        let pose = pose(camera, size, region, time);
         let current = if assured { None } else { self.level };
         let measured = !assured
-            && current.is_some_and(|level| self.measure.get(level).copied().flatten().is_some());
+            && current.is_some_and(|level| {
+                self.measure
+                    .get(level)
+                    .copied()
+                    .flatten()
+                    .is_some_and(|held| held.pose == pose)
+            });
         let rejected = if assured {
             None
         } else {
@@ -385,6 +398,7 @@ impl Residence {
                 cap: self.cap,
                 current,
                 measured,
+                pose,
                 rejected,
             },
             &self.measure,
@@ -423,6 +437,7 @@ impl Residence {
             ladder: planned.ladder,
             levels: planned.levels,
             key,
+            pose,
             replan,
             settled,
             truncated,
@@ -444,6 +459,7 @@ impl Residence {
         slot: usize,
         planner: &Planner,
         key: ViewKey,
+        pose: u64,
     ) {
         if let Some(feedback) = self.feedback.as_ref() {
             for (band, view) in planner.view.bands.iter().enumerate() {
@@ -456,7 +472,7 @@ impl Residence {
                 );
             }
         }
-        self.frames[slot] = Some(key);
+        self.frames[slot] = Some((key, pose));
         self.planned = Some(key);
         if self.demand.as_ref().is_none_or(|held| !held.covers(&key)) {
             self.demand = None;
@@ -482,8 +498,8 @@ impl Residence {
         time: u32,
         prefetch: bool,
     ) -> Result<Option<Requests>, String> {
-        while let Some((key, bands)) = self.decode(device, pyramid, planner)? {
-            self.accept(key, bands, atlas);
+        while let Some((key, pose, bands)) = self.decode(device, pyramid, planner)? {
+            self.accept(key, pose, bands, atlas);
         }
         Ok(self.emit(pyramid, atlas, time, prefetch))
     }
@@ -493,7 +509,7 @@ impl Residence {
         device: &Device,
         pyramid: &Pyramid,
         planner: &Planner,
-    ) -> Result<Option<(ViewKey, Vec<Demand>)>, String> {
+    ) -> Result<Option<(ViewKey, u64, Vec<Demand>)>, String> {
         let Self {
             feedback,
             frames,
@@ -505,21 +521,24 @@ impl Residence {
             return Ok(None);
         };
         let decoded = feedback.take_with(device, |slot, bytes| {
-            let key = frames[slot].take()?;
+            let (key, pose) = frames[slot].take()?;
             let bands = parse_bands(bytes, words, key.levels.ladder, key.time, pyramid, planner)?;
-            Some((key, bands))
+            Some((key, pose, bands))
         })?;
         Ok(decoded.flatten())
     }
 
-    fn accept(&mut self, key: ViewKey, bands: Vec<Demand>, atlas: &mut Atlas) {
+    fn accept(&mut self, key: ViewKey, pose: u64, bands: Vec<Demand>, atlas: &mut Atlas) {
         if key.epoch != self.epoch {
             return;
         }
-        atlas.clear_holds();
+        atlas.advance_holds();
         for band in &bands {
             if let Some(slot) = self.measure.get_mut(band.info.level) {
-                *slot = Some(band.info.visible);
+                *slot = Some(Measured {
+                    pose,
+                    visible: band.info.visible,
+                });
             }
             atlas.touch(key.time, band.info.level, band.indices.iter().copied());
         }
@@ -716,6 +735,36 @@ fn view_key(meta: &ViewKey) -> u64 {
     meta.size.hash(&mut hasher);
     meta.levels.ladder.hash(&mut hasher);
     meta.levels.capacity.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn pose(camera: &Camera, size: [u32; 2], region: Region, time: u32) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    camera.eye().to_array().map(f32::to_bits).hash(&mut hasher);
+    camera
+        .pivot()
+        .to_array()
+        .map(f32::to_bits)
+        .hash(&mut hasher);
+    camera.fov_y().to_bits().hash(&mut hasher);
+    projection(&camera.projection()).hash(&mut hasher);
+    camera.slice().map(slice_key).hash(&mut hasher);
+    size.hash(&mut hasher);
+    time.hash(&mut hasher);
+    region.enabled().hash(&mut hasher);
+    region
+        .center()
+        .to_array()
+        .map(f32::to_bits)
+        .hash(&mut hasher);
+    region.half().to_array().map(f32::to_bits).hash(&mut hasher);
+    for axis in 0..3 {
+        region
+            .axis(axis)
+            .to_array()
+            .map(f32::to_bits)
+            .hash(&mut hasher);
+    }
     hasher.finish()
 }
 

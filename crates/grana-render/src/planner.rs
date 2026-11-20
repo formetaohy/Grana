@@ -525,7 +525,6 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
         limits,
     });
     let mut counts = Counts::new(view, desired.base);
-    let mut fallback: Option<VolumeFit> = None;
     for base in desired.base..levels {
         let count = ladder_count(camera.projection(), levels, base);
         let wanted = counts.volume(base, count);
@@ -536,17 +535,13 @@ pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
                 capacity: wanted,
             };
         }
-        let closer = fallback
-            .as_ref()
-            .is_none_or(|held| demand < held.capacity[..held.ladder.count].iter().sum::<usize>());
-        if closer {
-            fallback = Some(VolumeFit {
-                ladder: Ladder { base, count },
-                capacity: capacities(capacity, &wanted, count),
-            });
-        }
     }
-    fallback.expect("the coarsest level holds a ladder")
+    let count = ladder_count(camera.projection(), levels, desired.base);
+    let wanted = counts.volume(desired.base, count);
+    VolumeFit {
+        ladder: desired,
+        capacity: capacities(capacity, &wanted, count),
+    }
 }
 
 pub(crate) struct Counts<'a> {
@@ -612,9 +607,16 @@ fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usi
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Measured {
+    pub(crate) pose: u64,
+    pub(crate) visible: usize,
+}
+
 pub(crate) fn fit_measured(
     view: FitView<'_>,
-    measure: &[Option<usize>],
+    measure: &[Option<Measured>],
+    pose: u64,
     rejected: Option<usize>,
 ) -> (VolumeFit, Option<usize>) {
     let FitView {
@@ -642,7 +644,7 @@ pub(crate) fn fit_measured(
     let mut overflowed = None;
     while base + 1 < levels {
         let count = ladder_count(camera.projection(), levels, base);
-        let Some(total) = measured_demand(measure, base, count) else {
+        let Some(total) = measured_demand(measure, pose, base, count) else {
             break;
         };
         if total <= capacity {
@@ -653,24 +655,28 @@ pub(crate) fn fit_measured(
     }
     if base > desired.base {
         let target = base - 1;
-        let headroom = match measure.get(target).copied().flatten() {
-            Some(visible) => visible.saturating_mul(2) <= capacity,
-            None => {
-                rejected != Some(target)
-                    && measure
-                        .get(base)
-                        .copied()
-                        .flatten()
-                        .is_some_and(|visible| visible.saturating_mul(2) <= capacity)
+        let count = ladder_count(camera.projection(), levels, base);
+        if let Some(room) = room_for_one(measure, pose, base, count, capacity) {
+            let fits = match fresh(measure, target, pose) {
+                Some(visible) => visible <= room,
+                None => {
+                    rejected != Some(target)
+                        && estimate(measure, pose, pyramid, base, target) <= room
+                }
+            };
+            if fits {
+                base = target;
             }
-        };
-        if headroom {
-            base = target;
         }
     }
     let count = ladder_count(camera.projection(), levels, base);
-    let wanted: [usize; BAND] =
-        std::array::from_fn(|band| measure.get(base + band).copied().flatten().unwrap_or(1));
+    let wanted: [usize; BAND] = std::array::from_fn(|band| {
+        if band >= count {
+            return 1;
+        }
+        let level = base + band;
+        fresh(measure, level, pose).unwrap_or_else(|| estimate(measure, pose, pyramid, base, level))
+    });
     (
         VolumeFit {
             ladder: Ladder { base, count },
@@ -680,12 +686,58 @@ pub(crate) fn fit_measured(
     )
 }
 
-fn measured_demand(measure: &[Option<usize>], base: usize, count: usize) -> Option<usize> {
+fn fresh(measure: &[Option<Measured>], level: usize, pose: u64) -> Option<usize> {
+    measure
+        .get(level)
+        .copied()
+        .flatten()
+        .filter(|held| held.pose == pose)
+        .map(|held| held.visible)
+}
+
+fn measured_demand(
+    measure: &[Option<Measured>],
+    pose: u64,
+    base: usize,
+    count: usize,
+) -> Option<usize> {
     let mut total = 0usize;
     for band in 0..count {
-        total = total.checked_add(measure.get(base + band).copied().flatten()?)?;
+        total = total.checked_add(fresh(measure, base + band, pose)?)?;
     }
     Some(total)
+}
+
+fn room_for_one(
+    measure: &[Option<Measured>],
+    pose: u64,
+    base: usize,
+    count: usize,
+    capacity: usize,
+) -> Option<usize> {
+    let mut held = 0usize;
+    for level in base..base + count - 1 {
+        held = held.checked_add(fresh(measure, level, pose)?)?;
+    }
+    Some(capacity.saturating_sub(held))
+}
+
+fn estimate(
+    measure: &[Option<Measured>],
+    pose: u64,
+    pyramid: &Pyramid,
+    from: usize,
+    to: usize,
+) -> usize {
+    let Some(visible) = fresh(measure, from, pose) else {
+        return 1;
+    };
+    if to == from {
+        return visible;
+    }
+    let coarse = BrickGrid::new(pyramid.level(from).extent()).count().max(1);
+    let fine = BrickGrid::new(pyramid.level(to).extent()).count().max(1);
+    visible.saturating_mul(fine).div_ceil(coarse).max(1)
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {

@@ -462,7 +462,7 @@ fn facts(
     }
     if !dataset.pyramid().calibration().recorded() {
         facts.push((
-            "voxel size".to_string(),
+            "calibration".to_string(),
             match dataset.pyramid().calibration() {
                 Calibration::Inferred => "inferred from the plane positions".to_string(),
                 Calibration::Assumed => "assumed to equal the lateral spacing".to_string(),

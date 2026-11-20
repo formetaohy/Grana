@@ -131,6 +131,61 @@ impl FilamentStatistics {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FilamentSweep {
+    length: f64,
+    volume: f64,
+    weighted: f64,
+}
+
+impl FilamentSweep {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn segment(&mut self, distance: f64, head: f32, tail: f32) {
+        assert!(
+            distance.is_finite() && distance > 0.0,
+            "a filament segment spans a positive length"
+        );
+        let head = f64::from(head);
+        let tail = f64::from(tail);
+        assert!(
+            head.is_finite() && head > 0.0 && tail.is_finite() && tail > 0.0,
+            "a filament segment carries a positive radius at both ends"
+        );
+        self.length += distance;
+        self.weighted += distance * (head + tail);
+        self.volume +=
+            std::f64::consts::PI * distance * (head * head + head * tail + tail * tail) / 3.0;
+    }
+
+    pub fn joint(&mut self, radius: f32) {
+        let radius = f64::from(radius);
+        assert!(
+            radius.is_finite() && radius > 0.0,
+            "a filament joint carries a positive radius"
+        );
+        self.volume += 4.0 * std::f64::consts::PI * radius * radius * radius / 3.0;
+    }
+
+    pub fn length(self) -> f64 {
+        self.length
+    }
+
+    pub fn volume(self) -> f64 {
+        self.volume
+    }
+
+    pub fn diameter(self) -> f64 {
+        assert!(
+            self.length > 0.0,
+            "a filament sweep holds its length before it measures a diameter"
+        );
+        self.weighted / self.length
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilamentSet {
     level: usize,

@@ -15,6 +15,7 @@ pub(super) struct Input<'a> {
     pub(super) cap: Option<usize>,
     pub(super) current: Option<usize>,
     pub(super) measured: bool,
+    pub(super) pose: u64,
     pub(super) rejected: Option<usize>,
 }
 
@@ -27,7 +28,7 @@ pub(super) struct Planned {
 
 pub(super) fn levels(
     input: Input<'_>,
-    measure: &[Option<usize>],
+    measure: &[Option<Measured>],
     cache: &mut Option<(u64, VolumeFit)>,
 ) -> Planned {
     let Input {
@@ -40,6 +41,7 @@ pub(super) fn levels(
         cap,
         current,
         measured,
+        pose,
         rejected,
     } = input;
     let level_count = pyramid.level_count();
@@ -72,7 +74,7 @@ pub(super) fn levels(
         level_key(rejected),
     ]);
     let (fit, overflowed) = if measured {
-        fit_measured(fit_view, measure, rejected)
+        fit_measured(fit_view, measure, pose, rejected)
     } else if let Some((held, value)) = *cache
         && held == key
     {

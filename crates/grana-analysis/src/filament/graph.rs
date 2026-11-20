@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::f64::consts::PI;
 
 use glam::Vec3;
 use grana_geometry::Bounds;
-use grana_object::{FilamentStatistics, FilamentTopology};
+use grana_object::{FilamentStatistics, FilamentSweep, FilamentTopology};
 
 use super::Grid;
 use super::spanning::Spanning;
@@ -352,31 +351,23 @@ impl Graph {
             return None;
         }
         let mut shaped = Vec::with_capacity(paths.len());
-        let mut total_length = 0.0f64;
-        let mut weighted = 0.0f64;
-        let mut volume = 0.0f64;
+        let mut sweep = FilamentSweep::new();
         for path in &paths {
             let mut points = path
                 .iter()
                 .map(|node| self.point(*node, radius))
                 .collect::<Vec<_>>();
             smooth(&mut points);
-            let mut length = 0.0f64;
-            let mut bore = 0.0f64;
             for pair in points.windows(2) {
                 let distance =
                     f64::from(Vec3::from(pair[1].position).distance(Vec3::from(pair[0].position)));
-                let first = f64::from(pair[0].radius);
-                let second = f64::from(pair[1].radius);
-                length += distance;
-                weighted += distance * (first + second);
-                bore += PI * distance * (first * first + first * second + second * second) / 3.0;
+                if distance > 0.0 {
+                    sweep.segment(distance, pair[0].radius, pair[1].radius);
+                }
             }
-            total_length += length;
-            volume += bore;
             shaped.push(points);
         }
-        if total_length <= 0.0 {
+        if sweep.length() <= 0.0 {
             return None;
         }
         let mut alive = Vec::new();
@@ -412,13 +403,12 @@ impl Graph {
             .map(|node| self.point(node, radius))
             .collect::<Vec<_>>();
         for joint in &joints {
-            let radius = f64::from(joint.radius);
-            volume += 4.0 * PI * radius * radius * radius / 3.0;
+            sweep.joint(joint.radius);
         }
         let statistics = FilamentStatistics::new(
-            total_length,
-            weighted / total_length,
-            volume,
+            sweep.length(),
+            sweep.diameter(),
+            sweep.volume(),
             FilamentTopology::new(
                 shaped.len() as u32,
                 terminals,

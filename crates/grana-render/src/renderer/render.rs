@@ -58,6 +58,7 @@ struct Prepared {
     started: timing::Started,
     reserved: Option<usize>,
     residency: ViewKey,
+    pose: u64,
     shadow: plan::ShadowPlan,
     replan: bool,
     rebuilt: bool,
@@ -370,6 +371,7 @@ impl Renderer {
             started,
             reserved,
             residency: outlook.key,
+            pose: outlook.pose,
             shadow: planned,
             replan: outlook.replan,
             rebuilt: stale,
@@ -542,7 +544,13 @@ impl Renderer {
         let (Some(resources), true) = (resources.as_ref(), prepared.ready) else {
             info.fading = false;
             if let (Some(slot), Some(resources)) = (prepared.reserved, resources.as_ref()) {
-                residence.stage(encoder, slot, &resources.planner, prepared.residency);
+                residence.stage(
+                    encoder,
+                    slot,
+                    &resources.planner,
+                    prepared.residency,
+                    prepared.pose,
+                );
             }
             return;
         };
@@ -575,7 +583,13 @@ impl Renderer {
         info.history = intact;
         info.fading = fade.is_some();
         if let Some(slot) = prepared.reserved {
-            residence.stage(encoder, slot, &resources.planner, prepared.residency);
+            residence.stage(
+                encoder,
+                slot,
+                &resources.planner,
+                prepared.residency,
+                prepared.pose,
+            );
         }
     }
 }
