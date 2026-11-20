@@ -1,10 +1,10 @@
 use glam::Vec2;
 use grana_session::{Command, SessionView};
 use grana_ui::{
-    Align, Axis, BuildContext, Corners, Edges, Element, Icon, Key, Layout as UiLayout, Length,
-    Level, Motion, Rect, Role, State, TextStyle,
+    Align, Axis, BuildContext, Corners, Edges, Element, Icon, IconStyle, Key, Layout as UiLayout,
+    Length, Level, Motion, Rect, Role, State, TextStyle, icon,
 };
-use grana_volume::Axial;
+use grana_volume::Calibration;
 
 use crate::message::Message;
 use crate::stage::Stage;
@@ -245,6 +245,7 @@ fn view_elements<'a>(
     }
     elements.extend(stage::toast(ctx, layout, state));
     elements.extend(crate::panel::remote(ctx, full, state.workspace.remote_open));
+    elements.extend(stage::calibration(ctx, full, state));
     elements.extend(crate::settings_panel::view(ctx, full, state.workspace));
     elements.extend(crate::prompt::view(ctx, full, state.workspace));
     elements
@@ -415,41 +416,68 @@ fn sidebar<'a>(
         )
     };
     let voxel = dataset.voxel_size();
-    let spacing = match dataset.pyramid().axial() {
-        Axial::Recorded => format!("{:.2}×{:.2} µm", voxel.x, voxel.z),
-        Axial::Inferred => format!(
+    let spacing = match dataset.pyramid().calibration() {
+        Calibration::Recorded => format!("{:.2}×{:.2} µm", voxel.x, voxel.z),
+        Calibration::Inferred => format!(
             "{:.2}×{:.2} µm ({})",
             voxel.x,
             voxel.z,
             grana_i18n::panel::depth_inferred(language)
         ),
-        Axial::Assumed => format!(
+        Calibration::Assumed => format!(
             "{:.2}×{:.2} µm ({})",
             voxel.x,
             voxel.z,
             grana_i18n::panel::depth_assumed(language)
         ),
+        Calibration::Uncalibrated => grana_i18n::panel::uncalibrated(language).to_string(),
     };
     let mono = theme.font(Level::Monospace);
+    let authoring = state.access.author();
     let summary = grana_ui::canvas(Length::Fill, 26.0)
-        .view((dims.clone(), spacing.clone()), move |_, painter, info| {
-            painter.rect(info.rect, Corners::capsule(), palette.surface_container);
-            let inner = info.rect.shrink2(Vec2::new(12.0, 0.0));
-            painter.text_in(
-                inner,
-                &dims,
-                TextStyle::new(mono, palette.on_surface_variant).truncating(),
-                Align::Center,
-            );
-            painter.text_in(
-                inner,
-                &spacing,
-                TextStyle::new(mono, palette.primary).aligned(Align::End),
-                Align::Center,
-            );
-        })
+        .view(
+            (dims.clone(), spacing.clone(), authoring),
+            move |_, painter, info| {
+                painter.rect(info.rect, Corners::capsule(), palette.surface_container);
+                let inner = info.rect.shrink2(Vec2::new(12.0, 0.0));
+                painter.text_in(
+                    inner,
+                    &dims,
+                    TextStyle::new(mono, palette.on_surface_variant).truncating(),
+                    Align::Center,
+                );
+                let text_right = if authoring {
+                    inner.max.x - 16.0
+                } else {
+                    inner.max.x
+                };
+                painter.text_in(
+                    Rect::from_min_max(inner.min, Vec2::new(text_right, inner.max.y)),
+                    &spacing,
+                    TextStyle::new(mono, palette.primary).aligned(Align::End),
+                    Align::Center,
+                );
+                if authoring {
+                    icon::paint(
+                        Icon::Pencil,
+                        painter,
+                        Vec2::new(inner.max.x - 6.0, inner.center().y),
+                        13.0,
+                        palette.on_surface_variant.lerp(palette.primary, info.hover),
+                        IconStyle::REGULAR,
+                    );
+                }
+            },
+        )
         .named("sidebar.summary")
         .at(summary_rect);
+    let summary = if authoring {
+        summary
+            .press(Message::BeginCalibration)
+            .cursor(grana_ui::Cursor::Pointing)
+    } else {
+        summary
+    };
     let body_bottom = rect.max.y - SIDEBAR_PAD;
     let body = Rect::from_min_max(
         Vec2::new(rect.min.x, summary_rect.max.y + 6.0),

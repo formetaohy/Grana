@@ -32,7 +32,7 @@ use grana_scene::{
     Seeds, SelectionState, SetState, SmoothSpec, SurfaceEdit, SurfaceEditKind, TrackAnchor,
     TrackColor, TrackEdit, TrackStyle, Visibility,
 };
-use grana_volume::{CHANNEL_LIMIT, Clip, Fingerprint, Intensity, Region, Spacing};
+use grana_volume::{CHANNEL_LIMIT, Calibration, Clip, Fingerprint, Intensity, Region, Spacing};
 use grana_warp::{Grid, Warp};
 
 use crate::codec::{Decode, Reader, reserve};
@@ -226,8 +226,16 @@ impl Decode for Shape {
         let mut spacing = [0.0; 3];
         for value in &mut spacing {
             *value = positive(reader.f32()?)?;
+            if !Spacing::EDITABLE.contains(value) {
+                return Err(FAULT_VALUE);
+            }
         }
-        Ok(Self { extent, spacing })
+        let calibration = Calibration::from_index(reader.u8()?).ok_or(FAULT_VALUE)?;
+        Ok(Self {
+            extent,
+            spacing,
+            calibration,
+        })
     }
 }
 

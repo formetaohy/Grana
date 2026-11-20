@@ -171,7 +171,7 @@ impl Image {
             channels,
             selected.frames,
             document.interval,
-            selected.axial,
+            selected.calibration,
         );
         let scenes = document.scenes();
         Ok(Self {

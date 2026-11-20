@@ -7,6 +7,7 @@ use grana_measure::{MeasureView, Measurement};
 use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
 use grana_ui::Key;
+use grana_volume::Calibration;
 
 use crate::overlay::Overlay;
 use crate::panel::Panel;
@@ -212,6 +213,49 @@ pub struct Settings {
     pub open: bool,
 }
 
+pub struct CalibrationSheet {
+    pub open: bool,
+    pub name: String,
+    pub extent: [u32; 3],
+    pub reason: Calibration,
+    pub fields: [String; 3],
+    pub error: bool,
+}
+
+impl CalibrationSheet {
+    pub fn of(scene: &Scene) -> Self {
+        let spacing = scene.dataset.spacing();
+        let extent = scene.dataset.extent();
+        Self {
+            open: true,
+            name: scene.dataset.name().to_string(),
+            extent: [extent.x(), extent.y(), extent.z()],
+            reason: scene.dataset.pyramid().calibration(),
+            fields: [spacing.x(), spacing.y(), spacing.z()].map(voxel_text),
+            error: false,
+        }
+    }
+
+    pub fn after_import(scene: &Scene, authoring: bool) -> Option<Self> {
+        let calibration = scene.dataset.pyramid().calibration();
+        let attention = matches!(
+            calibration,
+            Calibration::Uncalibrated | Calibration::Assumed
+        );
+        (authoring && attention).then(|| Self::of(scene))
+    }
+}
+
+pub fn voxel_text(value: f32) -> String {
+    let text = format!("{value:.6}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub struct Workspace {
     pub panel: Option<Panel>,
     pub last_panel: Panel,
@@ -229,6 +273,7 @@ pub struct Workspace {
     pub reparent: Option<(u32, usize)>,
     pub seed: Option<ObjectSetId>,
     pub mask: Option<MaskBrush>,
+    pub calibration: Option<CalibrationSheet>,
     pub annotation_tool: Option<AnnotationTool>,
     pub annotation_pending: Option<[f32; 3]>,
     pub annotation_drag: Option<(usize, grana_figure::AnnotationPart)>,
@@ -278,6 +323,7 @@ impl Default for Workspace {
             reparent: None,
             seed: None,
             mask: None,
+            calibration: None,
             annotation_tool: None,
             annotation_pending: None,
             annotation_drag: None,
@@ -371,6 +417,7 @@ impl Workspace {
         self.track_set = None;
         self.seed = None;
         self.mask = None;
+        self.calibration = None;
         self.annotation_tool = None;
         self.annotation_pending = None;
         self.annotation_drag = None;

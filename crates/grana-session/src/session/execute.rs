@@ -613,6 +613,49 @@ impl Session {
                     scene.set_clip(clip);
                 }
             }
+            Command::SetVoxelSize(spacing) => {
+                if !self.analysis.is_empty() || self.tasks.writing() {
+                    self.message = Some(Message::error(
+                        "wait for the running analysis or export before changing the voxel size",
+                    ));
+                    return Effects::default();
+                }
+                let Some(scene) = self.scene.as_ref() else {
+                    self.message = Some(Message::error("no dataset is open"));
+                    return Effects::default();
+                };
+                if scene.dataset.spacing() == spacing {
+                    self.message = Some(Message::info("the voxel size is unchanged"));
+                    return Effects::default();
+                }
+                let cleared = !scene.objects.is_empty();
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.recalibrate(spacing);
+                }
+                self.measure.reset();
+                self.install_channels();
+                self.reload_streamed();
+                self.replace();
+                if let Some(scene) = self.scene.as_ref() {
+                    self.mask_stamps = scene.mask_stamps();
+                    self.mask_extents = scene.mask_extents(scene.time());
+                }
+                self.message = Some(Message::info(if cleared {
+                    format!(
+                        "the voxel size is now {:.4} × {:.4} × {:.4} µm, and the analysis measured in µm was cleared",
+                        spacing.x(),
+                        spacing.y(),
+                        spacing.z()
+                    )
+                } else {
+                    format!(
+                        "the voxel size is now {:.4} × {:.4} × {:.4} µm",
+                        spacing.x(),
+                        spacing.y(),
+                        spacing.z()
+                    )
+                }));
+            }
             Command::SetExposure(exposure) => {
                 if let Some(scene) = self.scene.as_mut() {
                     scene.exposure = exposure;
@@ -1005,10 +1048,13 @@ impl Session {
             export,
             views,
             camera,
+            pyramid,
         } = snapshot;
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
+        let recalibrated = scene.dataset.pyramid() != &pyramid;
+        scene.dataset = scene.dataset.with_pyramid(pyramid);
         let derived = scene.derived_shared();
         scene.restore(state);
         let derived = scene.derived_shared() != derived;
@@ -1039,6 +1085,14 @@ impl Session {
             .retain(|request, _| request.time >= scene.time());
         self.realign();
         self.message = None;
+        if recalibrated {
+            self.install_channels();
+            self.reload_streamed();
+            if let Some(scene) = self.scene.as_ref() {
+                self.mask_stamps = scene.mask_stamps();
+                self.mask_extents = scene.mask_extents(scene.time());
+            }
+        }
         if derived {
             self.relayout_channels();
         }

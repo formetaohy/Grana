@@ -13,7 +13,7 @@ use grana_scene::{
     MaskFilter, ObjectColor, ObjectKind, ObjectParams, ObjectSetId, SegmentParams, Selection,
     TrackColor,
 };
-use grana_volume::{Clip, Intensity, Region};
+use grana_volume::{Clip, Intensity, Region, Spacing};
 
 pub use grana_project::Export;
 
@@ -326,6 +326,7 @@ pub enum Command {
     },
     SetRegion(Region),
     SetClip(Clip),
+    SetVoxelSize(Spacing),
     SetExposure(f32),
     SetStepScale(f32),
     SetShading(Shading),
@@ -531,6 +532,7 @@ pub enum Action {
     Localization,
     Cluster,
     Region,
+    Calibration,
     Clip,
     Exposure,
     StepScale,
@@ -851,6 +853,7 @@ impl Command {
                 Nature::View(Some(Edit::targeted(Action::TrackColoring, set.raw())))
             }
             Self::SetRegion(_) => Nature::View(Some(Edit::new(Action::Region))),
+            Self::SetVoxelSize(_) => Nature::Edit(Edit::new(Action::Calibration)),
             Self::SetClip(_) => Nature::View(Some(Edit::new(Action::Clip))),
             Self::SetExposure(_) => Nature::View(Some(Edit::new(Action::Exposure))),
             Self::SetStepScale(_) => Nature::View(Some(Edit::new(Action::StepScale))),

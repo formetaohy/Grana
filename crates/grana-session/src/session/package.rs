@@ -460,13 +460,16 @@ fn facts(
             format!("{} of {}", series.0 + 1, series.1),
         ));
     }
-    if dataset.pyramid().axial() != Axial::Recorded {
+    if !dataset.pyramid().calibration().recorded() {
         facts.push((
-            "depth spacing".to_string(),
-            match dataset.pyramid().axial() {
-                Axial::Inferred => "inferred from the plane positions".to_string(),
-                Axial::Assumed => "assumed to equal the lateral spacing".to_string(),
-                Axial::Recorded => unreachable!(),
+            "voxel size".to_string(),
+            match dataset.pyramid().calibration() {
+                Calibration::Inferred => "inferred from the plane positions".to_string(),
+                Calibration::Assumed => "assumed to equal the lateral spacing".to_string(),
+                Calibration::Uncalibrated => {
+                    "not recorded; a 1 µm placeholder is in use".to_string()
+                }
+                Calibration::Recorded => unreachable!(),
             },
         ));
     }

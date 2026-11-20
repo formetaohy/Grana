@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    Axial, ChannelInfo, Extent, Intensity, Level, Placement, Probe, Pyramid, Spacing, VoxelData,
-    VoxelFormat, name_of, tint_of,
+    Calibration, ChannelInfo, Extent, Intensity, Level, Placement, Probe, Pyramid, Spacing,
+    VoxelData, VoxelFormat, name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
@@ -301,7 +301,7 @@ impl Image {
             }
         }
         let base = levels[0].extent;
-        let (spacing, axial) = spacing(ome, &files[0], path, sizes[2])?;
+        let (spacing, calibration) = spacing(ome, &files[0], path, sizes[2])?;
         let pyramid_levels = levels
             .iter()
             .map(|level| {
@@ -353,7 +353,7 @@ impl Image {
                 sizes[0],
                 interval,
                 placement,
-                axial,
+                calibration,
             ),
             levels,
             series: declared,
@@ -700,26 +700,31 @@ fn spacing(
     volume: &File,
     path: &Path,
     depth: u32,
-) -> Result<(Spacing, Axial), Error> {
+) -> Result<(Spacing, Calibration), Error> {
     let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
-    let x = match physical[0] {
-        Some(value) => value,
-        None => scale(volume, TAG_X_RESOLUTION, path)?.unwrap_or(1.0),
-    };
-    let y = match physical[1] {
-        Some(value) => value,
-        None => scale(volume, TAG_Y_RESOLUTION, path)?.unwrap_or(x),
-    };
+    let x_tag = scale(volume, TAG_X_RESOLUTION, path)?;
+    let y_tag = scale(volume, TAG_Y_RESOLUTION, path)?;
+    let x = physical[0].or(x_tag).unwrap_or(1.0);
+    let y = physical[1].or(y_tag).unwrap_or(x);
+    let lateral = physical[0].is_some() || x_tag.is_some();
     let Some(z) = physical[2] else {
+        if !lateral {
+            return Ok((Spacing::new(x, y, x), Calibration::Uncalibrated));
+        }
         if depth <= 1 {
-            return Ok((Spacing::new(x, y, x), Axial::Recorded));
+            return Ok((Spacing::new(x, y, x), Calibration::Recorded));
         }
         return Ok(match ome.and_then(axial_step) {
-            Some(z) => (Spacing::new(x, y, z), Axial::Inferred),
-            None => (Spacing::new(x, y, x), Axial::Assumed),
+            Some(z) => (Spacing::new(x, y, z), Calibration::Inferred),
+            None => (Spacing::new(x, y, x), Calibration::Assumed),
         });
     };
-    Ok((Spacing::new(x, y, z), Axial::Recorded))
+    let calibration = if lateral {
+        Calibration::Recorded
+    } else {
+        Calibration::Uncalibrated
+    };
+    Ok((Spacing::new(x, y, z), calibration))
 }
 
 fn axial_step(ome: &OmeImage) -> Option<f32> {

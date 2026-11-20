@@ -1074,6 +1074,42 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
         !session.dirty(),
         "a freshly opened dataset carries no unsaved work"
     );
+    settle(&mut session);
+    let original = session
+        .scene()
+        .expect("the fixture opens")
+        .dataset
+        .spacing();
+    session.execute(Command::SetVoxelSize(Spacing::new(0.42, 0.42, 1.2)));
+    assert_eq!(
+        session
+            .scene()
+            .expect("the fixture opens")
+            .dataset
+            .spacing(),
+        Spacing::new(0.42, 0.42, 1.2),
+        "the calibration reaches the dataset"
+    );
+    session.execute(Command::Undo);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the fixture opens")
+            .dataset
+            .spacing(),
+        original,
+        "undo restores the previous voxel size"
+    );
+    session.execute(Command::Redo);
+    assert_eq!(
+        session
+            .scene()
+            .expect("the fixture opens")
+            .dataset
+            .spacing(),
+        Spacing::new(0.42, 0.42, 1.2),
+        "redo reapplies the calibration"
+    );
     session.execute(Command::SetChannelOpacity {
         channel: 0,
         opacity: 0.4,
@@ -1153,6 +1189,15 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
         recovered.scene().expect("the fixture opens").channels[0].opacity,
         0.4,
         "the recovered analysis keeps its display state"
+    );
+    assert_eq!(
+        recovered
+            .scene()
+            .expect("the fixture opens")
+            .dataset
+            .spacing(),
+        Spacing::new(0.42, 0.42, 1.2),
+        "the recovered analysis restores the calibrated voxel size"
     );
     assert!(
         recovered.recovery().is_none(),

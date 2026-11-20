@@ -278,6 +278,7 @@ pub struct FieldContent {
     pub multiline: bool,
     pub radius: f32,
     pub editing: bool,
+    pub select_all: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

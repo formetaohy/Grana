@@ -541,6 +541,11 @@ impl Session {
         if let Some(pending) = self.pending.take() {
             match pending.project.matches(&scene.dataset, fingerprint) {
                 Ok(()) => {
+                    let shape = pending.project.shape;
+                    scene.dataset = scene.dataset.with_calibration(
+                        Spacing::new(shape.spacing[0], shape.spacing[1], shape.spacing[2]),
+                        shape.calibration,
+                    );
                     scene.restore(pending.project.scene);
                     self.measure.restore(pending.project.measure, &scene);
                     let view = pending.project.view;
@@ -622,7 +627,7 @@ impl Session {
                     let format = opened.format;
                     let restored = self.pending.is_some();
                     let imported = !restored && !opened.imports.is_empty();
-                    let axial = opened.pyramid.axial();
+                    let calibration = opened.pyramid.calibration();
                     let file = current
                         .as_ref()
                         .map(Source::label)
@@ -681,7 +686,11 @@ impl Session {
                         self.message = Some(Message::error(detail));
                     }
                     if self.message.is_none() {
-                        self.message = axial_notice(axial);
+                        let calibration = self
+                            .scene
+                            .as_ref()
+                            .map_or(calibration, |scene| scene.dataset.pyramid().calibration());
+                        self.message = calibration_notice(calibration);
                     }
                     if imported {
                         self.baseline = self.document_hash();
@@ -774,14 +783,17 @@ fn frame_duration(scene: &Scene) -> f32 {
         .clamp(1.0, Timeline::MAX_DURATION)
 }
 
-fn axial_notice(axial: Axial) -> Option<Message> {
-    match axial {
-        Axial::Recorded => None,
-        Axial::Inferred => Some(Message::info(
+fn calibration_notice(calibration: Calibration) -> Option<Message> {
+    match calibration {
+        Calibration::Recorded => None,
+        Calibration::Inferred => Some(Message::info(
             "the file records no depth spacing, so it was inferred from the plane positions",
         )),
-        Axial::Assumed => Some(Message::info(
-            "the file records no depth spacing, so the lateral spacing stands in for it",
+        Calibration::Assumed => Some(Message::info(
+            "the file records the lateral spacing but no depth spacing, so the depth spacing equals the lateral spacing",
+        )),
+        Calibration::Uncalibrated => Some(Message::info(
+            "the file records no voxel size, so a 1 µm placeholder is in use until the voxel size is set",
         )),
     }
 }

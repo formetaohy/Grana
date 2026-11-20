@@ -631,8 +631,8 @@ impl<A: Clone> Ui<A> {
         if self.edit != Some(node) {
             self.finish_edit(Finish::Write);
         }
-        let (value, multiline) = match &self.tree.nodes[node].content {
-            Content::Field(field) => (field.value.clone(), field.multiline),
+        let (value, multiline, select_all) = match &self.tree.nodes[node].content {
+            Content::Field(field) => (field.value.clone(), field.multiline, field.select_all),
             _ => return,
         };
         let key = self.tree.nodes[node].key;
@@ -641,7 +641,9 @@ impl<A: Clone> Ui<A> {
         } else {
             Edit::new(key.id(), &value, self.time)
         };
-        if at_pointer {
+        if select_all {
+            edit.select_all(self.time);
+        } else if at_pointer {
             let Content::Field(field) = &self.tree.nodes[node].content else {
                 return;
             };

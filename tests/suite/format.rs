@@ -11,7 +11,7 @@ use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
-    Axial, Basis, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries,
+    Basis, Calibration, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries,
     VoxelData,
 };
 use grana_zarr::write_image;
@@ -1129,7 +1129,7 @@ fn reads_ome_tiff_metadata_and_voxels() {
     );
     let overview = grana_tiff::Image::open(&path, 0).expect("the overview opens");
     assert_eq!(overview.name(), "Overview");
-    assert_eq!(overview.pyramid().axial(), Axial::Recorded);
+    assert_eq!(overview.pyramid().calibration(), Calibration::Recorded);
     let VoxelData::U8(values) = overview
         .read_region(0, 0, 0, 0..4, 0..4, 0..1)
         .expect("the overview reads")
@@ -1144,7 +1144,7 @@ fn reads_ome_tiff_metadata_and_voxels() {
         detail.pyramid().level(0).spacing(),
         Spacing::new(0.5, 0.5, 1.5)
     );
-    assert_eq!(detail.pyramid().axial(), Axial::Inferred);
+    assert_eq!(detail.pyramid().calibration(), Calibration::Inferred);
     let VoxelData::U8(values) = detail
         .read_region(0, 0, 0, 0..2, 0..2, 0..2)
         .expect("the detail reads")
@@ -1164,7 +1164,7 @@ fn reads_ome_tiff_metadata_and_voxels() {
         stack.pyramid().level(0).spacing(),
         Spacing::new(0.5, 0.5, 0.5)
     );
-    assert_eq!(stack.pyramid().axial(), Axial::Assumed);
+    assert_eq!(stack.pyramid().calibration(), Calibration::Assumed);
     reads_a_chunky_series(&temp.path().join("chunky.ome.tif"));
 }
 
@@ -1257,6 +1257,16 @@ fn reads_a_tiff_stack_past_the_page_limit() {
     std::fs::write(&path, &bytes).expect("the stacked tiff writes");
     let image = grana_tiff::Image::open(&path, 0).expect("the stacked tiff opens");
     assert_eq!(image.pyramid().level(0).extent(), Extent::new(1, 1, pages));
+    assert_eq!(
+        image.pyramid().level(0).spacing(),
+        Spacing::new(1.0, 1.0, 1.0),
+        "a plain stack carries no physical size"
+    );
+    assert_eq!(
+        image.pyramid().calibration(),
+        Calibration::Uncalibrated,
+        "a plain stack is uncalibrated rather than pretending a recorded size"
+    );
     let last = image
         .read_region(0, 0, 0, 0..1, 0..1, pages - 1..pages)
         .expect("the last plane reads");

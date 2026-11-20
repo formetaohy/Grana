@@ -38,8 +38,8 @@ pub use prompt::{Choice as PromptChoice, Prompt};
 pub use shell::STARTUP_SIZE;
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
-    AnnotationTool, Disclosures, MaskBrush, MaskBrushTool, Playback, RelationMetric, Settings,
-    View, Workspace,
+    AnnotationTool, CalibrationSheet, Disclosures, MaskBrush, MaskBrushTool, Playback,
+    RelationMetric, Settings, View, Workspace,
 };
 
 pub(crate) const RECENT_LIMIT: usize = 5;

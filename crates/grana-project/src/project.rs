@@ -8,7 +8,7 @@ use grana_animation::Timeline;
 use grana_display::CameraState;
 use grana_scene::{Dataset, Measure, MeasureState, Scene, SceneShape, SceneState};
 use grana_store::SpillStore;
-use grana_volume::Fingerprint;
+use grana_volume::{Calibration, Fingerprint};
 
 use grana_codec::Encoder;
 
@@ -16,7 +16,7 @@ use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
 const MAGIC: &[u8; 9] = b"granaproj";
-const VERSION: u32 = 81;
+const VERSION: u32 = 82;
 const VERSION_BYTES: usize = size_of::<u32>();
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();
@@ -112,6 +112,7 @@ impl NamedView {
 pub struct Shape {
     pub extent: [u32; 3],
     pub spacing: [f32; 3],
+    pub calibration: Calibration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +234,7 @@ impl Project {
             shape: Shape {
                 extent: [extent.x(), extent.y(), extent.z()],
                 spacing: [spacing.x(), spacing.y(), spacing.z()],
+                calibration: scene.dataset.pyramid().calibration(),
             },
             source,
             fingerprint,
@@ -248,9 +250,7 @@ impl Project {
             return Err(Mismatch::Dataset);
         }
         let extent = dataset.extent();
-        let spacing = dataset.spacing();
-        let shape = self.shape.extent == [extent.x(), extent.y(), extent.z()]
-            && self.shape.spacing == [spacing.x(), spacing.y(), spacing.z()];
+        let shape = self.shape.extent == [extent.x(), extent.y(), extent.z()];
         let scene = self
             .scene
             .validate(SceneShape::new(

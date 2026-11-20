@@ -47,7 +47,7 @@ use grana_scene::{
 };
 use grana_store::DEFAULT_BUDGET;
 use grana_store::SpillStore;
-use grana_volume::{Axial, BrickRequest, Damage, Fingerprint, PackedBrick};
+use grana_volume::{BrickRequest, Calibration, Damage, Fingerprint, PackedBrick, Spacing};
 
 use crate::access::Access;
 use crate::command::{Edit, Export};

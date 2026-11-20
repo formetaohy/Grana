@@ -4,6 +4,7 @@ use grana_ui::{
     Align, BuildContext, Color, Corners, Edges, Element, Fill, Icon, IconStyle, Key, Layer, Length,
     Level, Motion, Rect, Role, State, TextStyle, icon,
 };
+use grana_volume::Calibration;
 
 use crate::message::Message;
 use crate::panel::{Layout, STAGE_INSET};
@@ -254,6 +255,157 @@ pub(crate) fn remote<'a>(
         .at(rect)
         .layer(Layer::Popup);
     vec![backdrop, sheet]
+}
+
+pub(crate) fn calibration<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    stage: Rect,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    const AXES: [&str; 3] = ["X", "Y", "Z"];
+    let Some(sheet) = state.workspace.calibration.as_ref() else {
+        return Vec::new();
+    };
+    let target = if sheet.open { 1.0 } else { 0.0 };
+    let spatial = ctx.animate(
+        Key::new("calibration.spatial").id(),
+        target,
+        Motion::spatial_default(),
+    );
+    let effect = ctx.animate(
+        Key::new("calibration.effect").id(),
+        target,
+        Motion::effect_default(),
+    );
+    if !sheet.open && effect <= 0.005 && spatial <= 0.005 {
+        return Vec::new();
+    }
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let language = ctx.language();
+    let authoring = state.access.author();
+    let alpha = effect.clamp(0.0, 1.0);
+    let scale = (0.90 + 0.10 * spatial).max(0.5);
+    let slide = (1.0 - spatial) * -14.0;
+    let width = (stage.width() - 64.0).clamp(320.0, 520.0);
+    let height = 320.0;
+    let rect = Rect::from_center_size(
+        stage.center() + Vec2::new(0.0, slide),
+        Vec2::new(width * scale, height * scale),
+    );
+    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * alpha);
+    let backdrop = grana_ui::canvas(Length::Fill, stage.height())
+        .view(alpha.to_bits(), move |_, painter, info| {
+            painter.rect(info.rect, Corners::ZERO, scrim);
+        })
+        .named("calibration.scrim")
+        .at(stage)
+        .layer(Layer::Popup);
+    let backdrop = if sheet.open {
+        backdrop.press(Message::DismissCalibration)
+    } else {
+        backdrop
+    };
+    let head = grana_ui::row()
+        .width(Length::Fill)
+        .align(Align::Center)
+        .children([
+            crate::view::card_title(
+                ctx,
+                Icon::Ruler,
+                grana_i18n::inspector::voxel_size(language),
+                None,
+            )
+            .width(Length::Fill),
+            crate::view::icon_button(
+                ctx,
+                "calibration.close",
+                Icon::Close,
+                28.0,
+                Role::SurfaceHigh,
+                grana_i18n::common::close(language),
+                Message::DismissCalibration,
+            ),
+        ]);
+    let detail = format!(
+        "{} · {}×{}×{}",
+        sheet.name, sheet.extent[0], sheet.extent[1], sheet.extent[2]
+    );
+    let reason = match sheet.reason {
+        Calibration::Uncalibrated => grana_i18n::inspector::calibration_uncalibrated(language),
+        Calibration::Assumed => grana_i18n::inspector::calibration_assumed(language),
+        Calibration::Inferred => grana_i18n::inspector::calibration_inferred(language),
+        Calibration::Recorded => grana_i18n::inspector::calibration_recorded(language),
+    };
+    let style = TextStyle::new(theme.font(Level::Body), palette.on_surface);
+    let field_width = (width - 32.0 - 16.0) / 3.0;
+    let mut fields = Vec::with_capacity(3);
+    for (axis, text) in sheet.fields.iter().enumerate() {
+        let name = format!("calibration.{}", AXES[axis].to_ascii_lowercase());
+        let field = grana_ui::widget::text_field(text, style, field_width, false)
+            .key(Key::new(&name))
+            .select_all()
+            .editing(authoring)
+            .on_commit(move |text: &str| Message::SetVoxelField {
+                axis,
+                text: text.to_string(),
+            });
+        fields.push(
+            grana_ui::column()
+                .width(Length::Fixed(field_width))
+                .gap(4.0)
+                .children([crate::view::caption(ctx, AXES[axis]), field]),
+        );
+    }
+    let mut rows = vec![
+        head,
+        crate::view::caption(ctx, &detail),
+        crate::view::weak(ctx, reason),
+        grana_ui::row().gap(8.0).children(fields),
+        crate::view::caption(ctx, grana_i18n::inspector::voxel_size_unit(language)),
+    ];
+    if authoring {
+        rows.push(crate::view::caption(
+            ctx,
+            if sheet.error {
+                grana_i18n::inspector::voxel_size_invalid(language)
+            } else {
+                grana_i18n::inspector::voxel_size_hint(language)
+            },
+        ));
+    }
+    rows.push(
+        grana_ui::row().gap(8.0).children([
+            crate::view::button_with(
+                ctx,
+                grana_i18n::common::cancel(language),
+                Role::SurfaceHigh,
+                Length::Fill,
+            )
+            .named("calibration.dismiss")
+            .press(Message::DismissCalibration),
+            crate::view::button_with(
+                ctx,
+                grana_i18n::common::apply(language),
+                Role::Filled,
+                Length::Fill,
+            )
+            .named("calibration.apply")
+            .press(Message::ApplyCalibration),
+        ]),
+    );
+    let mut surface = theme.surface(Role::Sheet, State::Rest);
+    surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
+    surface.corners = Corners::all(theme.metrics.corner_xxl);
+    let sheet_element = grana_ui::column()
+        .padding(Edges::all(16.0))
+        .gap(10.0)
+        .background(surface)
+        .clipped()
+        .children(rows)
+        .at(rect)
+        .layer(Layer::Popup);
+    vec![backdrop, sheet_element]
 }
 
 fn viewport<'a>(

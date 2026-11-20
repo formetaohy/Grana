@@ -54,6 +54,7 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::Localization => ("super-resolution settings", "超分辨设置"),
         Action::Cluster => ("molecule clustering", "分子聚类"),
         Action::Region => ("region", "区域"),
+        Action::Calibration => ("calibration", "标定"),
         Action::Clip => ("clipping plane", "裁剪平面"),
         Action::Exposure => ("exposure", "曝光"),
         Action::StepScale => ("sampling", "采样"),

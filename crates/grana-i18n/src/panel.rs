@@ -22,4 +22,5 @@ labels! {
     show_animation => "Show Animation" / "显示动画";
     depth_inferred => "inferred" / "推算";
     depth_assumed => "assumed" / "假定";
+    uncalibrated => "uncalibrated" / "未标定";
 }

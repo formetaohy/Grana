@@ -4,6 +4,7 @@ use grana_animation::Timeline;
 use grana_display::CameraState;
 use grana_project::{Export, NamedView};
 use grana_scene::{Measure, MeasureState, Scene, SceneState};
+use grana_volume::Pyramid;
 
 use crate::command::{Action, Edit};
 
@@ -17,6 +18,7 @@ pub(crate) struct Snapshot {
     pub(crate) export: Export,
     pub(crate) views: Vec<NamedView>,
     pub(crate) camera: Option<CameraState>,
+    pub(crate) pyramid: Pyramid,
 }
 
 impl Snapshot {
@@ -35,6 +37,7 @@ impl Snapshot {
             export,
             views: views.to_vec(),
             camera,
+            pyramid: scene.dataset.pyramid().clone(),
         }
     }
 }

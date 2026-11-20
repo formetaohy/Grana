@@ -570,6 +570,13 @@ impl<'a, A> Element<'a, A> {
         self
     }
 
+    pub fn select_all(mut self) -> Self {
+        if let Content::Field(field) = &mut self.content {
+            field.select_all = true;
+        }
+        self
+    }
+
     pub fn on_color(mut self, action: impl Fn([f32; 3]) -> A + 'static) -> Self {
         self.interaction = Interaction::Color {
             action: Box::new(action),

@@ -120,6 +120,13 @@ pub enum Message {
         side: usize,
         delta: f32,
     },
+    SetVoxelField {
+        axis: usize,
+        text: String,
+    },
+    BeginCalibration,
+    ApplyCalibration,
+    DismissCalibration,
     ResolvePrompt(crate::prompt::Choice),
     Window(WindowAction),
 }

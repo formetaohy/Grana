@@ -8,6 +8,8 @@ pub struct Spacing {
 }
 
 impl Spacing {
+    pub const EDITABLE: std::ops::RangeInclusive<f32> = 1.0e-6..=1.0e6;
+
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         for value in [x, y, z] {
             assert!(

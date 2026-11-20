@@ -18,6 +18,12 @@ impl App {
                 self.needs_fit = true;
                 self.camera_touched = false;
                 self.workspace.reset_document();
+                self.workspace.calibration = self.session.scene().and_then(|scene| {
+                    grana_editor::CalibrationSheet::after_import(
+                        scene,
+                        self.session.access().author(),
+                    )
+                });
                 self.mask_path.clear();
                 self.pick_toggle = None;
                 self.plate = None;

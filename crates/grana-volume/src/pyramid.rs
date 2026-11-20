@@ -1,4 +1,6 @@
-use crate::{Axial, ChannelInfo, Level, Region};
+use glam::Vec3;
+
+use crate::{Basis, Calibration, ChannelInfo, Level, Region, Spacing};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pyramid {
@@ -8,7 +10,7 @@ pub struct Pyramid {
     frames: u32,
     frame_interval: f32,
     placement: [f32; 3],
-    axial: Axial,
+    calibration: Calibration,
 }
 
 impl Pyramid {
@@ -18,7 +20,7 @@ impl Pyramid {
         channels: Vec<ChannelInfo>,
         frames: u32,
         frame_interval: f32,
-        axial: Axial,
+        calibration: Calibration,
     ) -> Self {
         Self::placed(
             levels,
@@ -27,7 +29,7 @@ impl Pyramid {
             frames,
             frame_interval,
             [0.0; 3],
-            axial,
+            calibration,
         )
     }
 
@@ -38,7 +40,7 @@ impl Pyramid {
         frames: u32,
         frame_interval: f32,
         placement: [f32; 3],
-        axial: Axial,
+        calibration: Calibration,
     ) -> Self {
         assert!(!levels.is_empty(), "a pyramid needs at least one level");
         assert!(
@@ -81,7 +83,7 @@ impl Pyramid {
             frames,
             frame_interval,
             placement,
-            axial,
+            calibration,
         }
     }
 
@@ -105,8 +107,38 @@ impl Pyramid {
         self.placement
     }
 
-    pub fn axial(&self) -> Axial {
-        self.axial
+    pub fn calibration(&self) -> Calibration {
+        self.calibration
+    }
+
+    pub fn with_calibration(mut self, calibration: Calibration) -> Pyramid {
+        self.calibration = calibration;
+        self
+    }
+
+    pub fn rescaled(&self, spacing: Spacing) -> Pyramid {
+        let base = self.levels[0].spacing();
+        if base == spacing {
+            return self.clone();
+        }
+        let factor = [
+            spacing.x() / base.x(),
+            spacing.y() / base.y(),
+            spacing.z() / base.z(),
+        ];
+        Pyramid {
+            levels: self
+                .levels
+                .iter()
+                .map(|level| rescale_level(*level, factor))
+                .collect(),
+            stored: self.stored,
+            channels: self.channels.clone(),
+            frames: self.frames,
+            frame_interval: self.frame_interval,
+            placement: self.placement,
+            calibration: Calibration::Recorded,
+        }
     }
 
     pub fn channels(&self) -> &[ChannelInfo] {
@@ -126,7 +158,7 @@ impl Pyramid {
             frames: self.frames,
             frame_interval: self.frame_interval,
             placement: self.placement,
-            axial: self.axial,
+            calibration: self.calibration,
         }
     }
 
@@ -156,4 +188,22 @@ impl Pyramid {
         assert!(voxels > 0, "a level budget covers at least one voxel");
         (0..self.levels.len()).find(|index| cost(*index).is_none_or(|cost| cost <= voxels))
     }
+}
+
+fn rescale_level(level: Level, factor: [f32; 3]) -> Level {
+    let basis = level.basis();
+    let columns = std::array::from_fn(|axis| {
+        let column = basis.column(axis);
+        [
+            column[0] * factor[axis],
+            column[1] * factor[axis],
+            column[2] * factor[axis],
+        ]
+    });
+    let next = Basis::new(columns);
+    let extent = level.extent();
+    let reach = Vec3::new(extent.x() as f32, extent.y() as f32, extent.z() as f32);
+    let center = Vec3::from(level.center());
+    let origin = center - next.matrix() * (0.5 * reach);
+    Level::placed(extent, next, origin.to_array())
 }

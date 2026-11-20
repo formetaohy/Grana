@@ -1,7 +1,7 @@
-mod axial;
 mod axis;
 mod basis;
 mod brick;
+mod calibration;
 mod channel;
 mod clip;
 mod damage;
@@ -19,13 +19,13 @@ mod spacing;
 mod volume;
 mod voxel;
 
-pub use axial::Axial;
 pub use axis::Axis;
 pub use basis::Basis;
 pub use brick::{
     BRICK_APRON, BRICK_SIDE, BrickCoord, BrickData, BrickGrid, BrickRequest, CELL_AXIS, CELL_COUNT,
     CELL_SIDE, CHANNEL_LIMIT, PADDED_SIDE, blank_brick, pad_brick,
 };
+pub use calibration::Calibration;
 pub use channel::{ChannelInfo, ChannelSet, name_of, tint_of};
 pub use clip::Clip;
 pub use damage::Damage;

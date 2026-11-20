@@ -244,6 +244,14 @@ impl Scene {
 
     pub fn document_hash(&self) -> u64 {
         let mut hash = HASH_OFFSET;
+        let spacing = self.dataset.spacing();
+        for value in [spacing.x(), spacing.y(), spacing.z()] {
+            hash = mix(hash, u64::from(value.to_bits()));
+        }
+        hash = mix(
+            hash,
+            u64::from(self.dataset.pyramid().calibration().index()),
+        );
         for entry in self.derived() {
             let spec = entry.spec();
             hash = mix(hash, spec.source() as u64);

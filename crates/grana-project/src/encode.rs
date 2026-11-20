@@ -135,6 +135,7 @@ impl Encode for Shape {
         for value in self.spacing {
             writer.f32(value);
         }
+        writer.u8(self.calibration.index());
     }
 }
 

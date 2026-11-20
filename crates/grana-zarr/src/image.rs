@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use grana_volume::{
-    Axial, ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
+    Calibration, ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
 };
 use zarrs::array::data_type::{
     float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
@@ -156,6 +156,11 @@ impl Image {
             detail,
         })?;
         let stored = level_metadata.len();
+        let calibration = if metadata.datasets.iter().all(|dataset| dataset.placed) {
+            Calibration::Recorded
+        } else {
+            Calibration::Uncalibrated
+        };
         Ok(Self {
             root,
             group: group.to_string(),
@@ -170,7 +175,7 @@ impl Image {
                 frames,
                 interval,
                 placement,
-                Axial::Recorded,
+                calibration,
             ),
             axes: metadata.axes,
             datasets: metadata.datasets,

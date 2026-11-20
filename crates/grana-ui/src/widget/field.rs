@@ -33,6 +33,7 @@ pub fn text_field<'a, A>(
         multiline,
         radius: 10.0,
         editing: false,
+        select_all: false,
     }))
 }
 

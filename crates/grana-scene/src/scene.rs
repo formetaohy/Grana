@@ -8,7 +8,7 @@ use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
 use grana_optics::Psf;
-use grana_volume::{CHANNEL_LIMIT, ChannelInfo, ChannelSet, Clip, Intensity, Region};
+use grana_volume::{CHANNEL_LIMIT, ChannelInfo, ChannelSet, Clip, Intensity, Region, Spacing};
 
 use crate::alignment::LocalizationAlignment;
 use crate::annotation::Annotations;
@@ -1160,6 +1160,27 @@ impl Scene {
 
     pub fn set_clip(&mut self, clip: Clip) {
         self.clip = clip;
+    }
+
+    pub fn recalibrate(&mut self, spacing: Spacing) {
+        if self.dataset.spacing() == spacing {
+            return;
+        }
+        self.dataset = self.dataset.with_spacing(spacing);
+        let half = 0.5 * self.dataset.world_size();
+        self.region = Region::full(-half, half);
+        self.clip = Clip::none();
+        self.annotations = Annotations::new();
+        self.set_drifts(Drifts::new());
+        self.set_registration(Registration::default());
+        self.mask = None;
+        self.mask_filter = None;
+        self.mask_radius = 0.0;
+        self.objects = Objects::new();
+        self.selections.clear();
+        self.set_derived_layout(Vec::new())
+            .expect("the base channels fit the channel limit");
+        self.coloc = Coloc::new(self.channels.len());
     }
 
     pub fn drifts(&self) -> &Drifts {

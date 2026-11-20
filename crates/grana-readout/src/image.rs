@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    Axial, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelData, VoxelFormat,
+    Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelData, VoxelFormat,
     name_of, tint_of,
 };
 use openreadout_core::region::{self, ResolutionLevel};
@@ -57,7 +57,7 @@ impl Image {
             Error::unsupported(path, "the image stores a sample type grana cannot read")
         })?;
         let views = views(image, format);
-        let (unit, axial) = spacing(image);
+        let (unit, calibration) = spacing(image);
         let levels = levels(path, image, unit)?;
         let frames = scene.frames();
         let interval = interval(image);
@@ -70,7 +70,7 @@ impl Image {
             .map(|(index, view)| channel(image, *view, index, probes[index]))
             .collect();
         let stored = levels.len();
-        let pyramid = Pyramid::new(levels, stored, channels, frames, interval, axial);
+        let pyramid = Pyramid::new(levels, stored, channels, frames, interval, calibration);
         Ok(Self {
             path: path.to_path_buf(),
             family: document.family,
@@ -355,18 +355,26 @@ fn format_of(pixel: PixelType) -> Option<VoxelFormat> {
     }
 }
 
-fn spacing(image: &ImageInfo) -> (Spacing, Axial) {
-    let x = positive(image.physical_size.x).unwrap_or(1.0);
+fn spacing(image: &ImageInfo) -> (Spacing, Calibration) {
+    let lateral = positive(image.physical_size.x);
+    let x = lateral.unwrap_or(1.0);
     let y = positive(image.physical_size.y).unwrap_or(x);
     let Some(z) = positive(image.physical_size.z) else {
-        let axial = if image.size_z > 1 {
-            Axial::Assumed
+        let calibration = if lateral.is_none() {
+            Calibration::Uncalibrated
+        } else if image.size_z > 1 {
+            Calibration::Assumed
         } else {
-            Axial::Recorded
+            Calibration::Recorded
         };
-        return (Spacing::new(x, y, x), axial);
+        return (Spacing::new(x, y, x), calibration);
     };
-    (Spacing::new(x, y, z), Axial::Recorded)
+    let calibration = if lateral.is_some() {
+        Calibration::Recorded
+    } else {
+        Calibration::Uncalibrated
+    };
+    (Spacing::new(x, y, z), calibration)
 }
 
 fn positive(value: Option<f64>) -> Option<f32> {

@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_volume::{ChannelInfo, Extent, Pyramid, Spacing, VoxelFormat};
+use grana_volume::{Calibration, ChannelInfo, Extent, Pyramid, Spacing, VoxelFormat};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -129,6 +129,30 @@ impl Dataset {
         Dataset {
             name: self.name.clone(),
             pyramid: self.pyramid.with_channels(channels),
+            origin: self.origin,
+        }
+    }
+
+    pub fn with_spacing(&self, spacing: Spacing) -> Dataset {
+        Dataset {
+            name: self.name.clone(),
+            pyramid: self.pyramid.rescaled(spacing),
+            origin: self.origin,
+        }
+    }
+
+    pub fn with_calibration(&self, spacing: Spacing, calibration: Calibration) -> Dataset {
+        Dataset {
+            name: self.name.clone(),
+            pyramid: self.pyramid.rescaled(spacing).with_calibration(calibration),
+            origin: self.origin,
+        }
+    }
+
+    pub fn with_pyramid(&self, pyramid: Pyramid) -> Dataset {
+        Dataset {
+            name: self.name.clone(),
+            pyramid,
             origin: self.origin,
         }
     }

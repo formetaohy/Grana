@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use grana_volume::{Axial, Extent, Spacing};
+use grana_volume::{Calibration, Extent, Spacing};
 
 use crate::Error;
 use crate::directory::{Dimension, Entry, PixelType};
@@ -34,7 +34,7 @@ pub(crate) struct SceneLayout {
     pub(crate) pixels: Vec<PixelType>,
     pub(crate) frames: u32,
     pub(crate) levels: Vec<LevelLayout>,
-    pub(crate) axial: Axial,
+    pub(crate) calibration: Calibration,
 }
 
 pub(crate) struct Layout {
@@ -196,10 +196,13 @@ fn assemble(
         .copied()
         .unwrap_or(1.0);
     let spacing = metadata.spacing.map(|value| value.unwrap_or(fallback));
-    let axial = if metadata.spacing[2].is_some() || depth <= 1 {
-        Axial::Recorded
+    let lateral = metadata.spacing[0].is_some() || metadata.spacing[1].is_some();
+    let calibration = if !lateral {
+        Calibration::Uncalibrated
+    } else if metadata.spacing[2].is_some() || depth <= 1 {
+        Calibration::Recorded
     } else {
-        Axial::Assumed
+        Calibration::Assumed
     };
     let context = Context {
         path,
@@ -234,7 +237,7 @@ fn assemble(
         pixels,
         frames,
         levels,
-        axial,
+        calibration,
     })
 }
 
