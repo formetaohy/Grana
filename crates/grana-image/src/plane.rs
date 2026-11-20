@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use grana_volume::{Extent, Sampling, VoxelData, VoxelFormat};
+use grana_volume::{Extent, VoxelData, VoxelFormat, VoxelSemantics};
 
 const SOURCE_BUDGET: u64 = 512 << 20;
 const TOTAL_BUDGET: u64 = 1536 << 20;
@@ -128,7 +128,7 @@ impl Caches {
 
 pub(crate) fn reduce(
     format: VoxelFormat,
-    sampling: Sampling,
+    semantics: VoxelSemantics,
     extent: Extent,
     width: usize,
     rows: Range<usize>,
@@ -138,7 +138,7 @@ pub(crate) fn reduce(
         !sources.is_empty(),
         "a reduced plane averages at least one source plane"
     );
-    if sampling == Sampling::Nearest {
+    if !semantics.averages() {
         return nearest(sources[0], extent, width, rows);
     }
     let height = rows.end - rows.start;

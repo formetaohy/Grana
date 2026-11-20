@@ -538,7 +538,7 @@ fn channel_rows(scene: &Scene) -> Vec<ChannelRow> {
         .map(|channel| ChannelRow {
             visible: channel.enabled,
             opacity: channel.opacity,
-            window: channel.window,
+            intensity: channel.window,
             transfer: channel.transfer().clone(),
             volume: channel.volume(),
         })

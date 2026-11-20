@@ -1,4 +1,4 @@
-use crate::{Intensity, VoxelFormat};
+use crate::{Intensity, Statistics, VoxelFormat, VoxelSemantics};
 
 const BITS: usize = crate::CHANNEL_LIMIT;
 
@@ -67,76 +67,45 @@ impl ChannelSet {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum Sampling {
-    #[default]
-    Mean,
-    Nearest,
-}
-
-impl Sampling {
-    pub fn code(self) -> u8 {
-        match self {
-            Self::Mean => 0,
-            Self::Nearest => 1,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
     name: String,
     tint: [f32; 3],
-    intensity: Intensity,
-    window: Intensity,
+    statistics: Statistics,
     format: VoxelFormat,
-    sampling: Sampling,
 }
 
 impl ChannelInfo {
     pub fn new(
         name: impl Into<String>,
         tint: [f32; 3],
-        intensity: Intensity,
-        window: Intensity,
+        statistics: Statistics,
         format: VoxelFormat,
     ) -> Self {
         assert!(
             tint.iter().all(|component| (0.0..=1.0).contains(component)),
             "a channel tint is an srgb triple"
         );
-        assert!(
-            window.span() > 0.0,
-            "a display window needs a positive span"
-        );
         Self {
             name: name.into(),
             tint,
-            intensity,
-            window,
+            statistics,
             format,
-            sampling: Sampling::Mean,
         }
     }
 
-    pub fn with_sampling(mut self, sampling: Sampling) -> Self {
-        self.sampling = sampling;
-        self
-    }
-
-    pub fn resolve(
+    pub fn declared(
         name: impl Into<String>,
         tint: [f32; 3],
+        intensity: Intensity,
         format: VoxelFormat,
-        domains: &[Option<Intensity>],
-        windows: &[Option<Intensity>],
     ) -> Self {
-        let intensity = format
-            .domain()
-            .or_else(|| first(domains))
-            .unwrap_or_else(fallback);
-        let window = first(windows).unwrap_or(intensity);
-        Self::new(name, tint, intensity, window, format)
+        Self::new(
+            name,
+            tint,
+            Statistics::declared(intensity, VoxelSemantics::Scalar),
+            format,
+        )
     }
 
     pub fn name(&self) -> &str {
@@ -147,31 +116,24 @@ impl ChannelInfo {
         self.tint
     }
 
-    pub fn intensity(&self) -> Intensity {
-        self.intensity
+    pub fn statistics(&self) -> Statistics {
+        self.statistics
     }
 
-    pub fn window(&self) -> Intensity {
-        self.window
+    pub fn intensity(&self) -> Intensity {
+        self.statistics.intensity()
+    }
+
+    pub fn semantics(&self) -> VoxelSemantics {
+        self.statistics.semantics()
+    }
+
+    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+        self.statistics = statistics;
+        self
     }
 
     pub fn format(&self) -> VoxelFormat {
         self.format
     }
-
-    pub fn sampling(&self) -> Sampling {
-        self.sampling
-    }
-}
-
-fn first(candidates: &[Option<Intensity>]) -> Option<Intensity> {
-    candidates
-        .iter()
-        .flatten()
-        .copied()
-        .find(|candidate| candidate.span() > 0.0)
-}
-
-fn fallback() -> Intensity {
-    Intensity::new(0.0, 1.0)
 }

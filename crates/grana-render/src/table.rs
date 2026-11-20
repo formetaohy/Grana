@@ -272,7 +272,7 @@ fn channel_data(
                 "a channel opacity lies in the unit interval"
             );
             let range = pyramid.channels()[index].intensity();
-            let (start, inverse) = window(range, row.window);
+            let (start, inverse) = window(range, row.intensity);
             let opaque = thresholds[index];
             let mode = row.volume.mode();
             let threshold = match mode {

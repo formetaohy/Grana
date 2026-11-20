@@ -212,7 +212,6 @@ fn write_stack(
         name,
         tint,
         intensity: grana_volume::Intensity::new(0.0, 1.0),
-        window: grana_volume::Intensity::new(0.0, 1.0),
     });
     let fill = |block: Block| -> Result<VoxelData, String> {
         let width = size[0] as usize;

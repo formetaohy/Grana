@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelData, VoxelFormat,
+    Calibration, ChannelInfo, Extent, Level, Pyramid, Spacing, Statistics, VoxelData, VoxelFormat,
     name_of, tint_of,
 };
 use openreadout_core::region::{self, ResolutionLevel};
@@ -63,7 +63,7 @@ impl Image {
         let interval = interval(image);
         let mut dataset = document.dataset;
         let mut probe_cache = plane::Cache::new(CACHE_BYTES);
-        let probes = probe::intensities(path, &mut *dataset, image, &views, &mut probe_cache)?;
+        let probes = probe::statistics(path, &mut *dataset, image, &views, &mut probe_cache)?;
         let channels = views
             .iter()
             .enumerate()
@@ -316,7 +316,7 @@ fn views(image: &ImageInfo, format: VoxelFormat) -> Vec<View> {
         .collect()
 }
 
-fn channel(image: &ImageInfo, view: View, index: usize, probe: Option<Intensity>) -> ChannelInfo {
+fn channel(image: &ImageInfo, view: View, index: usize, probe: Statistics) -> ChannelInfo {
     let source = image
         .channels
         .iter()
@@ -339,7 +339,7 @@ fn channel(image: &ImageInfo, view: View, index: usize, probe: Option<Intensity>
         };
         (format!("{base} {suffix}"), tint)
     };
-    ChannelInfo::resolve(name, tint, view.format, &[probe], &[probe])
+    ChannelInfo::new(name, tint, probe, view.format)
 }
 
 fn format_of(pixel: PixelType) -> Option<VoxelFormat> {

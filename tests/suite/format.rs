@@ -12,7 +12,7 @@ use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_leve
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
     Basis, Calibration, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries,
-    VoxelData,
+    VoxelData, VoxelSemantics,
 };
 use grana_zarr::write_image;
 
@@ -94,7 +94,6 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         name: "signal",
         tint: [0.2, 0.7, 1.0],
         intensity: Intensity::new(0.0, 4096.0),
-        window: Intensity::new(0.0, 4096.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let scale = 1u32 << block.level;
@@ -219,7 +218,6 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
                 intensity: Intensity::new(0.0, 255.0),
-                window: Intensity::new(0.0, 255.0),
             }],
             levels: image.pyramid().levels().to_vec(),
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],
@@ -268,7 +266,6 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
                 intensity: Intensity::new(0.0, 255.0),
-                window: Intensity::new(0.0, 255.0),
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -313,7 +310,6 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
                 intensity: Intensity::new(0.0, 255.0),
-                window: Intensity::new(0.0, 255.0),
             }],
             levels: vec![flipped],
             origins: vec![[0, 0, 0]],
@@ -349,7 +345,6 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
                 intensity: Intensity::new(0.0, 255.0),
-                window: Intensity::new(0.0, 255.0),
             }],
             levels: shallow.to_vec(),
             origins: vec![[0, 0, 0]; 2],
@@ -397,7 +392,6 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                     name: "signal".to_string(),
                     tint: [1.0, 1.0, 1.0],
                     intensity: Intensity::new(0.0, 20_000_000.0),
-                    window: Intensity::new(0.0, 20_000_000.0),
                 }],
                 levels: wide_image.pyramid().levels().to_vec(),
                 origins: vec![[0, 0, 0]; wide_image.pyramid().level_count()],
@@ -455,7 +449,6 @@ fn writes_a_sixteen_bit_ome_tiff() {
             _ => [0.0, 0.0, 1.0],
         },
         intensity: Intensity::new(0.0, 1.0),
-        window: Intensity::new(0.0, 1.0),
     });
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;
@@ -539,7 +532,6 @@ fn writes_a_sharded_ome_zarr_level() {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
         intensity: Intensity::new(0.0, 1.0),
-        window: Intensity::new(0.0, 1.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;
@@ -642,13 +634,11 @@ fn write_zarr(root: &std::path::Path) {
             name: "DAPI",
             tint: [0.0, 0.0, 1.0],
             intensity: Intensity::new(0.0, 2048.0),
-            window: Intensity::new(0.0, 2048.0),
         },
         WriteChannel {
             name: "GFP",
             tint: [0.0, 1.0, 0.0],
             intensity: Intensity::new(0.0, 1024.0),
-            window: Intensity::new(0.0, 1024.0),
         },
     ];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
@@ -760,7 +750,10 @@ fn writes_and_reads_a_tiny_ome_zarr() {
     assert_eq!(pyramid.level_count(), 2);
     assert_eq!(pyramid.channels()[0].name(), "DAPI");
     assert_eq!(pyramid.channels()[0].tint(), [0.0, 0.0, 1.0]);
-    assert_eq!(pyramid.channels()[0].window(), Intensity::new(0.0, 2048.0));
+    assert_eq!(
+        pyramid.channels()[0].intensity(),
+        Intensity::new(0.0, 2048.0)
+    );
     assert_eq!(pyramid.level(0).extent(), Extent::new(24, 16, 8));
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 1.0));
     assert_eq!(pyramid.level(1).extent(), Extent::new(12, 8, 4));
@@ -837,7 +830,6 @@ fn writes_and_reads_a_tiny_ome_zarr() {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
         intensity: Intensity::new(0.0, 255.0),
-        window: Intensity::new(0.0, 255.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![
@@ -907,7 +899,6 @@ fn round_trips_a_rotated_basis_through_ome_tiff() {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
         intensity: Intensity::new(0.0, 1.0),
-        window: Intensity::new(0.0, 1.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![block.level as f32; block.voxels()]))
@@ -970,7 +961,6 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
         intensity: Intensity::new(0.0, 255.0),
-        window: Intensity::new(0.0, 255.0),
     }];
     let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
         let mut values = Vec::with_capacity(block.voxels());
@@ -1227,7 +1217,6 @@ fn exports_a_region_of_the_channels_and_labels() {
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
                 intensity: Intensity::new(0.0, 1000.0),
-                window: Intensity::new(100.0, 300.0),
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -1248,12 +1237,11 @@ fn exports_a_region_of_the_channels_and_labels() {
     assert_eq!(
         (info.intensity().min(), info.intensity().max()),
         (0.0, 1000.0),
-        "the exported channel keeps the data range apart from its display window"
+        "the exported channel keeps the intensities its voxels span"
     );
-    assert_eq!(
-        (info.window().min(), info.window().max()),
-        (100.0, 300.0),
-        "the exported channel keeps its display window"
+    assert!(
+        info.intensity().span() > 0.0,
+        "the exported channel keeps a display window with a positive span"
     );
     let level = written.pyramid().level(0);
     assert_eq!(level.extent(), Extent::new(8, 8, 4));
@@ -1480,6 +1468,80 @@ fn reads_a_tiff_stack_past_the_page_limit() {
         panic!("the stacked tiff stores bytes");
     };
     assert_eq!(values, vec![((pages - 1) % 256) as u8]);
+    assert!(
+        image.pyramid().channels()[0].intensity().max() > 0.0,
+        "a stack reports the intensities it stores rather than the full byte domain"
+    );
+    assert_eq!(
+        image.pyramid().channels()[0].semantics(),
+        VoxelSemantics::Label,
+        "a stack of few distinct values is a label volume"
+    );
+    let palette = temp.path().join("palette.tif");
+    let pages = 105u32;
+    let entries = 12u32;
+    let record = 2 + entries * 12 + 4;
+    let payload = 25u32;
+    let map_at = 8u32 + pages * (record + payload);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"II");
+    bytes.extend_from_slice(&42u16.to_le_bytes());
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    let mut origin = 8u32;
+    for page in 0..pages {
+        let next = if page + 1 == pages {
+            0
+        } else {
+            origin + record + payload
+        };
+        bytes.extend_from_slice(&(entries as u16).to_le_bytes());
+        let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&kind.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        entry(256, 4, 1, 5);
+        entry(257, 4, 1, 5);
+        entry(258, 3, 1, 8);
+        entry(259, 3, 1, 1);
+        entry(262, 3, 1, 3);
+        entry(273, 4, 1, origin + record);
+        entry(277, 3, 1, 1);
+        entry(278, 4, 1, 5);
+        entry(279, 4, 1, payload);
+        entry(284, 3, 1, 1);
+        entry(320, 3, 768, map_at);
+        entry(339, 3, 1, 1);
+        bytes.extend_from_slice(&next.to_le_bytes());
+        for y in 0..5usize {
+            for x in 0..5usize {
+                bytes.push(u8::from(y == 2 && x < 3));
+            }
+        }
+        origin = next;
+    }
+    let mut map = vec![0u8; 1536];
+    for index in 0..256usize {
+        let component: u16 = if index == 1 { 0xffff } else { index as u16 };
+        for channel in 0..3usize {
+            let at = (channel * 256 + index) * 2;
+            map[at..at + 2].copy_from_slice(&component.to_le_bytes());
+        }
+    }
+    bytes.extend_from_slice(&map);
+    std::fs::write(&palette, &bytes).expect("the palette stack writes");
+    let indexed = grana_tiff::Image::open(&palette, 0).expect("the palette stack opens");
+    assert_eq!(
+        indexed.pyramid().channels()[0].semantics(),
+        VoxelSemantics::Label,
+        "a palette page carries labels even when its extent outruns the census budget"
+    );
+    assert_eq!(
+        indexed.pyramid().channels()[0].intensity(),
+        Intensity::new(0.0, 255.0),
+        "a palette stack reports the intensities its colour map expands to"
+    );
 }
 
 #[test]
@@ -1537,7 +1599,6 @@ fn writes_and_reads_a_label_image() {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
         intensity: Intensity::new(0.0, 1.0),
-        window: Intensity::new(0.0, 1.0),
     }];
     let image_fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![0.0; block.voxels()]))
@@ -1624,8 +1685,8 @@ fn writes_and_reads_a_label_image() {
     )
     .expect("the label image opens as a dataset");
     assert_eq!(
-        labelled.pyramid().channels()[0].sampling(),
-        grana_volume::Sampling::Nearest,
+        labelled.pyramid().channels()[0].semantics(),
+        grana_volume::VoxelSemantics::Label,
         "a label image samples its nearest child instead of averaging its ids"
     );
     let coarse = Extent::new(
@@ -1946,7 +2007,6 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
                 intensity: Intensity::new(0.0, 10.0),
-                window: Intensity::new(0.0, 10.0),
             }],
             levels,
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],

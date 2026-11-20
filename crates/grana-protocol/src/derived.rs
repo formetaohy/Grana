@@ -158,23 +158,19 @@ fn position(channels: &[ChannelInfo], name: &str) -> Option<usize> {
 }
 
 fn operator_info(name: &str, tint: [f32; 3], intensity: [f32; 2]) -> ChannelInfo {
-    let intensity = Intensity::new(intensity[0], intensity[1]);
-    ChannelInfo::new(
+    ChannelInfo::declared(
         name,
         tint,
-        intensity,
-        intensity,
+        Intensity::new(intensity[0], intensity[1]),
         grana_volume::VoxelFormat::F32,
     )
 }
 
 fn restore_info(spec: &ProtocolRestoreSpec) -> ChannelInfo {
-    let intensity = Intensity::new(spec.intensity[0], spec.intensity[1]);
-    ChannelInfo::new(
+    ChannelInfo::declared(
         spec.name.clone(),
         spec.tint,
-        intensity,
-        intensity,
+        Intensity::new(spec.intensity[0], spec.intensity[1]),
         grana_volume::VoxelFormat::F32,
     )
 }

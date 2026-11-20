@@ -33,7 +33,6 @@ fn builds_padded_bricks_from_a_volume() {
         Intensity::new(7.0, 2296.0)
     );
     assert_eq!(pyramid.channels()[1].intensity(), Intensity::new(9.0, 9.0));
-    assert_eq!(pyramid.channels()[1].window(), Intensity::new(0.0, 1.0));
 
     let grid = BrickGrid::new(extent);
     assert_eq!(grid.counts(), [2, 2, 1]);

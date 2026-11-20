@@ -8,7 +8,8 @@ use grana_render::Delivery;
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_session::Session;
 use grana_volume::{
-    Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, VoxelFormat,
+    Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, Statistics, VoxelFormat,
+    VoxelSemantics,
 };
 
 use crate::support::gpu;
@@ -110,8 +111,7 @@ fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
     let channels = vec![ChannelInfo::new(
         "signal",
         [1.0, 1.0, 1.0],
-        intensity,
-        intensity,
+        Statistics::declared(intensity, VoxelSemantics::Scalar),
         VoxelFormat::F32,
     )];
     let pyramid = Pyramid::new(vec![level], 1, channels, 2, 1.0, Calibration::Recorded);

@@ -54,16 +54,6 @@ impl VoxelFormat {
         }
     }
 
-    pub fn domain(self) -> Option<Intensity> {
-        match self {
-            Self::U8 => Some(Intensity::new(0.0, f32::from(u8::MAX))),
-            Self::U16 => Some(Intensity::new(0.0, f32::from(u16::MAX))),
-            Self::I8 => Some(Intensity::new(f32::from(i8::MIN), f32::from(i8::MAX))),
-            Self::I16 => Some(Intensity::new(f32::from(i16::MIN), f32::from(i16::MAX))),
-            Self::U32 | Self::U64 | Self::I32 | Self::I64 | Self::F32 | Self::F64 => None,
-        }
-    }
-
     pub fn display_maximum(self) -> f32 {
         match self {
             Self::U8 => f32::from(u8::MAX),
@@ -498,7 +488,7 @@ impl VoxelData {
         }
     }
 
-    fn for_each_value(&self, visit: impl FnMut(f32)) {
+    pub fn for_each_value(&self, visit: impl FnMut(f32)) {
         match self {
             Self::U8(data) => for_each(data, visit),
             Self::U16(data) => for_each(data, visit),

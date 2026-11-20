@@ -1,8 +1,7 @@
 use std::ops::Range;
 
 use crate::{
-    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Intensity, Level, Pyramid, Volume,
-    VoxelData,
+    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Level, Pyramid, Volume, VoxelData,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,27 +109,13 @@ impl VolumeSeries {
         let first = &frames[0];
         let channels = (0..first.channel_count())
             .map(|index| {
-                let mut low = f32::INFINITY;
-                let mut high = f32::NEG_INFINITY;
-                for frame in frames {
-                    let intensity = frame.channels()[index].intensity();
-                    low = low.min(intensity.min());
-                    high = high.max(intensity.max());
-                }
-                let intensity = Intensity::new(low, high);
-                let window = if intensity.span() > 0.0 {
-                    intensity
-                } else {
-                    Intensity::new(0.0, 1.0)
-                };
+                let statistics = frames
+                    .iter()
+                    .fold(first.channels()[index].statistics(), |held, frame| {
+                        held.folded(frame.channels()[index].statistics())
+                    });
                 let channel = &first.channels()[index];
-                ChannelInfo::new(
-                    channel.name(),
-                    channel.tint(),
-                    intensity,
-                    window,
-                    channel.format(),
-                )
+                ChannelInfo::new(channel.name(), channel.tint(), statistics, channel.format())
             })
             .collect();
         Pyramid::new(

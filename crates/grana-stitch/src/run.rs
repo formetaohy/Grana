@@ -322,7 +322,6 @@ impl Mosaic {
                     name: base[channel].name(),
                     tint: base[channel].tint(),
                     intensity: merged(grana_volume::ChannelInfo::intensity),
-                    window: merged(grana_volume::ChannelInfo::window),
                 }
             })
             .collect()

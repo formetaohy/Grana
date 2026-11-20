@@ -76,7 +76,12 @@ impl Scene {
         let channels = dataset
             .channels()
             .iter()
-            .map(|channel| Channel::new(channel.window(), TransferFunction::tinted(channel.tint())))
+            .map(|channel| {
+                Channel::new(
+                    channel.intensity(),
+                    TransferFunction::tinted(channel.tint()),
+                )
+            })
             .collect::<Vec<Channel>>();
         let half = 0.5 * dataset.world_size();
         let channel_count = channels.len();
@@ -148,7 +153,7 @@ impl Scene {
             .map(|(index, info)| match previous.next() {
                 Some(channel) if index < base => channel,
                 Some(_) | None => {
-                    Channel::new(info.window(), TransferFunction::tinted(info.tint()))
+                    Channel::new(info.intensity(), TransferFunction::tinted(info.tint()))
                 }
             })
             .collect();
@@ -313,7 +318,7 @@ impl Scene {
         channels.push(info.clone());
         self.dataset = self.dataset.with_channels(channels);
         self.channels.push(Channel::new(
-            info.window(),
+            info.intensity(),
             TransferFunction::tinted(info.tint()),
         ));
         self.coloc.grow_channel(self.channels.len());
@@ -622,7 +627,7 @@ impl Scene {
     }
 
     pub fn reset_window(&mut self, index: usize) {
-        let window = self.channel(index).window();
+        let window = self.channel(index).intensity();
         self.channels[index].window = window;
     }
 

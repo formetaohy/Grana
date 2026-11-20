@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use glam::Vec3;
-use grana_volume::{Level, Sampling, VoxelData, VoxelFormat};
+use grana_volume::{Level, VoxelData, VoxelFormat, VoxelSemantics};
 use grana_warp::Warp;
 
 pub(crate) enum Plan {
@@ -124,9 +124,9 @@ pub(crate) fn resample(
     data: &VoxelData,
     plan: &Plan,
     ranges: &[Range<u32>; 3],
-    sampling: Sampling,
+    semantics: VoxelSemantics,
 ) -> VoxelData {
-    let nearest = sampling == Sampling::Nearest;
+    let nearest = !semantics.averages();
     macro_rules! resample {
         ($($variant:ident),*) => {
             match (data, plan) {

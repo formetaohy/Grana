@@ -7,7 +7,6 @@ pub struct Channel<'a> {
     pub name: &'a str,
     pub tint: [f32; 3],
     pub intensity: Intensity,
-    pub window: Intensity,
 }
 
 #[derive(Clone, Copy)]
@@ -95,7 +94,7 @@ impl ImageSpec<'_> {
         assert!(
             self.channels
                 .iter()
-                .all(|channel| channel.window.span() > 0.0),
+                .all(|channel| channel.intensity.span() > 0.0),
             "an exported channel carries a display window with a positive span"
         );
         assert!(

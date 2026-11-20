@@ -74,7 +74,7 @@ fn channels(pyramid: &Pyramid, transfers: &[TransferFunction]) -> Vec<grana_rend
         .map(|(channel, transfer)| grana_render::ChannelRow {
             visible: true,
             opacity: 1.0,
-            window: channel.window(),
+            intensity: channel.intensity(),
             transfer: transfer.clone(),
             volume: VolumeStyle::default(),
         })
@@ -236,7 +236,7 @@ fn background(
         .map(|row| grana_render::ChannelRow {
             visible: false,
             opacity: row.opacity,
-            window: row.window,
+            intensity: row.intensity,
             transfer: row.transfer.clone(),
             volume: row.volume,
         })
@@ -973,7 +973,7 @@ fn render_volume(
     let channels = vec![grana_render::ChannelRow {
         visible,
         opacity: 1.0,
-        window: pyramid.channels()[0].window(),
+        intensity: pyramid.channels()[0].intensity(),
         transfer: TransferFunction::tinted(pyramid.channels()[0].tint()),
         volume: style,
     }];

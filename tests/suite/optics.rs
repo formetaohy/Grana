@@ -132,7 +132,7 @@ fn hidden(pyramid: &Pyramid) -> Vec<ChannelRow> {
         .map(|channel| ChannelRow {
             visible: false,
             opacity: 1.0,
-            window: channel.window(),
+            intensity: channel.intensity(),
             transfer: TransferFunction::tinted(channel.tint()),
             volume: VolumeStyle::default(),
         })

@@ -52,7 +52,7 @@ pub fn field(source: &Source, size: u32) -> Result<Bitmap, String> {
             .map_err(|error| error.to_string())?;
         let projected = project(&data, extent, width, height);
         let tint = srgb_to_linear(info.tint());
-        let window = info.window();
+        let window = info.intensity();
         for (pixel, value) in pixels.iter_mut().zip(projected) {
             let unit = window.unit(value).clamp(0.0, 1.0);
             for axis in 0..3 {

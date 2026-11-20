@@ -3,7 +3,6 @@ use std::sync::Arc;
 use crate::splat::Splats;
 use grana_display::{Material, Shading, TransferFunction, VolumeStyle};
 use grana_geometry::PackedMesh;
-use grana_volume::Intensity;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerKey {
@@ -177,7 +176,7 @@ impl Style {
 pub struct ChannelRow {
     pub visible: bool,
     pub opacity: f32,
-    pub window: Intensity,
+    pub intensity: grana_volume::Intensity,
     pub transfer: TransferFunction,
     pub volume: VolumeStyle,
 }

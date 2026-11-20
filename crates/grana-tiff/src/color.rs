@@ -129,6 +129,10 @@ impl ColorModel {
         matches!(self, Self::Gray { inverted: true })
     }
 
+    pub(crate) fn indexed(&self) -> bool {
+        matches!(self, Self::Palette { .. })
+    }
+
     pub(crate) fn converts(&self) -> bool {
         matches!(
             self,

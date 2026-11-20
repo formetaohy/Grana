@@ -1,13 +1,13 @@
 use crate::{
     BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid,
-    Spacing, VoxelData, VoxelFormat, brick::pad_brick,
+    Spacing, Statistics, VoxelData, VoxelFormat, brick::pad_brick,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Channel {
     name: String,
     tint: [f32; 3],
-    intensity: Intensity,
+    statistics: Statistics,
     data: VoxelData,
 }
 
@@ -17,11 +17,11 @@ impl Channel {
             tint.iter().all(|component| (0.0..=1.0).contains(component)),
             "a channel tint is an srgb triple"
         );
-        let intensity = data.range();
+        let statistics = Statistics::census(&data);
         Self {
             name: name.into(),
             tint,
-            intensity,
+            statistics,
             data,
         }
     }
@@ -35,7 +35,11 @@ impl Channel {
     }
 
     pub fn intensity(&self) -> Intensity {
-        self.intensity
+        self.statistics.intensity()
+    }
+
+    pub fn statistics(&self) -> Statistics {
+        self.statistics
     }
 
     pub fn data(&self) -> &VoxelData {
@@ -96,17 +100,10 @@ impl Volume {
             .channels
             .iter()
             .map(|channel| {
-                let intensity = channel.intensity();
-                let window = if intensity.span() > 0.0 {
-                    intensity
-                } else {
-                    Intensity::new(0.0, 1.0)
-                };
                 ChannelInfo::new(
                     channel.name(),
                     channel.tint(),
-                    intensity,
-                    window,
+                    channel.statistics(),
                     channel.format(),
                 )
             })

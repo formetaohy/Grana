@@ -22,7 +22,7 @@ use grana_scene::{Dataset, Drifts, ObjectFrame, ObjectKind, ObjectParams, Scene}
 use grana_store::SpillStore;
 use grana_volume::{
     Basis, Calibration, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing,
-    Volume, VolumeSeries, VoxelData, VoxelFormat,
+    Statistics, Volume, VolumeSeries, VoxelData, VoxelFormat, VoxelSemantics,
 };
 use grana_zarr::write_image;
 
@@ -697,8 +697,7 @@ fn pages_localization_frames_beyond_the_resident_budget() {
         vec![ChannelInfo::new(
             "GFP",
             [0.0, 1.0, 0.0],
-            Intensity::new(0.0, 255.0),
-            Intensity::new(0.0, 255.0),
+            Statistics::declared(Intensity::new(0.0, 255.0), VoxelSemantics::Scalar),
             VoxelFormat::U16,
         )],
         FRAMES,
@@ -1043,8 +1042,7 @@ fn coloc_series(
             ChannelInfo::new(
                 format!("Channel {channel}"),
                 [1.0, 1.0, 1.0],
-                *intensity,
-                *intensity,
+                Statistics::declared(*intensity, VoxelSemantics::Scalar),
                 VoxelFormat::U16,
             )
         })
@@ -1218,7 +1216,6 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
         name: "signal",
         tint: [0.2, 0.4, 1.0],
         intensity: Intensity::new(0.0, 50_000.0),
-        window: Intensity::new(0.0, 50_000.0),
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;

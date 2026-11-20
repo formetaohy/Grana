@@ -538,8 +538,8 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                 "window": {
                     "min": f64::from(channel.intensity.min()),
                     "max": f64::from(channel.intensity.max()),
-                    "start": f64::from(channel.window.min()),
-                    "end": f64::from(channel.window.max()),
+                    "start": f64::from(channel.intensity.min()),
+                    "end": f64::from(channel.intensity.max()),
                 },
             })
         })

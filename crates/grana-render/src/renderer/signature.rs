@@ -225,8 +225,8 @@ pub(super) fn channel_style(channels: &[crate::ChannelRow]) -> u64 {
     let mut key = channels.len() as u64;
     for channel in channels {
         let mut row = (channel.visible as u64) ^ ((channel.opacity.to_bits() as u64) << 1);
-        row = row.rotate_left(17) ^ (channel.window.min().to_bits() as u64);
-        row = row.rotate_left(17) ^ (channel.window.max().to_bits() as u64);
+        row = row.rotate_left(17) ^ (channel.intensity.min().to_bits() as u64);
+        row = row.rotate_left(17) ^ (channel.intensity.max().to_bits() as u64);
         row = row.rotate_left(17) ^ ((channel.volume.mode().index() as u64) << 3);
         row = row.rotate_left(17) ^ (channel.volume.isovalue().to_bits() as u64);
         for stop in channel.transfer.stops() {

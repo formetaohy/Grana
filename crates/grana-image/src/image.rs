@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use grana_volume::{
     BrickCoord, BrickData, BrickGrid, Extent, Placement, Pyramid, VolumeSeries, VoxelData,
-    VoxelFormat, pad_brick,
+    VoxelFormat, VoxelSemantics, pad_brick,
 };
 use grana_warp::{Warp, Warps};
 use grana_zarr::{Labels, Plate};
@@ -320,14 +320,14 @@ impl Image {
         let format = self.channel_format(channel)?;
         let extent = self.level_extent(level)?;
         let info = self.pyramid.level(level);
-        let sampling = self.pyramid.channels()[channel].sampling();
+        let semantics = self.pyramid.channels()[channel].semantics();
         let limits = [extent.x(), extent.y(), extent.z()];
         let plan = align::plan(ranges, info, warp, limits);
         if plan.source().iter().any(|range| range.start >= range.end) {
             return Ok(align::zeros(format, ranges));
         }
         let data = self.region_at(time, level, channel, plan.source())?;
-        Ok(align::resample(&data, &plan, ranges, sampling))
+        Ok(align::resample(&data, &plan, ranges, semantics))
     }
 
     fn channel_format(&self, channel: usize) -> Result<VoxelFormat, Error> {
@@ -487,11 +487,11 @@ impl Image {
         let mut planes = Vec::with_capacity(channels);
         for channel in 0..channels {
             let format = self.channel_format(channel)?;
-            let sampling = self
+            let semantics = self
                 .pyramid
                 .channels()
                 .get(channel)
-                .map_or(grana_volume::Sampling::Mean, |info| info.sampling());
+                .map_or(VoxelSemantics::Scalar, |info| info.semantics());
             let sources = held
                 .iter()
                 .map(|plane| plane.channel(channel))
@@ -500,7 +500,7 @@ impl Image {
             let mut row = 0;
             while row < height {
                 let next = (row + plane::STRIP_ROWS).min(height);
-                let strip = plane::reduce(format, sampling, source, width, row..next, &sources);
+                let strip = plane::reduce(format, semantics, source, width, row..next, &sources);
                 output.blit(
                     &strip,
                     Placement::new(width as u32, [0, 0]),
@@ -648,7 +648,7 @@ fn geometry(pyramid: &Pyramid) -> Vec<u8> {
     for channel in pyramid.channels() {
         bytes.extend_from_slice(channel.name().as_bytes());
         bytes.push(channel.format().code());
-        bytes.push(channel.sampling().code());
+        bytes.push(channel.semantics().code());
     }
     bytes
 }

@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    ChannelInfo, Extent, Intensity, Level, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
+    Census, ChannelInfo, Extent, Intensity, Level, Pyramid, Statistics, VoxelData, VoxelFormat,
+    VoxelSemantics, name_of, tint_of,
 };
 
 use crate::Cache;
@@ -20,7 +21,6 @@ use crate::store::Store;
 
 const CACHE_BYTES: u64 = 256 << 20;
 const METADATA_XML_OFFSET: u64 = 256;
-const PROBE_SIDE: u32 = 64;
 const DISPLAY_LIMIT: f32 = 1.5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,7 +139,7 @@ impl Image {
             let display = metadata.display.get(index);
             let embedded = display.and_then(|display| window(display.low, display.high, format));
             let measured = match embedded {
-                Some(measured) => Some(measured),
+                Some(measured) => Statistics::declared(measured, VoxelSemantics::Scalar),
                 None => probe(&document.store, path, base, &cache, format, index as u32)?,
             };
             let source = metadata.channels.get(index);
@@ -152,13 +152,7 @@ impl Image {
                 .and_then(|channel| channel.tint)
                 .or_else(|| display.and_then(|display| display.tint))
                 .unwrap_or_else(|| tint_of(index as u32));
-            channels.push(ChannelInfo::resolve(
-                name,
-                tint,
-                format,
-                &[measured],
-                &[measured],
-            ));
+            channels.push(ChannelInfo::new(name, tint, measured, format));
         }
         let stored = selected.levels.len();
         let pyramid = Pyramid::new(
@@ -408,38 +402,21 @@ fn probe(
     cache: &Cache,
     format: VoxelFormat,
     channel: u32,
-) -> Result<Option<Intensity>, Error> {
+) -> Result<Statistics, Error> {
     let extent = level.extent;
-    let side_x = extent.x().min(PROBE_SIDE);
-    let side_y = extent.y().min(PROBE_SIDE);
-    let left = (extent.x() - side_x) / 2;
-    let top = (extent.y() - side_y) / 2;
-    let x = left..left + side_x;
-    let y = top..top + side_y;
-    let depth = extent.z() / 2;
-    let z = depth..depth + 1;
-    let request = Request {
-        format,
-        time: 0,
-        channel,
-        x: &x,
-        y: &y,
-        z: &z,
-    };
-    let bytes = region(store, path, &level.plans, cache, &request)?;
-    let sample = format.bytes();
-    let mut range = (f32::INFINITY, f32::NEG_INFINITY);
-    for line in 0..side_y as usize {
-        let start = line * side_x as usize * sample;
-        let (low, high) = samples_range(format, &bytes[start..start + side_x as usize * sample]);
-        range = (range.0.min(low), range.1.max(high));
-    }
-    Ok((range.1 > range.0).then(|| Intensity::new(range.0, range.1)))
-}
-
-fn samples_range(format: VoxelFormat, row: &[u8]) -> (f32, f32) {
-    let range = VoxelData::reinterpret(format, row).range();
-    (range.min(), range.max())
+    let mut census = Census::of(extent, 1);
+    let measured = census.measure(|time, ranges| {
+        let request = Request {
+            format,
+            time,
+            channel,
+            x: &ranges[0],
+            y: &ranges[1],
+            z: &ranges[2],
+        };
+        region(store, path, &level.plans, cache, &request).map(|bytes| voxels(format, bytes))
+    })?;
+    Ok(measured)
 }
 
 fn voxels(format: VoxelFormat, bytes: Vec<u8>) -> VoxelData {

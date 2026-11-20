@@ -685,7 +685,6 @@ fn field(path: &Path, extent: Extent) {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
         intensity: grana_volume::Intensity::new(0.0, 255.0),
-        window: grana_volume::Intensity::new(0.0, 255.0),
     }];
     let levels = [grana_volume::Level::new(
         extent,

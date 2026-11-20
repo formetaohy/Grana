@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    Calibration, ChannelInfo, Extent, Intensity, Level, Placement, Probe, Pyramid, Spacing,
-    VoxelData, VoxelFormat, name_of, tint_of,
+    Calibration, Census, ChannelInfo, Extent, Level, Placement, Pyramid, Spacing, Statistics,
+    VoxelData, VoxelFormat, VoxelSemantics, name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
@@ -359,13 +359,15 @@ impl Image {
                 .and_then(|channel| channel.tint)
                 .unwrap_or_else(|| sample_tint(samples, index));
             let sampled = sample_range(&files, &levels, &cache, index, sizes[0])?;
-            channels.push(ChannelInfo::resolve(
-                name,
-                tint,
-                format,
-                &[sampled],
-                &[sampled],
-            ));
+            let sampled = sampled.ok_or_else(|| {
+                Error::metadata(path, "a TIFF channel exposes no voxel to census")
+            })?;
+            let sampled = if page.color.indexed() {
+                Statistics::declared(sampled.intensity(), VoxelSemantics::Label)
+            } else {
+                sampled
+            };
+            channels.push(ChannelInfo::new(name, tint, sampled, format));
         }
         let interval = ome.and_then(|ome| ome.interval).unwrap_or(1.0);
         let name = ome
@@ -1047,13 +1049,13 @@ fn sample_range(
     cache: &Cache,
     channel: u32,
     frames: u32,
-) -> Result<Option<Intensity>, Error> {
+) -> Result<Option<Statistics>, Error> {
     let Some(level) = levels.last() else {
         return Ok(None);
     };
     let index = levels.len() - 1;
-    let mut probe = Probe::of(level.extent, frames);
-    probe.measure(|time, ranges| {
+    let mut census = Census::of(level.extent, frames);
+    let measured = census.measure(|time, ranges| {
         region(
             files,
             cache,
@@ -1067,7 +1069,8 @@ fn sample_range(
                 z: ranges[2].clone(),
             },
         )
-    })
+    })?;
+    Ok(Some(measured))
 }
 
 pub fn dataset_name(path: &Path) -> String {

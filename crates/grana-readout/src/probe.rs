@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use grana_volume::Intensity;
+use grana_volume::{Extent, Statistics, VoxelData};
 use openreadout_core::{Dataset, ImageInfo, PixelType, Plane, PlaneIndex};
 
 use crate::error::Error;
@@ -9,80 +9,121 @@ use crate::plane::{Cache, View};
 
 const STEP: u32 = 4;
 
-pub(crate) fn intensities(
+pub(crate) fn statistics(
     path: &Path,
     dataset: &mut dyn Dataset,
     info: &ImageInfo,
     views: &[View],
     cache: &mut Cache,
-) -> Result<Vec<Option<Intensity>>, Error> {
-    let depth = (info.size_z / 2).max(1) - 1;
+) -> Result<Vec<Statistics>, Error> {
+    let extent = Extent::new(info.size_x.max(1), info.size_y.max(1), info.size_z.max(1));
+    let census = grana_volume::Census::of(extent, 1);
+    let blocks = census.blocks().to_vec();
     let mut ranges = Vec::with_capacity(views.len());
     for view in views {
-        let key = (0, 0, view.channel, depth);
-        let plane = match cache.get(&key) {
-            Some(plane) => plane,
-            None => {
-                let plane = dataset
-                    .read_plane(
-                        info.index,
-                        PlaneIndex {
-                            c: view.channel,
-                            z: depth,
-                            t: 0,
-                        },
-                    )
-                    .map_err(|error| Error::read(path, error.to_string()))?;
-                if plane.data.len() != plane.expected_len() {
-                    return Err(Error::read(path, "a probed plane holds an unexpected size"));
-                }
-                if usize::try_from(plane.samples_per_pixel)
-                    .map_or(true, |samples| view.sample >= samples)
-                {
-                    return Err(Error::read(
-                        path,
-                        "a probed plane lacks the declared samples",
-                    ));
-                }
-                let plane = Arc::new(plane);
-                cache.put(key, Arc::clone(&plane));
-                plane
+        let plane = plane_at(path, dataset, info, view, 0, cache)?;
+        let mut measured = Statistics::census(&samples(&plane, view.sample));
+        for block in &blocks {
+            let block_extent = Extent::new(
+                block[0].end - block[0].start,
+                block[1].end - block[1].start,
+                block[2].end - block[2].start,
+            );
+            if block_extent.z() > 1 {
+                continue;
             }
-        };
-        ranges.push(range(&plane, view.sample));
+            let strided = strided(&plane, view.sample, block);
+            measured = measured.folded(Statistics::census(&strided));
+        }
+        ranges.push(measured);
     }
     Ok(ranges)
 }
 
-fn range(plane: &Plane, sample: usize) -> Option<Intensity> {
-    let samples = plane.samples_per_pixel as usize;
-    let bytes = plane.pixel_type.bytes_per_sample();
-    let row_bytes = plane.row_bytes();
-    let mut low = f32::INFINITY;
-    let mut high = f32::NEG_INFINITY;
-    for line in (0..plane.height).step_by(STEP as usize) {
-        let start = row_bytes * line as usize;
-        for column in (0..plane.width).step_by(STEP as usize) {
-            let value = value(plane, start + (column as usize * samples + sample) * bytes);
-            if value.is_finite() {
-                low = low.min(value);
-                high = high.max(value);
-            }
-        }
+fn plane_at(
+    path: &Path,
+    dataset: &mut dyn Dataset,
+    info: &ImageInfo,
+    view: &View,
+    depth: u32,
+    cache: &mut Cache,
+) -> Result<Arc<Plane>, Error> {
+    let key = (0, 0, view.channel, depth);
+    if let Some(plane) = cache.get(&key) {
+        return Ok(plane);
     }
-    (high > low).then(|| Intensity::new(low, high))
+    let plane = dataset
+        .read_plane(
+            info.index,
+            PlaneIndex {
+                c: view.channel,
+                z: depth,
+                t: 0,
+            },
+        )
+        .map_err(|error| Error::read(path, error.to_string()))?;
+    if plane.data.len() != plane.expected_len() {
+        return Err(Error::read(
+            path,
+            "a censused plane holds an unexpected size",
+        ));
+    }
+    if usize::try_from(plane.samples_per_pixel).map_or(true, |samples| view.sample >= samples) {
+        return Err(Error::read(
+            path,
+            "a censused plane lacks the declared samples",
+        ));
+    }
+    let plane = Arc::new(plane);
+    cache.put(key, Arc::clone(&plane));
+    Ok(plane)
 }
 
-fn value(plane: &Plane, at: usize) -> f32 {
-    match plane.pixel_type {
-        PixelType::Uint8 => f32::from(plane.data[at]),
-        PixelType::Uint16 => f32::from(u16::from_le_bytes([plane.data[at], plane.data[at + 1]])),
-        PixelType::Float => f32::from_le_bytes([
-            plane.data[at],
-            plane.data[at + 1],
-            plane.data[at + 2],
-            plane.data[at + 3],
-        ]),
-        other => other.sample_f64(&plane.data[at..]) as f32,
+fn samples(plane: &Plane, sample: usize) -> VoxelData {
+    let mut values = Vec::with_capacity(plane.width as usize * plane.height as usize);
+    let bytes = plane.pixel_type.bytes_per_sample();
+    let row_bytes = plane.row_bytes();
+    for line in 0..plane.height as usize {
+        let start = row_bytes * line;
+        for column in 0..plane.width as usize {
+            values.push(decode(
+                plane.pixel_type,
+                &plane.data,
+                start + (column * plane.samples_per_pixel as usize + sample) * bytes,
+            ));
+        }
+    }
+    VoxelData::F32(values)
+}
+
+fn strided(plane: &Plane, sample: usize, block: &[std::ops::Range<u32>; 3]) -> VoxelData {
+    let bytes = plane.pixel_type.bytes_per_sample();
+    let row_bytes = plane.row_bytes();
+    let mut values = Vec::new();
+    let stride = STEP as usize;
+    let x = &block[0];
+    let y = &block[1];
+    for line in (y.start as usize..(y.end as usize).min(plane.height as usize)).step_by(stride) {
+        let start = row_bytes * line;
+        let end = (x.end as usize).min(plane.width as usize);
+        for column in (x.start as usize..end).step_by(stride) {
+            values.push(decode(
+                plane.pixel_type,
+                &plane.data,
+                start + (column * plane.samples_per_pixel as usize + sample) * bytes,
+            ));
+        }
+    }
+    VoxelData::F32(values)
+}
+
+fn decode(pixel: PixelType, data: &[u8], at: usize) -> f32 {
+    match pixel {
+        PixelType::Uint8 => f32::from(data[at]),
+        PixelType::Uint16 => f32::from(u16::from_le_bytes([data[at], data[at + 1]])),
+        PixelType::Float => {
+            f32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+        }
+        other => other.sample_f64(&data[at..]) as f32,
     }
 }
