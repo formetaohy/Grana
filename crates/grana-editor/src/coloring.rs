@@ -1,19 +1,33 @@
 use grana_display::{Coloring, Extent, Palette};
+use grana_measure::Scale;
 use grana_scene::{ObjectColor, ObjectSetId};
 use grana_session::Command;
 use grana_ui::{Align, BuildContext, Color, Element, Length, Level, Role, TextStyle};
 
 use crate::message::Message;
 
+pub struct Input<'a> {
+    pub salt: &'a str,
+    pub set: ObjectSetId,
+    pub coloring: &'a Coloring<ObjectColor>,
+    pub measurements: &'a [(ObjectColor, String)],
+    pub extent: Option<Extent>,
+    pub width: f32,
+    pub scale: Scale,
+}
+
 pub fn edit<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    salt: &str,
-    set: ObjectSetId,
-    coloring: &Coloring<ObjectColor>,
-    measurements: &[(ObjectColor, String)],
-    extent: Option<Extent>,
-    width: f32,
+    input: Input<'_>,
 ) -> Vec<Element<'a, Message>> {
+    let Input {
+        salt,
+        set,
+        coloring,
+        measurements,
+        width,
+        ..
+    } = input;
     let theme = *ctx.theme();
     let language = ctx.language();
     let base = coloring.clone();
@@ -111,24 +125,29 @@ pub fn edit<'a>(
         })
         .collect::<Vec<_>>();
     children.push(grana_ui::widget::gradient_bar(&colors, 12.0));
-    children.extend(range(ctx, salt, set, coloring, extent, metric, width));
+    children.extend(range(ctx, input, metric));
     children
 }
 
 fn range<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    salt: &str,
-    set: ObjectSetId,
-    coloring: &Coloring<ObjectColor>,
-    extent: Option<Extent>,
+    input: Input<'_>,
     metric: ObjectColor,
-    width: f32,
 ) -> Vec<Element<'a, Message>> {
+    let Input {
+        salt,
+        set,
+        coloring,
+        extent,
+        width,
+        scale,
+        ..
+    } = input;
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
     let base = coloring.clone();
-    let unit = metric.unit();
+    let unit = metric.unit(scale);
     let decimals = metric.decimals();
     let mut children = Vec::new();
     match (coloring.manual(), extent) {

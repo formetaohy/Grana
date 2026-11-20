@@ -1,15 +1,5 @@
 use std::sync::Arc;
 
-use glam::Vec3;
-use grana_display::{
-    Coloring, Extent, Material, Shading, TransferFunction, VolumeMode, categorical,
-};
-use grana_geometry::ray_hit;
-use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
-use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
-use grana_optics::Psf;
-use grana_volume::{CHANNEL_LIMIT, ChannelInfo, ChannelSet, Clip, Intensity, Region, Spacing};
-
 use crate::alignment::LocalizationAlignment;
 use crate::annotation::Annotations;
 use crate::channel::Channel;
@@ -32,6 +22,19 @@ use crate::registration::Registration;
 use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, SetState, mix};
 use crate::table_request::TableRequest;
+use glam::Vec3;
+use grana_display::{
+    Coloring, Extent, Material, Shading, TransferFunction, VolumeMode, categorical,
+};
+use grana_geometry::ray_hit;
+use grana_measure::{
+    Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Scale, Table,
+};
+use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
+use grana_optics::Psf;
+use grana_volume::{
+    CHANNEL_LIMIT, Calibration, ChannelInfo, ChannelSet, Clip, Intensity, Region, Spacing,
+};
 
 pub type MaskExtent = ([f32; 3], [f32; 3]);
 
@@ -1160,15 +1163,28 @@ impl Scene {
         self.region.enabled().then_some(self.region)
     }
 
+    pub fn scale(&self) -> Scale {
+        match self.dataset.pyramid().calibration().measured() {
+            true => Scale::Physical,
+            false => Scale::Pixel,
+        }
+    }
+
     pub fn set_clip(&mut self, clip: Clip) {
         self.clip = clip;
     }
 
     pub fn recalibrate(&mut self, spacing: Spacing) {
-        if self.dataset.spacing() == spacing {
+        let calibration = self.dataset.pyramid().calibration();
+        self.place_spacing(spacing, calibration);
+    }
+
+    fn place_spacing(&mut self, spacing: Spacing, calibration: Calibration) {
+        if self.dataset.spacing() == spacing && self.dataset.pyramid().calibration() == calibration
+        {
             return;
         }
-        self.dataset = self.dataset.with_spacing(spacing);
+        self.dataset = self.dataset.with_calibration(spacing, calibration);
         let half = 0.5 * self.dataset.world_size();
         self.region = Region::full(-half, half);
         self.clip = Clip::none();
@@ -1547,7 +1563,7 @@ impl Scene {
                 .map(|channel| channel.name().to_string())
                 .collect::<Vec<_>>(),
         );
-        let classifier = Classifier::train(&table, &keys, features, positives)?;
+        let classifier = Classifier::train(&table, &keys, features, positives, self.scale())?;
         self.objects.set_classifier(id, Some(classifier));
         Ok(())
     }

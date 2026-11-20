@@ -1,6 +1,7 @@
 use grana_object::{IntensityTable, SampleStatistics, SurfaceStatistics, TrackSet};
 
 use crate::column::{Column, Unit};
+use crate::scale::Scale;
 use crate::table::Objects;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -192,28 +193,30 @@ impl Measurement {
         }
     }
 
-    pub fn key(self, keys: &[String]) -> String {
+    pub fn key(self, keys: &[String], scale: Scale) -> String {
         match self {
-            Self::Position(axis) => format!("{}_um", ["x", "y", "z"][axis]),
-            Self::Diameter => "diameter_um".to_string(),
+            Self::Position(axis) => scale.length_key(["x", "y", "z"][axis]),
+            Self::Diameter => scale.length_key("diameter"),
             Self::Contrast => "contrast".to_string(),
-            Self::Precision(axis) => format!("precision_{}_um", ["x", "y", "z"][axis]),
-            Self::Volume => "volume_um3".to_string(),
-            Self::Area => "area_um2".to_string(),
+            Self::Precision(axis) => {
+                scale.length_key(&format!("precision_{}", ["x", "y", "z"][axis]))
+            }
+            Self::Volume => scale.volume_key("volume"),
+            Self::Area => scale.area_key("area"),
             Self::Sphericity => "sphericity".to_string(),
-            Self::MaxDiameter => "max_diameter_um".to_string(),
-            Self::HullVolume => "hull_volume_um3".to_string(),
-            Self::Ellipsoid(axis) => format!("ellipsoid_axis_{}_um", axis + 1),
+            Self::MaxDiameter => scale.length_key("max_diameter"),
+            Self::HullVolume => scale.volume_key("hull_volume"),
+            Self::Ellipsoid(axis) => scale.length_key(&format!("ellipsoid_axis_{}", axis + 1)),
             Self::Voxels => "voxels".to_string(),
-            Self::Length => "length_um".to_string(),
+            Self::Length => scale.length_key("length"),
             Self::Branches => "branches".to_string(),
             Self::Terminals => "terminals".to_string(),
             Self::Junctions => "junctions".to_string(),
             Self::Nodes => "nodes".to_string(),
-            Self::NucleusVolume => "nucleus_volume_um3".to_string(),
-            Self::NucleusArea => "nucleus_area_um2".to_string(),
+            Self::NucleusVolume => scale.volume_key("nucleus_volume"),
+            Self::NucleusArea => scale.area_key("nucleus_area"),
             Self::NucleusSphericity => "nucleus_sphericity".to_string(),
-            Self::CytoplasmVolume => "cytoplasm_volume_um3".to_string(),
+            Self::CytoplasmVolume => scale.volume_key("cytoplasm_volume"),
             Self::NuclearRatio => "nuclear_ratio".to_string(),
             Self::Intensity { channel, statistic } => {
                 format!("{}_intensity_{}", keys[channel], statistic.key())
@@ -221,18 +224,18 @@ impl Measurement {
         }
     }
 
-    pub fn unit(self) -> Unit {
+    pub fn unit(self, scale: Scale) -> Unit {
         match self {
             Self::Position(_)
             | Self::Diameter
             | Self::Length
             | Self::MaxDiameter
             | Self::Ellipsoid(_)
-            | Self::Precision(_) => Unit::Micrometer,
+            | Self::Precision(_) => scale.length(),
             Self::Volume | Self::HullVolume | Self::NucleusVolume | Self::CytoplasmVolume => {
-                Unit::CubicMicrometer
+                scale.volume()
             }
-            Self::Area | Self::NucleusArea => Unit::SquareMicrometer,
+            Self::Area | Self::NucleusArea => scale.area(),
             Self::Contrast
             | Self::Sphericity
             | Self::NucleusSphericity
@@ -352,11 +355,11 @@ impl Measurement {
         panic!("the measurement {self:?} is not measured on {kind}")
     }
 
-    pub(crate) fn column(self, channels: &[String], keys: &[String]) -> Column {
+    pub(crate) fn column(self, channels: &[String], keys: &[String], scale: Scale) -> Column {
         Column::new(
             self.label(channels),
-            self.key(keys),
-            self.unit(),
+            self.key(keys, scale),
+            self.unit(scale),
             self.decimals(),
         )
         .possibly_absent()
@@ -367,11 +370,12 @@ impl Measurement {
         channels: &[String],
         keys: &[String],
         aggregate: crate::table::Aggregate,
+        scale: Scale,
     ) -> Column {
         Column::new(
             self.label(channels),
-            format!("{}_{}", self.key(keys), aggregate.key()),
-            self.unit(),
+            format!("{}_{}", self.key(keys, scale), aggregate.key()),
+            self.unit(scale),
             self.decimals(),
         )
         .possibly_absent()
@@ -459,37 +463,37 @@ impl TrackMeasurement {
         }
     }
 
-    pub fn column(self) -> Column {
-        let (key, unit, decimals) = self.parts();
+    pub fn column(self, scale: Scale) -> Column {
+        let (key, unit, decimals) = self.parts(scale);
         Column::new(self.label(), key, unit, decimals)
     }
 
-    pub fn unit(self) -> Unit {
-        self.parts().1
+    pub fn unit(self, scale: Scale) -> Unit {
+        self.parts(scale).1
     }
 
     pub fn decimals(self) -> u8 {
-        self.parts().2
+        self.parts(Scale::default()).2
     }
 
     pub fn colorable(self) -> bool {
         !matches!(self, Self::Track | Self::Parent)
     }
 
-    fn parts(self) -> (&'static str, Unit, u8) {
+    fn parts(self, scale: Scale) -> (String, Unit, u8) {
         match self {
-            Self::Track => ("track", Unit::Count, 0),
-            Self::Parent => ("parent", Unit::Count, 0),
-            Self::Daughters => ("daughters", Unit::Count, 0),
-            Self::First => ("first_frame", Unit::Count, 0),
-            Self::Last => ("last_frame", Unit::Count, 0),
-            Self::Nodes => ("nodes", Unit::Count, 0),
-            Self::Frames => ("frames", Unit::Count, 0),
-            Self::Duration => ("duration_s", Unit::Second, 3),
-            Self::Length => ("length_um", Unit::Micrometer, 3),
-            Self::Displacement => ("displacement_um", Unit::Micrometer, 3),
-            Self::Speed => ("speed_um_s", Unit::MicrometerPerSecond, 4),
-            Self::Straightness => ("straightness", Unit::Count, 4),
+            Self::Track => ("track".to_string(), Unit::Count, 0),
+            Self::Parent => ("parent".to_string(), Unit::Count, 0),
+            Self::Daughters => ("daughters".to_string(), Unit::Count, 0),
+            Self::First => ("first_frame".to_string(), Unit::Count, 0),
+            Self::Last => ("last_frame".to_string(), Unit::Count, 0),
+            Self::Nodes => ("nodes".to_string(), Unit::Count, 0),
+            Self::Frames => ("frames".to_string(), Unit::Count, 0),
+            Self::Duration => ("duration_s".to_string(), Unit::Second, 3),
+            Self::Length => (scale.length_key("length"), scale.length(), 3),
+            Self::Displacement => (scale.length_key("displacement"), scale.length(), 3),
+            Self::Speed => (scale.speed_key("speed"), scale.speed(), 4),
+            Self::Straightness => ("straightness".to_string(), Unit::Count, 4),
         }
     }
 

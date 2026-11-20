@@ -6,6 +6,10 @@ pub enum Unit {
     Count,
     Percent,
     Second,
+    Pixel,
+    SquarePixel,
+    CubicPixel,
+    PixelPerSecond,
     Micrometer,
     SquareMicrometer,
     CubicMicrometer,
@@ -18,11 +22,39 @@ impl Unit {
             Self::Count => "",
             Self::Percent => "%",
             Self::Second => "s",
+            Self::Pixel => "px",
+            Self::SquarePixel => "px²",
+            Self::CubicPixel => "px³",
+            Self::PixelPerSecond => "px/s",
             Self::Micrometer => "µm",
             Self::SquareMicrometer => "µm²",
             Self::CubicMicrometer => "µm³",
             Self::MicrometerPerSecond => "µm/s",
         }
+    }
+
+    pub fn physical(self) -> bool {
+        matches!(
+            self,
+            Self::Micrometer
+                | Self::SquareMicrometer
+                | Self::CubicMicrometer
+                | Self::MicrometerPerSecond
+        )
+    }
+
+    pub fn spatial(self) -> bool {
+        matches!(
+            self,
+            Self::Pixel
+                | Self::SquarePixel
+                | Self::CubicPixel
+                | Self::PixelPerSecond
+                | Self::Micrometer
+                | Self::SquareMicrometer
+                | Self::CubicMicrometer
+                | Self::MicrometerPerSecond
+        )
     }
 }
 

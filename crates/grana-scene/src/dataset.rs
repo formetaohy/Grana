@@ -133,18 +133,10 @@ impl Dataset {
         }
     }
 
-    pub fn with_spacing(&self, spacing: Spacing) -> Dataset {
-        Dataset {
-            name: self.name.clone(),
-            pyramid: self.pyramid.rescaled(spacing),
-            origin: self.origin,
-        }
-    }
-
     pub fn with_calibration(&self, spacing: Spacing, calibration: Calibration) -> Dataset {
         Dataset {
             name: self.name.clone(),
-            pyramid: self.pyramid.rescaled(spacing).with_calibration(calibration),
+            pyramid: self.pyramid.rescaled(spacing, calibration),
             origin: self.origin,
         }
     }

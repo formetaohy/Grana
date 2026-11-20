@@ -401,7 +401,7 @@ impl Protocol {
                     .objects
                     .get(id)
                     .expect("the staged object set exists");
-                let classifier = classifier.classifier(set, &keys)?;
+                let classifier = classifier.classifier(set, &keys, builder.scene.scale())?;
                 builder.scene.install_classifier(id, classifier);
             }
             if let Some(curation) = &spec.curation {
@@ -440,7 +440,7 @@ impl Protocol {
             let source = builder.ids[&spec.source];
             let target = builder.ids[&spec.target];
             let field = spec
-                .field()
+                .field(builder.scene.scale())
                 .expect("a checked mask filter names a continuous relation field");
             (
                 source,
@@ -972,7 +972,7 @@ fn object_coloring(
             .key
             .as_deref()
             .expect("a checked color names a child measurement");
-        let field = ChildField::parse(key, spec.aggregate.as_deref(), keys)
+        let field = ChildField::parse(key, spec.aggregate.as_deref(), keys, scene.scale())
             .filter(|field| child.child_fields().contains(field))
             .ok_or_else(|| {
                 ProtocolError::Invalid(format!(
@@ -1008,7 +1008,7 @@ fn object_coloring(
                 let measurement = set
                     .colorable_measurements()
                     .into_iter()
-                    .find(|measurement| measurement.key(keys) == *key)
+                    .find(|measurement| measurement.key(keys, scene.scale()) == *key)
                     .ok_or_else(|| {
                         ProtocolError::Invalid(format!(
                             "the set {} has no colorable measurement {key}",
@@ -1031,7 +1031,7 @@ fn object_coloring(
                 ObjectColor::Relation {
                     target,
                     field: spec
-                        .field()
+                        .field(scene.scale())
                         .expect("a checked color names a relation field"),
                     shift: spec.shift,
                 }
@@ -1055,7 +1055,7 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
             let measurement = TrackMeasurement::ALL
                 .into_iter()
                 .filter(|measurement| measurement.colorable())
-                .find(|measurement| measurement.column().key() == key.as_str())
+                .find(|measurement| measurement.column(scene.scale()).key() == key.as_str())
                 .ok_or_else(|| {
                     ProtocolError::Invalid(format!(
                         "the tracks have no colorable measurement {key}"
@@ -1077,7 +1077,7 @@ fn track_coloring(spec: &ColorSpec, scene: &Scene) -> Result<Coloring<TrackColor
             TrackColor::Relation {
                 target,
                 field: spec
-                    .field()
+                    .field(scene.scale())
                     .expect("a checked color names a relation field"),
                 aggregate: spec.aggregate().unwrap_or(grana_measure::Aggregate::MEAN),
                 shift: spec.shift,
@@ -1152,7 +1152,7 @@ fn ordered_steps(steps: Vec<Step>, scene: &Scene) -> Result<Vec<Step>, ProtocolE
                     if related != source {
                         continue;
                     }
-                    if relation_keys(key)
+                    if relation_keys(key, scene.scale())
                         .iter()
                         .any(|candidate| keys.contains(candidate))
                     {

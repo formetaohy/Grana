@@ -5,7 +5,7 @@ use grana_display::{
     VolumeStyle,
 };
 use grana_measure::{
-    Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
+    Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scale, Scope,
     Statistic, Table,
 };
 use grana_mesh::Format as MeshFormat;
@@ -254,10 +254,10 @@ pub struct MaskFilterSpec {
 }
 
 impl MaskFilterSpec {
-    pub fn field(&self) -> Option<grana_measure::RelationField> {
+    pub fn field(&self, scale: Scale) -> Option<grana_measure::RelationField> {
         grana_measure::RelationField::CONTINUOUS
             .into_iter()
-            .find(|field| field.key() == self.field)
+            .find(|field| field.key(scale) == self.field)
     }
 
     pub(super) fn checked(&self) -> Result<(), ProtocolError> {
@@ -268,7 +268,7 @@ impl MaskFilterSpec {
                 )));
             }
         }
-        let Some(field) = self.field() else {
+        let Some(field) = Scale::ALL.into_iter().find_map(|scale| self.field(scale)) else {
             return Err(ProtocolError::Invalid(
                 "an analysis mask filter keeps a continuous relation field".to_string(),
             ));
@@ -1905,11 +1905,11 @@ impl ColorSpec {
         palette(&self.palette).expect("a checked color names a palette")
     }
 
-    pub fn field(&self) -> Option<RelationField> {
+    pub fn field(&self, scale: Scale) -> Option<RelationField> {
         let field = self.field.as_deref()?;
         RelationField::ALL
             .into_iter()
-            .find(|candidate| candidate.key() == field)
+            .find(|candidate| candidate.key(scale) == field)
     }
 
     pub fn aggregate(&self) -> Option<Aggregate> {
@@ -1924,9 +1924,14 @@ impl ColorSpec {
             .find(|metric| metric.name() == key)
     }
 
-    pub fn child_field(&self, set: &ObjectSet, keys: &[String]) -> Option<ChildField> {
+    pub fn child_field(
+        &self,
+        set: &ObjectSet,
+        keys: &[String],
+        scale: Scale,
+    ) -> Option<ChildField> {
         let key = self.key.as_deref()?;
-        ChildField::parse(key, self.aggregate.as_deref(), keys)
+        ChildField::parse(key, self.aggregate.as_deref(), keys, scale)
             .filter(|field| set.child_fields().contains(field))
     }
 
@@ -2012,7 +2017,10 @@ impl ColorSpec {
                     if target.trim().is_empty() {
                         return invalid("names an empty relation target".to_string());
                     }
-                    if self.field().is_none() {
+                    if Scale::ALL
+                        .into_iter()
+                        .all(|scale| self.field(scale).is_none())
+                    {
                         return invalid("names an unknown relation field".to_string());
                     }
                     if let Some(aggregate) = &self.aggregate
@@ -2037,13 +2045,13 @@ impl ColorSpec {
 }
 
 impl ClassifierSpec {
-    pub fn of(classifier: &grana_measure::Classifier, keys: &[String]) -> Self {
+    pub fn of(classifier: &grana_measure::Classifier, keys: &[String], scale: Scale) -> Self {
         let state = classifier.state();
         Self {
             features: state
                 .features
                 .iter()
-                .map(|feature| feature.key(keys))
+                .map(|feature| feature.key(keys, scale))
                 .collect(),
             mean: state.mean,
             scale: state.scale,
@@ -2059,6 +2067,7 @@ impl ClassifierSpec {
         &self,
         set: &ObjectSet,
         keys: &[String],
+        scale: Scale,
     ) -> Result<grana_measure::Classifier, ProtocolError> {
         let features = self
             .features
@@ -2066,7 +2075,7 @@ impl ClassifierSpec {
             .map(|key| {
                 set.colorable_measurements()
                     .into_iter()
-                    .find(|measurement| measurement.key(keys) == *key)
+                    .find(|measurement| measurement.key(keys, scale) == *key)
                     .ok_or_else(|| {
                         ProtocolError::Invalid(format!(
                             "the classifier of {} trains on {key}, which the set does not measure",
@@ -2143,7 +2152,7 @@ impl MetricSpec {
                 shift: 0,
             },
             ObjectColor::Measurement(measurement) => Self {
-                key: Some(measurement.key(keys)),
+                key: Some(measurement.key(keys, scene.scale())),
                 target: None,
                 field: None,
                 statistic: None,
@@ -2157,17 +2166,16 @@ impl MetricSpec {
             } => Self {
                 key: None,
                 target: Some(scene.objects.get(target)?.key().as_str().to_string()),
-                field: Some(field.key().to_string()),
+                field: Some(field.key(scene.scale())),
                 statistic: None,
                 child: false,
                 shift,
             },
             ObjectColor::Child { target, field } => Self {
-                key: Some(
-                    field
-                        .metric()
-                        .map_or_else(|| "count".to_string(), |metric| metric.key(keys)),
-                ),
+                key: Some(field.metric().map_or_else(
+                    || "count".to_string(),
+                    |metric| metric.key(keys, scene.scale()),
+                )),
                 target: Some(scene.objects.get(target)?.key().as_str().to_string()),
                 field: None,
                 statistic: field
@@ -2203,7 +2211,7 @@ impl MetricSpec {
                         "the label names the child set {target}, which is not an object set of the scene"
                     ))
                 })?;
-            let field = ChildField::parse(key, self.statistic.as_deref(), keys)
+            let field = ChildField::parse(key, self.statistic.as_deref(), keys, scene.scale())
                 .filter(|field| child.child_fields().contains(field))
                 .ok_or_else(|| {
                     ProtocolError::Invalid(format!(
@@ -2239,7 +2247,7 @@ impl MetricSpec {
                 let measurement = set
                     .colorable_measurements()
                     .into_iter()
-                    .find(|measurement| measurement.key(keys) == *key)
+                    .find(|measurement| measurement.key(keys, scene.scale()) == *key)
                     .ok_or_else(|| {
                         ProtocolError::Invalid(format!(
                             "the set {} labels an object without a colorable measurement {key}",
@@ -2262,7 +2270,7 @@ impl MetricSpec {
                 Ok(ObjectColor::Relation {
                     target,
                     field: self
-                        .field()
+                        .field(scene.scale())
                         .expect("a checked label names a relation field"),
                     shift: self.shift,
                 })
@@ -2271,11 +2279,11 @@ impl MetricSpec {
         }
     }
 
-    pub fn field(&self) -> Option<RelationField> {
+    pub fn field(&self, scale: Scale) -> Option<RelationField> {
         let field = self.field.as_deref()?;
         RelationField::ALL
             .into_iter()
-            .find(|candidate| candidate.key() == field)
+            .find(|candidate| candidate.key(scale) == field)
     }
 
     pub(super) fn checked(&self, what: &str) -> Result<(), ProtocolError> {
@@ -2331,7 +2339,10 @@ impl MetricSpec {
                 if target.trim().is_empty() {
                     return invalid("names an empty relation target".to_string());
                 }
-                if self.field().is_none() {
+                if Scale::ALL
+                    .into_iter()
+                    .all(|scale| self.field(scale).is_none())
+                {
                     return invalid("names an unknown relation field".to_string());
                 }
                 if self.statistic.is_some() {

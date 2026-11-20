@@ -116,10 +116,10 @@ impl Pyramid {
         self
     }
 
-    pub fn rescaled(&self, spacing: Spacing) -> Pyramid {
+    pub fn rescaled(&self, spacing: Spacing, calibration: Calibration) -> Pyramid {
         let base = self.levels[0].spacing();
         if base == spacing {
-            return self.clone();
+            return self.clone().with_calibration(calibration);
         }
         let factor = [
             spacing.x() / base.x(),
@@ -137,7 +137,7 @@ impl Pyramid {
             frames: self.frames,
             frame_interval: self.frame_interval,
             placement: self.placement,
-            calibration: Calibration::Recorded,
+            calibration,
         }
     }
 

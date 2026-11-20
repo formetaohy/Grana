@@ -1131,6 +1131,12 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
         .expect("the fixture opens")
         .dataset
         .spacing();
+    let calibration = session
+        .scene()
+        .expect("the fixture opens")
+        .dataset
+        .pyramid()
+        .calibration();
     session.execute(Command::SetVoxelSize(Spacing::new(0.42, 0.42, 1.2)));
     assert_eq!(
         session
@@ -1140,6 +1146,16 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
             .spacing(),
         Spacing::new(0.42, 0.42, 1.2),
         "the calibration reaches the dataset"
+    );
+    assert_eq!(
+        session
+            .scene()
+            .expect("the fixture opens")
+            .dataset
+            .pyramid()
+            .calibration(),
+        calibration,
+        "editing the voxel size keeps the provenance of the calibration"
     );
     session.execute(Command::Undo);
     assert_eq!(
@@ -1160,6 +1176,16 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
             .spacing(),
         Spacing::new(0.42, 0.42, 1.2),
         "redo reapplies the calibration"
+    );
+    assert_eq!(
+        session
+            .scene()
+            .expect("the fixture opens")
+            .dataset
+            .pyramid()
+            .calibration(),
+        calibration,
+        "redoing the voxel size keeps the provenance of the calibration"
     );
     session.execute(Command::SetChannelOpacity {
         channel: 0,

@@ -1,6 +1,7 @@
 use crate::column::{Column, Unit};
 use crate::measured::Measured;
 use crate::metric::Measurement;
+use crate::scale::Scale;
 use crate::table::{Objects, Table};
 
 pub const SCORE_KEY: &str = "classifier_score";
@@ -40,13 +41,14 @@ impl Classifier {
         keys: &[String],
         features: &[Measurement],
         positives: &[u32],
+        scale: Scale,
     ) -> Result<Self, String> {
         if features.is_empty() {
             return Err("a classifier trains on at least one measurement".to_string());
         }
         let mut columns = Vec::with_capacity(features.len());
         for feature in features {
-            let key = feature.key(keys);
+            let key = feature.key(keys, scale);
             let column = table
                 .column(&key)
                 .ok_or_else(|| format!("the table holds no {key} measurement"))?;
@@ -192,11 +194,11 @@ impl Classifier {
         sigmoid(logit) as f32
     }
 
-    pub fn scores(&self, table: &Table, keys: &[String]) -> Vec<Measured> {
+    pub fn scores(&self, table: &Table, keys: &[String], scale: Scale) -> Vec<Measured> {
         let columns = self
             .features
             .iter()
-            .map(|feature| table.column(&feature.key(keys)))
+            .map(|feature| table.column(&feature.key(keys, scale)))
             .collect::<Option<Vec<_>>>();
         let Some(columns) = columns else {
             return vec![Measured::ABSENT; table.rows()];

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use grana_measure::{
     Aggregate, Child, ChildField, ColocMetric, Frame, FrameSource, Group, Kind, Measured,
-    ObjectColoc, Objects, RelationRow, Table, channel_keys,
+    ObjectColoc, Objects, RelationRow, Scale, Table, channel_keys,
 };
 use grana_object::{RelationFrame, TrackSet};
 
@@ -161,6 +161,7 @@ pub struct TableRequest {
     source: TableSource,
     tracks: Option<TrackSet>,
     frame_interval: f32,
+    scale: Scale,
     classifier: Option<grana_measure::Classifier>,
     coloc: Option<Arc<ObjectColoc>>,
     basis: Option<Arc<Table>>,
@@ -226,6 +227,7 @@ impl TableRequest {
             },
             tracks: set.tracks().map(|layer| layer.set().clone()),
             frame_interval: scene.dataset.frame_interval(),
+            scale: scene.scale(),
             classifier: set.classifier().cloned(),
             coloc: set.shared_object_coloc(),
             basis: None,
@@ -253,6 +255,7 @@ impl TableRequest {
             source,
             tracks,
             frame_interval,
+            scale,
             classifier,
             coloc,
             basis,
@@ -270,10 +273,13 @@ impl TableRequest {
             group,
             aggregate,
             basis,
+            scale,
         )?;
         if let Some(classifier) = &classifier {
             let column = match group {
-                Group::Object => Some((classifier.column(), classifier.scores(&table, &keys))),
+                Group::Object => {
+                    Some((classifier.column(), classifier.scores(&table, &keys, scale)))
+                }
                 Group::Track | Group::Timepoint | Group::Molecule => Some((
                     classifier.aggregate_column(aggregate),
                     aggregate_scores(
@@ -283,6 +289,7 @@ impl TableRequest {
                         group,
                         &table,
                         classifier,
+                        scale,
                     ),
                 )),
             };
@@ -341,6 +348,7 @@ fn aggregate_scores(
     group: Group,
     table: &Table,
     classifier: &grana_measure::Classifier,
+    _scale: Scale,
 ) -> Vec<Measured> {
     match group {
         Group::Object => Vec::new(),

@@ -211,27 +211,29 @@ fn columns(
 }
 
 fn default_columns(table: &Table, channel: usize, keys: &[String]) -> Vec<Column> {
+    let scale = table.scale();
     let intensity = Measurement::Intensity {
         channel,
         statistic: Statistic::Mean,
     }
-    .key(keys);
-    let size = if table.column("diameter_um").is_some() {
-        "diameter_um"
+    .key(keys, scale);
+    let diameter = scale.length_key("diameter");
+    let size = if table.column(&diameter).is_some() {
+        diameter
     } else {
-        "length_um"
+        scale.length_key("length")
     };
     [
-        Some("volume_um3"),
-        Some("area_um2"),
+        Some(scale.volume_key("volume")),
+        Some(scale.area_key("area")),
         Some(size),
-        Some(intensity.as_str()),
+        Some(intensity),
     ]
     .into_iter()
     .flatten()
     .filter_map(|key| {
         table
-            .column(key)
+            .column(&key)
             .map(|index| table.columns()[index].clone())
     })
     .collect()

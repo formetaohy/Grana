@@ -605,7 +605,7 @@ pub(super) fn mask<'a>(
                             ))))
                         },
                     ));
-                    let suffix = field.unit().suffix();
+                    let suffix = field.unit(state.scene.scale()).suffix();
                     let bounds = [
                         (grana_i18n::common::minimum(language), range[0]),
                         (grana_i18n::common::maximum(language), range[1]),

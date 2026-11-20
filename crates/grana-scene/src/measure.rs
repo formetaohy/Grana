@@ -14,6 +14,8 @@ use crate::scene::Scene;
 use crate::state::{HASH_OFFSET, mix};
 use crate::table_request::{BasisKey, MeasureKey, TableRequest};
 
+const AXES: [&str; 3] = ["x", "y", "z"];
+
 #[derive(Debug, PartialEq)]
 pub struct MeasureState {
     pub set: Option<u64>,
@@ -343,10 +345,7 @@ impl Measure {
             return;
         };
         let column = (table.identity_columns()..table.columns().len())
-            .find(|index| {
-                let key = table.columns()[*index].key();
-                !(key.starts_with("x_um") || key.starts_with("y_um") || key.starts_with("z_um"))
-            })
+            .find(|index| !positional(table.columns(), *index))
             .unwrap_or(table.identity_columns());
         let Some((minimum, maximum)) = table.cached_extent(column) else {
             self.deferred_filter = Some(FilterIntent::Add(column));
@@ -1110,8 +1109,8 @@ impl Measure {
             columns.push(deferred.column());
         }
         if self.roi.is_some_and(Region::enabled) {
-            for key in ["x_um", "y_um", "z_um"] {
-                if let Some(column) = table.column(key) {
+            for key in position_keys(table) {
+                if let Some(column) = table.column(&key) {
                     columns.push(column);
                 }
             }
@@ -1155,7 +1154,7 @@ impl Measure {
             }
         }
         if self.roi.is_some_and(Region::enabled) {
-            keys.extend(["x_um", "y_um", "z_um"].map(str::to_string));
+            keys.extend(position_keys(table));
         }
         keys
     }
@@ -1370,49 +1369,45 @@ fn readable_axes(table: &Table, axes: [usize; 2]) -> [usize; 2] {
 fn preferred_axes(table: &Table) -> [usize; 2] {
     let columns = table.columns();
     let identity = table.identity_columns();
-    let key_family = |key: &str| columns.iter().any(|column| column.key() == key);
-    let family: &[&str] = if key_family("contrast") {
-        &["diameter_um", "contrast"]
-    } else if key_family("junctions") {
-        &["length_um", "diameter_um"]
+    let present = |key: &str| columns.iter().any(|column| column.key() == key);
+    let scale = table.scale();
+    let length = |name: &str| scale.length_key(name);
+    let volume = |name: &str| scale.volume_key(name);
+    let family: Vec<String> = if present("contrast") {
+        vec![length("diameter"), "contrast".to_string()]
+    } else if present("junctions") {
+        vec![length("length"), length("diameter")]
     } else {
-        &["volume_um3", "hull_volume_um3", "area_um2", "sphericity"]
+        vec![
+            volume("volume"),
+            volume("hull_volume"),
+            "sphericity".to_string(),
+        ]
     };
-    let fallback = [
-        "diameter_um",
-        "contrast",
-        "volume_um3",
-        "area_um2",
-        "sphericity",
-        "hull_volume_um3",
-        "max_diameter_um",
-        "length_um",
-        "speed_um_s",
-        "displacement_um",
-        "straightness",
-        "branches",
-        "terminals",
-        "junctions",
-        "nodes",
-    ];
+    let fallback: Vec<String> = [
+        length("diameter"),
+        "contrast".to_string(),
+        volume("volume"),
+        scale.area_key("area"),
+        "sphericity".to_string(),
+        volume("hull_volume"),
+        length("max_diameter"),
+        length("length"),
+        scale.speed_key("speed"),
+        length("displacement"),
+        "straightness".to_string(),
+        "branches".to_string(),
+        "terminals".to_string(),
+        "junctions".to_string(),
+        "nodes".to_string(),
+    ]
+    .to_vec();
     let mut chosen = Vec::with_capacity(2);
-    for key in family {
+    for key in family.iter().chain(&fallback) {
+        if chosen.len() == 2 {
+            break;
+        }
         let Some(index) = columns.iter().position(|column| column.key() == *key) else {
-            continue;
-        };
-        if chosen.contains(&index) {
-            continue;
-        }
-        chosen.push(index);
-        if chosen.len() == 2 {
-            break;
-        }
-    }
-    for key in fallback {
-        if chosen.len() == 2 {
-            break;
-        }
-        let Some(index) = columns.iter().position(|column| column.key() == key) else {
             continue;
         };
         if chosen.contains(&index) {
@@ -1438,8 +1433,20 @@ fn preferred_axes(table: &Table) -> [usize; 2] {
 }
 
 fn positional(columns: &[grana_measure::Column], index: usize) -> bool {
-    let key = columns[index].key();
-    key.starts_with("x_um") || key.starts_with("y_um") || key.starts_with("z_um")
+    position_key(&columns[index])
+}
+
+fn position_key(column: &grana_measure::Column) -> bool {
+    AXES.contains(&column.label())
+}
+
+fn position_keys(table: &Table) -> Vec<String> {
+    table
+        .columns()
+        .iter()
+        .filter(|column| position_key(column))
+        .map(|column| column.key().to_string())
+        .collect()
 }
 
 fn default_visibility(table: &Table) -> Vec<bool> {
@@ -1449,34 +1456,34 @@ fn default_visibility(table: &Table) -> Vec<bool> {
         .iter()
         .enumerate()
         .map(|(index, column)| {
-            let key = column.key();
             if index < identity {
-                !matches!(key, "first_frame" | "last_frame" | "nodes" | "straightness")
-            } else {
-                key.starts_with("diameter_um")
-                    || key.starts_with("length_um")
-                    || key.starts_with("contrast")
-                    || key.starts_with("branches")
-                    || key.starts_with("terminals")
-                    || key.starts_with("volume_um3")
-                    || key.starts_with("area_um2")
-                    || key.starts_with("sphericity")
-                    || key.starts_with("max_diameter_um")
-                    || key.starts_with("hull_volume_um3")
-                    || key.contains("_intensity_mean")
-                    || key.starts_with("pearson_")
-                    || key.starts_with("overlap_")
-                    || key.ends_with("_distance_um")
-                    || key.starts_with(grana_measure::NEIGHBOUR_KEY)
-                    || key.ends_with("_inside")
-                    || key.ends_with("_count")
-                    || key.starts_with(grana_measure::SCORE_KEY)
+                return !matches!(
+                    column.key(),
+                    "first_frame" | "last_frame" | "nodes" | "straightness"
+                );
             }
+            highlighted(column)
         })
         .collect()
 }
 
-pub(crate) fn default_retained(table: &Table) -> Vec<usize> {
+fn highlighted(column: &grana_measure::Column) -> bool {
+    if column.unit().spatial() || column.key().contains("_intensity_mean") {
+        return true;
+    }
+    let key = column.key();
+    key.starts_with("contrast")
+        || key.starts_with("branches")
+        || key.starts_with("terminals")
+        || key.starts_with("sphericity")
+        || key.starts_with("pearson_")
+        || key.starts_with("overlap_")
+        || key.starts_with(grana_measure::SCORE_KEY)
+        || key.ends_with("_inside")
+        || key.ends_with("_count")
+}
+
+pub fn default_retained(table: &Table) -> Vec<usize> {
     default_visibility(table)
         .iter()
         .enumerate()

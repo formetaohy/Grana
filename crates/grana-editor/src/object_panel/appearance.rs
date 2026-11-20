@@ -194,7 +194,16 @@ pub(super) fn appearance<'a>(
         let extent = state.scene.object_extent(set);
         let coloring = set.object_coloring().clone();
         children.extend(crate::coloring::edit(
-            ctx, &salt, id, &coloring, &metrics, extent, width,
+            ctx,
+            crate::coloring::Input {
+                salt: &salt,
+                set: id,
+                coloring: &coloring,
+                measurements: &metrics,
+                extent,
+                width,
+                scale: state.scene.scale(),
+            },
         ));
     }
     vec![crate::inspector::disclosure(

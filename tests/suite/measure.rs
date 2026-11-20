@@ -1,11 +1,51 @@
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Group, Kind, Table};
+use grana_measure::{Aggregate, Group, Kind, Scale, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 
 use crate::support::measure_source;
 
 const CHANNEL: &str = "EGFP 488";
+
+#[test]
+fn measures_uncalibrated_data_in_pixels() {
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [spots()]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+        Scale::Pixel,
+    )
+    .expect("the uncalibrated object table builds");
+    let keys = table
+        .columns()
+        .iter()
+        .map(|column| column.key())
+        .collect::<Vec<_>>();
+    assert!(keys.contains(&"x_px"), "position keys follow the scale");
+    assert!(
+        keys.contains(&"diameter_px"),
+        "a length key follows the scale"
+    );
+    assert!(
+        !keys
+            .iter()
+            .any(|key| key.ends_with("_um") || key.ends_with("_um3")),
+        "an uncalibrated table never claims a micrometre"
+    );
+    assert!(
+        table
+            .columns()
+            .iter()
+            .filter(|column| column.unit().spatial())
+            .all(|column| !column.unit().physical()),
+        "an uncalibrated table reports no physical unit"
+    );
+}
+
 #[test]
 fn summarises_spots_and_exports_a_csv() {
     let first = spots();
@@ -19,6 +59,7 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Object,
         Aggregate::MEAN,
         None,
+        Scale::Physical,
     )
     .expect("the object table builds");
     assert_eq!(table.rows(), 4);
@@ -41,6 +82,7 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Track,
         Aggregate::MEAN,
         None,
+        Scale::Physical,
     )
     .expect("the track table builds");
     assert_eq!(per_track.rows(), 2);
@@ -48,6 +90,13 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(value(&per_track, 0, "duration_s"), 1.0);
     assert_eq!(value(&per_track, 0, "straightness"), 1.0);
     assert_eq!(value(&per_track, 0, "egfp_488_intensity_mean_mean"), 10.0);
+    let neighbour = per_track
+        .column("nearest_distance_um_mean")
+        .expect("an aggregated table keeps the aggregated neighbour distance");
+    assert!(
+        grana_scene::default_retained(&per_track).contains(&neighbour),
+        "an aggregated neighbour distance stays visible by default"
+    );
 
     let per_frame = Table::build(
         Arc::clone(&frames),
@@ -56,6 +105,7 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Timepoint,
         Aggregate::SUM,
         None,
+        Scale::Physical,
     )
     .expect("the timepoint table builds");
     assert_eq!(per_frame.rows(), 2);
@@ -87,6 +137,7 @@ fn summarises_spots_and_exports_a_csv() {
             Group::Object,
             Aggregate::MEAN,
             None,
+            Scale::Physical,
         )
         .expect("the object table builds"),
     );
@@ -97,6 +148,7 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Timepoint,
         Aggregate::SUM,
         Some(Arc::clone(&basis)),
+        Scale::Physical,
     )
     .expect("the timepoint table reuses its basis");
     assert_eq!(reused.rows(), per_frame.rows());
@@ -125,6 +177,7 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Molecule,
         Aggregate::MEAN,
         None,
+        Scale::Physical,
     )
     .expect("the molecule table builds");
     assert_eq!(
@@ -158,6 +211,7 @@ fn materialises_measurement_columns_on_demand() {
         Group::Object,
         Aggregate::MEAN,
         None,
+        Scale::Physical,
     )
     .expect("the object table builds");
     assert!(

@@ -1,4 +1,5 @@
 use crate::sample::Sample;
+use crate::scale::Scale;
 
 const MINIMUM_CELL: f32 = 1.0e-5;
 
@@ -271,13 +272,14 @@ impl Ripley {
         self.test.map_or(0, RipleyTest::simulations)
     }
 
-    pub fn table(&self) -> String {
+    pub fn table(&self, scale: Scale) -> String {
         let simulations = self.simulations();
+        let radius = scale.length_key("radius");
         let p = self
             .test
             .map_or_else(String::new, |test| crate::csv::scientific(test.p()));
         let mut text = crate::csv::line(&[
-            "radius_um",
+            &radius,
             "l_minus_r",
             "frames",
             "ci_low",

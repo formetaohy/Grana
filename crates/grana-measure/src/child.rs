@@ -2,6 +2,7 @@ use grana_object::SampleAccumulator;
 
 use crate::column::{Column, Unit};
 use crate::metric::{Measurement, Statistic};
+use crate::scale::Scale;
 use crate::table::Objects;
 
 pub const UNASSIGNED: u32 = u32::MAX;
@@ -52,21 +53,23 @@ impl ChildMetric {
         }
     }
 
-    pub fn parse(key: &str, keys: &[String]) -> Option<Self> {
-        let fixed = match key {
-            "diameter_um" => Some(Self::Diameter),
-            "contrast" => Some(Self::Contrast),
-            "volume_um3" => Some(Self::Volume),
-            "area_um2" => Some(Self::Area),
-            "sphericity" => Some(Self::Sphericity),
-            "voxels" => Some(Self::Voxels),
-            "length_um" => Some(Self::Length),
-            "branches" => Some(Self::Branches),
-            "terminals" => Some(Self::Terminals),
-            "junctions" => Some(Self::Junctions),
-            "nodes" => Some(Self::Nodes),
-            _ => None,
-        };
+    pub fn parse(key: &str, keys: &[String], scale: Scale) -> Option<Self> {
+        let fixed = [
+            (Self::Diameter, scale.length_key("diameter")),
+            (Self::Contrast, "contrast".to_string()),
+            (Self::Volume, scale.volume_key("volume")),
+            (Self::Area, scale.area_key("area")),
+            (Self::Sphericity, "sphericity".to_string()),
+            (Self::Voxels, "voxels".to_string()),
+            (Self::Length, scale.length_key("length")),
+            (Self::Branches, "branches".to_string()),
+            (Self::Terminals, "terminals".to_string()),
+            (Self::Junctions, "junctions".to_string()),
+            (Self::Nodes, "nodes".to_string()),
+        ]
+        .into_iter()
+        .find(|(_, candidate)| candidate == key)
+        .map(|(metric, _)| metric);
         fixed.or_else(|| {
             keys.iter()
                 .position(|channel| format!("{channel}_intensity") == key)
@@ -91,15 +94,15 @@ impl ChildMetric {
         }
     }
 
-    pub fn key(self, keys: &[String]) -> String {
+    pub fn key(self, keys: &[String], scale: Scale) -> String {
         match self {
-            Self::Diameter => "diameter_um".to_string(),
+            Self::Diameter => scale.length_key("diameter"),
             Self::Contrast => "contrast".to_string(),
-            Self::Volume => "volume_um3".to_string(),
-            Self::Area => "area_um2".to_string(),
+            Self::Volume => scale.volume_key("volume"),
+            Self::Area => scale.area_key("area"),
             Self::Sphericity => "sphericity".to_string(),
             Self::Voxels => "voxels".to_string(),
-            Self::Length => "length_um".to_string(),
+            Self::Length => scale.length_key("length"),
             Self::Branches => "branches".to_string(),
             Self::Terminals => "terminals".to_string(),
             Self::Junctions => "junctions".to_string(),
@@ -108,11 +111,11 @@ impl ChildMetric {
         }
     }
 
-    pub fn unit(self) -> Unit {
+    pub fn unit(self, scale: Scale) -> Unit {
         match self {
-            Self::Diameter | Self::Length => Unit::Micrometer,
-            Self::Volume => Unit::CubicMicrometer,
-            Self::Area => Unit::SquareMicrometer,
+            Self::Diameter | Self::Length => scale.length(),
+            Self::Volume => scale.volume(),
+            Self::Area => scale.area(),
             Self::Contrast
             | Self::Sphericity
             | Self::Voxels
@@ -236,7 +239,12 @@ impl ChildField {
         fields
     }
 
-    pub fn parse(metric: &str, statistic: Option<&str>, keys: &[String]) -> Option<Self> {
+    pub fn parse(
+        metric: &str,
+        statistic: Option<&str>,
+        keys: &[String],
+        scale: Scale,
+    ) -> Option<Self> {
         if metric == "count" {
             return statistic.is_none().then_some(Self::Count);
         }
@@ -245,7 +253,7 @@ impl ChildField {
             .into_iter()
             .find(|candidate| candidate.key() == statistic)?;
         Some(Self::Stat {
-            metric: ChildMetric::parse(metric, keys)?,
+            metric: ChildMetric::parse(metric, keys, scale)?,
             statistic,
         })
     }
@@ -273,19 +281,19 @@ impl ChildField {
         }
     }
 
-    pub fn key(self, keys: &[String]) -> String {
+    pub fn key(self, keys: &[String], scale: Scale) -> String {
         match self {
             Self::Count => "count".to_string(),
             Self::Stat { metric, statistic } => {
-                format!("{}_{}", metric.key(keys), statistic.key())
+                format!("{}_{}", metric.key(keys, scale), statistic.key())
             }
         }
     }
 
-    pub fn unit(self) -> Unit {
+    pub fn unit(self, scale: Scale) -> Unit {
         match self {
             Self::Count => Unit::Count,
-            Self::Stat { metric, .. } => metric.unit(),
+            Self::Stat { metric, .. } => metric.unit(scale),
         }
     }
 
@@ -302,11 +310,12 @@ impl ChildField {
         child_name: &str,
         channels: &[String],
         keys: &[String],
+        scale: Scale,
     ) -> Column {
         Column::new(
             format!("{child_name} {}", self.label(channels)),
-            format!("{child_key}_{}", self.key(keys)),
-            self.unit(),
+            format!("{child_key}_{}", self.key(keys, scale)),
+            self.unit(scale),
             self.decimals(),
         )
     }

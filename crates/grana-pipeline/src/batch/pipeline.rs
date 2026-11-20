@@ -263,6 +263,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
                 scene.dataset.frame_interval(),
                 set.key().as_str(),
                 target.key().as_str(),
+                scene.scale(),
             );
             for (time, frame) in relation.frames() {
                 export.push(time, frame);

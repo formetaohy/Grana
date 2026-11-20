@@ -1308,7 +1308,7 @@ fn appearance<'a>(
         ),
     ]));
     if let Some(metric) = coloring.metric() {
-        let (unit, decimals) = (metric.unit(), metric.decimals());
+        let (unit, decimals) = (metric.unit(state.scene.scale()), metric.decimals());
         let palettes = Palette::ALL
             .iter()
             .map(|palette| palette.name().to_string())

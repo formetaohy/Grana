@@ -17,6 +17,7 @@ mod pair;
 mod plot;
 mod relation;
 mod sample;
+mod scale;
 mod scope;
 mod significance;
 mod spatial;
@@ -48,12 +49,13 @@ pub use plot::{
 };
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;
+pub use scale::Scale;
 pub use scope::Scope;
 pub use significance::{
     Level, MannWhitney, WelchTest, benjamini_hochberg, hedges_g, hedges_g_pooled, stars,
 };
 pub use spatial::{Ripley, RipleyPoint, RipleyTest, Window, neighbour_distances};
 pub use table::{
-    Aggregate, ColumnValues, Group, NEIGHBOUR_KEY, NEIGHBOUR_LABEL, Objects, Observation, Table,
-    channel_keys,
+    Aggregate, ColumnValues, Group, NEIGHBOUR_LABEL, Objects, Observation, Table, channel_keys,
+    neighbour_key,
 };

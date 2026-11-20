@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Group, Kind, Table};
+use grana_measure::{Aggregate, Group, Kind, Scale, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_report::share::{Report, Section};
 
@@ -39,6 +39,7 @@ fn writes_a_self_contained_report() {
         Group::Object,
         Aggregate::MEAN,
         None,
+        Scale::Physical,
     )
     .expect("the object table builds");
     let facts = vec![

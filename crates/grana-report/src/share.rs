@@ -8,22 +8,7 @@ const CHART_NAMESPACE: &str = "grana-report-";
 const STATISTICS: usize = 5;
 const TREND_FRAMES: usize = 3;
 
-const PRIMARY: [&str; 12] = [
-    "volume_um3",
-    "length_um",
-    "diameter_um",
-    "area_um2",
-    "max_diameter_um",
-    "hull_volume_um3",
-    "nucleus_volume_um3",
-    "cytoplasm_volume_um3",
-    "sphericity",
-    "nucleus_sphericity",
-    "contrast",
-    "nuclear_ratio",
-];
-
-const POSITION: [&str; 3] = ["x_um", "y_um", "z_um"];
+const AXES: [&str; 3] = ["x", "y", "z"];
 
 pub struct Report<'a> {
     pub title: &'a str,
@@ -224,12 +209,13 @@ fn plot(panel: Panel<'_>) -> Result<String, String> {
 fn statistics(page: &mut String, table: &Table, name: &str) {
     let aggregates = aggregates();
     table.materialize_many(&(0..table.columns().len()).collect::<Vec<_>>());
+    let scale = table.scale();
     let columns = table
         .columns()
         .iter()
         .enumerate()
         .skip(table.identity_columns())
-        .filter(|(_, column)| !POSITION.contains(&column.key()))
+        .filter(|(_, column)| !position_key(column, scale))
         .filter_map(|(index, column)| {
             let values = table.materialize(index);
             let present = values
@@ -300,8 +286,23 @@ fn aggregates() -> [(&'static str, Aggregate); STATISTICS] {
 
 fn primary(table: &Table) -> Option<usize> {
     let columns = table.columns();
-    for key in PRIMARY {
-        if let Some(index) = table.column(key)
+    let scale = table.scale();
+    let preferred = [
+        scale.volume_key("volume"),
+        scale.length_key("length"),
+        scale.length_key("diameter"),
+        scale.area_key("area"),
+        scale.length_key("max_diameter"),
+        scale.volume_key("hull_volume"),
+        scale.volume_key("nucleus_volume"),
+        scale.volume_key("cytoplasm_volume"),
+        "sphericity".to_string(),
+        "nucleus_sphericity".to_string(),
+        "contrast".to_string(),
+        "nuclear_ratio".to_string(),
+    ];
+    for key in preferred {
+        if let Some(index) = table.column(&key)
             && spread(table, index)
         {
             return Some(index);
@@ -311,8 +312,17 @@ fn primary(table: &Table) -> Option<usize> {
         .find(|index| columns[*index].key().ends_with("_mean") && spread(table, *index));
     intensity.or_else(|| {
         (table.identity_columns()..columns.len())
-            .find(|index| !POSITION.contains(&columns[*index].key()) && spread(table, *index))
+            .find(|index| !positional(columns, *index) && spread(table, *index))
     })
+}
+
+fn positional(columns: &[Column], index: usize) -> bool {
+    AXES.contains(&columns[index].key())
+}
+
+fn position_key(column: &Column, scale: grana_measure::Scale) -> bool {
+    AXES.iter()
+        .any(|axis| column.key() == scale.length_key(axis))
 }
 
 fn spread(table: &Table, column: usize) -> bool {
@@ -322,8 +332,12 @@ fn spread(table: &Table, column: usize) -> bool {
 fn window(table: &Table) -> Window {
     let mut low = [f32::INFINITY; 3];
     let mut high = [f32::NEG_INFINITY; 3];
-    for (axis, key) in POSITION.iter().enumerate() {
-        let Some(column) = table.column(key).and_then(|column| table.extent(column)) else {
+    let scale = table.scale();
+    for (axis, name) in AXES.iter().enumerate() {
+        let Some(column) = table
+            .column(&scale.length_key(name))
+            .and_then(|column| table.extent(column))
+        else {
             continue;
         };
         low[axis] = column.0;

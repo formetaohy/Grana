@@ -324,7 +324,10 @@ impl Session {
         let Some(grana_measure::Plot::Ripley(ripley)) = self.measure.plot() else {
             return;
         };
-        let text = ripley.table();
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let text = ripley.table(scene.scale());
         self.message = match grana_file::write(&path, text.as_bytes()) {
             Ok(()) => None,
             Err(error) => Some(Message::error(format!(
@@ -450,6 +453,7 @@ impl Session {
             scene.dataset.frame_interval(),
             set.key().as_str(),
             related.key().as_str(),
+            scene.scale(),
         );
         for (time, frame) in relation.frames() {
             export.push(time, frame);
