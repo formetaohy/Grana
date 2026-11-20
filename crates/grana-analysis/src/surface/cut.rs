@@ -455,7 +455,7 @@ pub(super) fn mesh_piece(
         area,
         centroid,
         bounds,
-        SurfaceShape::of(&positions, &mesh),
+        capped_shape(&positions, &mesh, &cut),
     );
     if let Some(spec) = filter
         && statistics.sphericity() < f64::from(spec.min_sphericity())
@@ -501,6 +501,26 @@ pub(super) fn mesh_piece(
         vertices,
         indices,
     })
+}
+
+fn capped_shape(positions: &[[f32; 3]], mesh: &[[u32; 3]], cut: &cap::Cap) -> Option<SurfaceShape> {
+    if cut.triangles.is_empty() {
+        return SurfaceShape::of(positions, mesh);
+    }
+    let base = positions.len() as u32;
+    let mut points = Vec::with_capacity(positions.len() + cut.positions.len());
+    points.extend_from_slice(positions);
+    points.extend_from_slice(&cut.positions);
+    let mut triangles = Vec::with_capacity(mesh.len() + cut.triangles.len() / 3);
+    triangles.extend_from_slice(mesh);
+    triangles.extend(
+        cut.triangles
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|triangle| triangle.map(|index| index + base)),
+    );
+    SurfaceShape::of(&points, &triangles)
 }
 
 pub(super) fn assemble(
@@ -646,4 +666,64 @@ fn component(parent: &mut [u32], left: u32, right: u32) {
         (right, left)
     };
     parent[high as usize] = low;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIDE: f32 = 2.0;
+
+    const CORNERS: [[f32; 3]; 8] = [
+        [-1.0, -1.0, -1.0],
+        [1.0, -1.0, -1.0],
+        [1.0, 1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+        [-1.0, -1.0, 1.0],
+        [1.0, -1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [-1.0, 1.0, 1.0],
+    ];
+
+    const FACES: [[u32; 3]; 8] = [
+        [0, 2, 1],
+        [0, 3, 2],
+        [0, 1, 5],
+        [0, 5, 4],
+        [3, 7, 6],
+        [3, 6, 2],
+        [0, 4, 7],
+        [0, 7, 3],
+    ];
+
+    fn closed_axis() -> f64 {
+        (5.0f64 / 12.0).sqrt() * f64::from(SIDE)
+    }
+
+    #[test]
+    fn caps_an_open_patch_before_measuring_its_shape() {
+        let positions = CORNERS.to_vec();
+        let mesh = FACES.to_vec();
+        let all = (0..mesh.len()).collect::<Vec<_>>();
+        let cut = cap::build(&positions, &mesh, &all);
+        assert!(
+            !cut.triangles.is_empty(),
+            "a box open at its top is capped by a lid"
+        );
+        let capped = capped_shape(&positions, &mesh, &cut).expect("the box carries a shape");
+        let expected = closed_axis();
+        for axis in capped.axes() {
+            assert!(
+                (axis - expected).abs() / expected < 0.05,
+                "a capped box semi axis {axis} is off from {expected}"
+            );
+        }
+        let open = SurfaceShape::of(&positions, &mesh).expect("the open box carries a shape");
+        assert!(
+            open.axes()
+                .iter()
+                .any(|axis| (axis - expected).abs() / expected > 0.05),
+            "an open box reads a different shape than its capped counterpart"
+        );
+    }
 }

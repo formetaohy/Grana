@@ -155,7 +155,8 @@ impl super::Session {
                 index,
                 name: info.name().to_string(),
                 tint: info.tint(),
-                range: info.window(),
+                intensity: info.intensity(),
+                window: info.window(),
             })
             .collect::<Vec<_>>();
         let labels = match scene

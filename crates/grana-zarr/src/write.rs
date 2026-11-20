@@ -381,7 +381,6 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
         .channels
         .iter()
         .map(|channel| {
-            let range = channel.range;
             json!({
                 "label": channel.name,
                 "color": format!(
@@ -391,10 +390,10 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
                     tint(channel.tint[2]),
                 ),
                 "window": {
-                    "min": f64::from(range.min()),
-                    "max": f64::from(range.max()),
-                    "start": f64::from(range.min()),
-                    "end": f64::from(range.max()),
+                    "min": f64::from(channel.intensity.min()),
+                    "max": f64::from(channel.intensity.max()),
+                    "start": f64::from(channel.window.min()),
+                    "end": f64::from(channel.window.max()),
                 },
             })
         })

@@ -96,22 +96,29 @@ impl Recovery {
         if let Err(error) = grana_file::recover(&root) {
             grana_log::warn!(target: "grana::session", path = %root.display(), %error, "the recovery unit left an unclearable artifact");
         }
-        let entry = read(&root.join(FILE));
-        let valid = entry
-            .as_ref()
-            .is_some_and(|entry| entry.age() <= STALE.as_secs() && holds(&root, entry));
-        if valid {
-            store.entry = entry;
-        } else {
-            if let Some(entry) = entry {
+        match read(&root.join(FILE)) {
+            Record::Absent => discard(&root),
+            Record::Unreadable(detail) => {
                 grana_log::warn!(
                     target: "grana::session",
                     path = %root.display(),
-                    name = entry.name(),
-                    "the recovery record does not describe the snapshot beside it, so the unit was discarded"
+                    %detail,
+                    "the recovery record cannot be read, so the snapshot beside it was kept"
                 );
             }
-            discard(&root);
+            Record::Held(entry) => {
+                if entry.age() <= STALE.as_secs() && holds(&root, &entry) {
+                    store.entry = Some(entry);
+                } else {
+                    grana_log::warn!(
+                        target: "grana::session",
+                        path = %root.display(),
+                        name = entry.name(),
+                        "the recovery record does not describe the snapshot beside it, so the unit was discarded"
+                    );
+                    discard(&root);
+                }
+            }
         }
         store.root = Some(root);
         store
@@ -221,14 +228,21 @@ fn discard(root: &Path) {
     }
 }
 
-fn read(path: &Path) -> Option<Entry> {
-    let text = std::fs::read_to_string(path).ok()?;
+enum Record {
+    Absent,
+    Held(Entry),
+    Unreadable(String),
+}
+
+fn read(path: &Path) -> Record {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Record::Absent,
+        Err(error) => return Record::Unreadable(error.to_string()),
+    };
     match toml::from_str::<Entry>(&text) {
-        Ok(entry) => Some(entry),
-        Err(error) => {
-            grana_log::warn!(target: "grana::session", path = %path.display(), %error, "the recovery record cannot be read");
-            None
-        }
+        Ok(entry) => Record::Held(entry),
+        Err(error) => Record::Unreadable(error.to_string()),
     }
 }
 

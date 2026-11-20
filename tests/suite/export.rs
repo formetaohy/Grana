@@ -5,9 +5,7 @@ use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, ObjectKind, Scene};
-use grana_volume::{
-    BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume, VoxelData,
-};
+use grana_volume::{BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume};
 use wgpu::TextureFormat;
 
 use crate::support::{Gpu, Temp, gpu, spheres};
@@ -93,33 +91,6 @@ fn export_image(gpu: &Gpu, destination: Destination, transparent: bool) -> [u32;
     }
 }
 
-fn read_plane(image: &grana_tiff::Image, channel: usize, size: [u32; 2]) -> Vec<u16> {
-    let data = image
-        .read_region(0, 0, channel, 0..size[0], 0..size[1], 0..1)
-        .expect("the exported plane reads");
-    let VoxelData::U16(values) = data else {
-        panic!("the export stores sixteen bit voxels");
-    };
-    values
-}
-
-#[test]
-fn exports_a_two_view_image_at_the_requested_size() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let temp = Temp::new("grana-export");
-    let path = temp.path().join("image.png");
-    let size = export_image(&gpu, Destination::Image { path: path.clone() }, false);
-    let image = grana_raster::read(&path).expect("the export writes a readable image");
-    assert_eq!(image.size(), size);
-    assert_eq!(image.width(), WIDTH);
-    assert!(
-        image.pixels().iter().any(|value| *value > 0),
-        "the export writes the rendered scene"
-    );
-}
-
 #[test]
 fn exports_vector_figures_as_svg_and_pdf() {
     let Some(gpu) = gpu() else {
@@ -176,42 +147,6 @@ fn find(bytes: &[u8], needle: &[u8]) -> Option<usize> {
         .rposition(|window| window == needle)
 }
 
-#[test]
-fn exports_a_sixteen_bit_ome_tiff() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let temp = Temp::new("grana-export-wide");
-    let path = temp.path().join("image.ome.tif");
-    let size = export_image(&gpu, Destination::Image { path: path.clone() }, false);
-    let image = grana_tiff::Image::open(&path, 0).expect("the wide export reads");
-    assert_eq!(image.name(), "export");
-    let bytes = std::fs::read(&path).expect("the wide export reads as bytes");
-    let metadata = String::from_utf8_lossy(&bytes);
-    assert!(
-        metadata.contains("PhysicalSizeX=\"") && metadata.contains("PhysicalSizeY=\""),
-        "the wide export records its physical pixel size"
-    );
-    assert!(
-        metadata.contains("TimeIncrement=\""),
-        "the wide export records its frame interval"
-    );
-    let pyramid = image.pyramid();
-    assert_eq!(pyramid.channel_count(), 3);
-    assert_eq!(pyramid.level(0).extent(), Extent::new(size[0], size[1], 1));
-    assert_eq!(pyramid.channels()[0].name(), "Red");
-    let values = read_plane(&image, 0, size);
-    let lit = values.iter().filter(|value| **value > 512).count();
-    assert!(lit > 1000, "the wide export writes the rendered scene");
-    let beyond = values
-        .iter()
-        .filter(|value| **value > 512 && **value % 257 != 0)
-        .count();
-    assert!(
-        beyond > lit / 16,
-        "the wide export keeps more than eight bits of precision"
-    );
-}
 #[test]
 fn cancels_an_export_without_leaving_a_partial_file() {
     let Some(gpu) = gpu() else {

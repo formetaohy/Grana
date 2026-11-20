@@ -26,6 +26,7 @@ labels! {
 messages! {
     samples(done: usize, total: usize) => "{done}/{total}" / "{done}/{total}";
     raw(a: f32, b: f32) => "{a:.0} · {b:.0}" / "{a:.0} · {b:.0}";
+    costes(a: f32, b: f32) => "Costes {a:.3} · {b:.3}" / "Costes {a:.3} · {b:.3}";
     frame_row(time: u32) => "Frame {time}" / "第 {time} 帧";
     sampling_detail(coverage: f32, voxels: u64, frames: usize, blocks: u64, stride: u32) => "{coverage:.1}% · {voxels} vx · {frames}f · {blocks}b (s{stride})" / "{coverage:.1}% · {voxels} 体素 · {frames} 帧 · {blocks} 块 (s{stride})";
     frame_bins(time: u32, bins: usize) => "F{time} · {bins}" / "F{time} · {bins}";

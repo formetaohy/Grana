@@ -951,11 +951,19 @@ impl Session {
         if let Some(set) = ObjectSetId::from_raw(edit.target()) {
             match edit.action() {
                 Action::Detect => {
-                    self.cancel(Job::Detect(set));
-                    self.cancel(Job::Track(set));
-                    self.cancel(Job::Recut(set));
-                    if self.recut.is_some_and(|(pending, _)| pending == set) {
-                        self.recut = None;
+                    let mut targets = vec![set];
+                    if let Some(root) = self.detection_root(set)
+                        && root != set
+                    {
+                        targets.push(root);
+                    }
+                    for target in targets {
+                        self.cancel(Job::Detect(target));
+                        self.cancel(Job::Track(target));
+                        self.cancel(Job::Recut(target));
+                        if self.recut.is_some_and(|(pending, _)| pending == target) {
+                            self.recut = None;
+                        }
                     }
                 }
                 Action::ObjectParameters => {

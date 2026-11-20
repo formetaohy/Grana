@@ -664,44 +664,6 @@ pub fn plate(root: &Path) {
     field(&root.join("A/2/1"), Extent::new(12, 10, 6));
 }
 
-const COLLECTION_METADATA: &str = concat!(
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
-    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
-    " <Image ID=\"Image:0\" Name=\"Overview\">\n",
-    "  <Pixels ID=\"Pixels:0\" DimensionOrder=\"XYZCT\" Type=\"float\" SizeX=\"8\" SizeY=\"6\" SizeZ=\"4\" SizeC=\"1\" SizeT=\"1\">\n",
-    "   <Channel ID=\"Channel:0:0\" Name=\"DAPI\" SamplesPerPixel=\"1\"/>\n",
-    "   <MetadataOnly/>\n",
-    "  </Pixels>\n",
-    " </Image>\n",
-    " <Image ID=\"Image:1\" Name=\"Detail\">\n",
-    "  <Pixels ID=\"Pixels:1\" DimensionOrder=\"XYZCT\" Type=\"float\" SizeX=\"12\" SizeY=\"10\" SizeZ=\"6\" SizeC=\"1\" SizeT=\"1\">\n",
-    "   <Channel ID=\"Channel:1:0\" Name=\"DAPI\" SamplesPerPixel=\"1\"/>\n",
-    "   <MetadataOnly/>\n",
-    "  </Pixels>\n",
-    " </Image>\n",
-    "</OME>\n"
-);
-
-pub fn collection(root: &Path) {
-    std::fs::create_dir_all(root).expect("the collection directory is created");
-    group(
-        root,
-        "/",
-        serde_json::json!({"ome": {"bioformats2raw.layout": 3}}),
-    );
-    group(
-        root,
-        "/OME",
-        serde_json::json!({"ome": {"series": ["0", "1"]}}),
-    );
-    field(&root.join("0"), Extent::new(8, 6, 4));
-    field(&root.join("1"), Extent::new(12, 10, 6));
-    std::fs::write(
-        root.join("OME").join("METADATA.ome.xml"),
-        COLLECTION_METADATA,
-    )
-    .expect("the collection OME metadata writes");
-}
 fn group(root: &Path, path: &str, attributes: serde_json::Value) {
     let store =
         Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the plate store opens"));
@@ -722,7 +684,8 @@ fn field(path: &Path, extent: Extent) {
     let channels = [grana_archive::Channel {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
-        range: grana_volume::Intensity::new(0.0, 255.0),
+        intensity: grana_volume::Intensity::new(0.0, 255.0),
+        window: grana_volume::Intensity::new(0.0, 255.0),
     }];
     let levels = [grana_volume::Level::new(
         extent,

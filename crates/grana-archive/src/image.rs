@@ -6,7 +6,8 @@ use grana_volume::{Intensity, Level, VoxelFormat};
 pub struct Channel<'a> {
     pub name: &'a str,
     pub tint: [f32; 3],
-    pub range: Intensity,
+    pub intensity: Intensity,
+    pub window: Intensity,
 }
 
 pub type Filler<'a> = dyn Fn(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String>
@@ -64,6 +65,12 @@ impl ImageSpec<'_> {
                 .iter()
                 .all(|channel| !channel.name.trim().is_empty()),
             "an exported channel carries a name"
+        );
+        assert!(
+            self.channels
+                .iter()
+                .all(|channel| channel.window.span() > 0.0),
+            "an exported channel carries a display window with a positive span"
         );
         assert!(
             !self.levels.is_empty(),

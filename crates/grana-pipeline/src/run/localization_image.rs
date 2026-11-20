@@ -211,7 +211,8 @@ fn write_stack(
     let channels = COMPOSITION_CHANNELS.map(|(name, tint)| Channel {
         name,
         tint,
-        range: grana_volume::Intensity::new(0.0, 1.0),
+        intensity: grana_volume::Intensity::new(0.0, 1.0),
+        window: grana_volume::Intensity::new(0.0, 1.0),
     });
     let fill = |_: usize,
                 _: u32,

@@ -1117,6 +1117,24 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
         "a mismatched recovery is discarded"
     );
 
+    let unreadable_root = temp.path().join("unreadable");
+    std::fs::create_dir_all(&unreadable_root).expect("the unreadable store is created");
+    for name in ["snapshot.grana", "recovery.toml"] {
+        std::fs::copy(root.join(name), unreadable_root.join(name)).expect("the recovery copies");
+    }
+    std::fs::write(unreadable_root.join("recovery.toml"), b"[[[")
+        .expect("the recovery record is broken");
+    let mut unreadable = Session::new();
+    unreadable.attach_recovery_at(unreadable_root.clone());
+    assert!(
+        unreadable.recovery().is_none(),
+        "a record that cannot be read recovers nothing"
+    );
+    assert!(
+        unreadable_root.join("snapshot.grana").exists(),
+        "a record that cannot be read keeps the snapshot beside it"
+    );
+
     let mut recovered = Session::new();
     recovered.attach_recovery_at(root);
     let offered = recovered.recovery().expect("the recovery is offered");
@@ -1629,7 +1647,8 @@ fn rewrite_field(path: &std::path::Path, extent: Extent) {
     let channels = [Channel {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
-        range: grana_volume::Intensity::new(0.0, 255.0),
+        intensity: grana_volume::Intensity::new(0.0, 255.0),
+        window: grana_volume::Intensity::new(0.0, 255.0),
     }];
     let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
     let fill = |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {

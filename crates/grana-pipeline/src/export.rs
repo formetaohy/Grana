@@ -46,7 +46,8 @@ pub struct ChannelLayer {
     pub index: usize,
     pub name: String,
     pub tint: [f32; 3],
-    pub range: Intensity,
+    pub intensity: Intensity,
+    pub window: Intensity,
 }
 
 pub struct LabelLayer {
@@ -224,14 +225,12 @@ pub fn write_dataset(
         Format::Zarr => (levels, origins),
         Format::Tiff => {
             let depth = levels[0].extent().z();
-            let kept = levels
-                .iter()
-                .position(|level| level.extent().z() != depth)
-                .unwrap_or(levels.len());
-            let mut levels = levels;
-            let mut origins = origins;
-            levels.truncate(kept);
-            origins.truncate(kept);
+            if let Some(index) = levels.iter().position(|level| level.extent().z() != depth) {
+                return Err(format!(
+                    "resolution level {index} stores {} planes where level 0 stores {depth}, and an OME-TIFF keeps one depth for every level; export it as OME-Zarr to keep the whole pyramid",
+                    levels[index].extent().z()
+                ));
+            }
             (levels, origins)
         }
     };
@@ -240,7 +239,8 @@ pub fn write_dataset(
         .map(|layer| WriteChannel {
             name: &layer.name,
             tint: layer.tint,
-            range: layer.range,
+            intensity: layer.intensity,
+            window: layer.window,
         })
         .collect::<Vec<_>>();
     let fill = |level: usize,

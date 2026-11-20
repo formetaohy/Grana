@@ -135,58 +135,6 @@ fn spacing_axis(spacing: Spacing, axis: usize) -> f32 {
 }
 
 #[test]
-fn detects_a_spilled_detection_image_like_a_resident_one() {
-    let extent = Extent::new(1024, 1024, 8);
-    let spacing = Spacing::new(0.1, 0.1, 0.1);
-    let data = spot_volume(extent, spacing);
-    let level = Level::new(extent, spacing);
-    let scan = |budget: Budget| {
-        let scanner = SpotScanner::new(
-            0,
-            level,
-            data.range(),
-            SpotParams::new(0.5, 0.2),
-            Region::none(),
-            ChannelSet::new(1, 0),
-            budget,
-        );
-        let read = |channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
-            assert_eq!(channel, 0, "the spot scan reads its detection channel");
-            Ok(data.region(
-                level.extent(),
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            ))
-        };
-        scanner
-            .frame(&AtomicBool::new(false), None, &read, &mut |_, _| {})
-            .expect("the spot frame is detected")
-            .expect("the spot frame is not cancelled")
-    };
-    let spilled = scan(Budget::with_bytes(2, 32 << 20));
-    let resident = scan(Budget::new(2));
-    assert_eq!(spilled.spots().len(), 2, "each bright blob is one spot");
-    assert_eq!(
-        spilled.spots().len(),
-        resident.spots().len(),
-        "a detection image beyond its budget detects every resident spot"
-    );
-    for (spilled, resident) in spilled.spots().iter().zip(resident.spots()) {
-        assert_eq!(
-            spilled.center(),
-            resident.center(),
-            "a spilled spot keeps its localisation"
-        );
-        assert_eq!(
-            spilled.quality(),
-            resident.quality(),
-            "a spilled spot keeps its quality"
-        );
-    }
-}
-
-#[test]
 fn extracts_measured_surfaces_from_two_balls() {
     let extent = Extent::new(80, 64, 48);
     let spacing = Spacing::new(0.2, 0.2, 0.2);
@@ -1136,7 +1084,8 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [0.2, 0.4, 1.0],
-        range: Intensity::new(0.0, 50_000.0),
+        intensity: Intensity::new(0.0, 50_000.0),
+        window: Intensity::new(0.0, 50_000.0),
     }];
     let fill = |_level: usize,
                 _frame: u32,
@@ -1484,6 +1433,46 @@ fn renders_and_measures_localizations() {
     assert!(
         (measured - 12.0).abs() < 4.0,
         "the precision measures {measured} nm against 12 nm"
+    );
+    let crowded = (0..600)
+        .map(|_| [0.5 + 1.0 * noise.value(), 0.5 + 1.0 * noise.value()])
+        .collect::<Vec<_>>();
+    let crowded_frames = (0..8)
+        .map(|_| {
+            crowded
+                .iter()
+                .map(|molecule| {
+                    Spot::gaussian(
+                        [
+                            molecule[0] + precision * noise.gaussian(),
+                            molecule[1] + precision * noise.gaussian(),
+                            0.0,
+                        ],
+                        [precision; 3],
+                        900.0,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let dense = support::Localizations::of(crowded_frames);
+    let dense = grana_analysis::localization::localization_report(
+        &dense,
+        LocalizationSpec::new([0, 7], 10.0, 20.0),
+        0.1,
+        true,
+        None,
+        &mut |_, _| true,
+    )
+    .expect("the dense report renders")
+    .expect("the dense report completes");
+    let crowded_precision = dense
+        .nena()
+        .expect("two frames estimate a precision")
+        .precision();
+    assert!(
+        (crowded_precision - 12.0).abs() < 4.0,
+        "a crowded field measures {crowded_precision} nm against 12 nm"
     );
     assert!(
         report

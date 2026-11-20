@@ -274,7 +274,7 @@ fn thresholds<'a>(
     if let Some(range) = costes {
         buttons.push(
             view::button(ctx, "Costes", Role::SurfaceHigh)
-                .press(Message::Command(Command::SetColocThresholds(range.high()))),
+                .press(Message::Command(Command::SetColocThresholds(range.low()))),
         );
     }
     let raw_a = channels[pair.a()].intensity().value(thresholds.a());
@@ -290,17 +290,10 @@ fn thresholds<'a>(
             .children(buttons),
     );
     if let Some(range) = costes {
-        let low = range.low();
-        let high = range.high();
+        let applied = range.low();
         rows.push(view::caption(
             ctx,
-            &format!(
-                "Costes M1 {:.3}–{:.3} · M2 {:.3}–{:.3}",
-                low.a(),
-                high.a(),
-                low.b(),
-                high.b()
-            ),
+            &grana_i18n::coloc::costes(language, applied.a(), applied.b()),
         ));
     }
     let title = view::card_title(

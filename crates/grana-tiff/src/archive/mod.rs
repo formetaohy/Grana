@@ -173,6 +173,22 @@ fn validate(path: &Path, spec: &ImageSpec<'_>) -> Result<(), Error> {
                     ),
                 ));
             }
+            let dominant = column.iter().fold(0.0f32, |held, value| {
+                if value.abs() > held.abs() {
+                    *value
+                } else {
+                    held
+                }
+            });
+            if dominant < 0.0 {
+                return Err(Error::write(
+                    path,
+                    format!(
+                        "resolution level {index} flips the {} axis, which an OME-TIFF cannot represent; export it as OME-Zarr to keep the direction",
+                        ["x", "y", "z"][axis]
+                    ),
+                ));
+            }
         }
     }
     for (index, pair) in spec.levels.windows(2).enumerate() {

@@ -302,18 +302,20 @@ impl Mosaic {
         let base = self.images[0].pyramid().channels();
         (0..base.len())
             .map(|channel| {
-                let window = self
-                    .images
-                    .iter()
-                    .map(|image| image.pyramid().channels()[channel].intensity())
-                    .reduce(|held, value| {
-                        Intensity::new(held.min().min(value.min()), held.max().max(value.max()))
-                    })
-                    .expect("a mosaic holds a tile");
+                let merged = |pick: fn(&grana_volume::ChannelInfo) -> Intensity| {
+                    self.images
+                        .iter()
+                        .map(|image| pick(&image.pyramid().channels()[channel]))
+                        .reduce(|held, value| {
+                            Intensity::new(held.min().min(value.min()), held.max().max(value.max()))
+                        })
+                        .expect("a mosaic holds a tile")
+                };
                 WriteChannel {
                     name: base[channel].name(),
                     tint: base[channel].tint(),
-                    range: window,
+                    intensity: merged(grana_volume::ChannelInfo::intensity),
+                    window: merged(grana_volume::ChannelInfo::window),
                 }
             })
             .collect()

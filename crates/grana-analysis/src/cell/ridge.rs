@@ -6,6 +6,7 @@ use grana_volume::Level;
 use super::{TOP, schedule};
 
 const SIGMA_LIMIT: f32 = 4.0;
+const SIGMA_FLOOR: f32 = 0.5;
 const KERNEL_LIMIT: usize = 16;
 const MARGIN: u32 = 3;
 pub(crate) const BINS: usize = 256;
@@ -14,31 +15,60 @@ const PLATE_FLOOR: f32 = 1.0e-6;
 const MAGNITUDE: f32 = 0.25;
 
 struct Smoothing {
-    kernel: Vec<f32>,
-    radius: usize,
+    kernels: [Vec<f32>; 3],
+    radii: [usize; 3],
+    weights: [f32; 3],
 }
 
 impl Smoothing {
-    fn new(level: Level, grain: f32) -> Option<Self> {
-        if !(grain.is_finite() && grain > 0.0) {
-            return None;
+    fn new(level: Level, grain: f32) -> Self {
+        let spacing = level.voxel();
+        let valid = grain.is_finite()
+            && grain > 0.0
+            && spacing
+                .iter()
+                .all(|value| value.is_finite() && *value > 0.0);
+        if !valid {
+            return Self {
+                kernels: std::array::from_fn(|_| vec![1.0]),
+                radii: [0; 3],
+                weights: [0.0; 3],
+            };
         }
-        let sigma = sigma(level, grain);
-        if sigma < 0.5 {
-            return None;
+        let scaled = spacing.map(|step| (grain / step).clamp(SIGMA_FLOOR, SIGMA_LIMIT));
+        let kernels = spacing.map(|step| {
+            let sigma = (grain / step).min(SIGMA_LIMIT);
+            if sigma < SIGMA_FLOOR {
+                return vec![1.0];
+            }
+            let radius = ((3.0 * sigma).ceil() as usize).min(KERNEL_LIMIT);
+            let mut kernel = Vec::with_capacity(2 * radius + 1);
+            let mut sum = 0.0f32;
+            for step in -(radius as i64)..=radius as i64 {
+                let weight = (-0.5 * (step as f32 / sigma).powi(2)).exp();
+                kernel.push(weight);
+                sum += weight;
+            }
+            for weight in &mut kernel {
+                *weight /= sum;
+            }
+            kernel
+        });
+        let radii = kernels.each_ref().map(|kernel| (kernel.len() - 1) / 2);
+        let weights = scaled.map(|sigma| sigma * sigma);
+        Self {
+            kernels,
+            radii,
+            weights,
         }
-        let radius = ((3.0 * sigma).ceil() as usize).min(KERNEL_LIMIT);
-        let mut kernel = Vec::with_capacity(2 * radius + 1);
-        let mut sum = 0.0f32;
-        for step in -(radius as i64)..=radius as i64 {
-            let weight = (-0.5 * (step as f32 / sigma).powi(2)).exp();
-            kernel.push(weight);
-            sum += weight;
-        }
-        for weight in &mut kernel {
-            *weight /= sum;
-        }
-        Some(Self { kernel, radius })
+    }
+
+    fn weights(&self) -> [f32; 3] {
+        self.weights
+    }
+
+    fn radius(&self) -> usize {
+        self.radii.into_iter().max().unwrap_or(0)
     }
 
     fn apply(&self, values: &mut [f32], dims: [usize; 3], cancel: &AtomicBool) -> bool {
@@ -55,12 +85,13 @@ impl Smoothing {
 
     fn axis(&self, input: &[f32], output: &mut [f32], dims: [usize; 3], axis: usize) {
         let [width, height, depth] = dims;
-        let radius = self.radius as i64;
+        let radius = self.radii[axis] as i64;
+        let kernel = &self.kernels[axis];
         for z in 0..depth {
             for y in 0..height {
                 for x in 0..width {
                     let mut sum = 0.0f32;
-                    for (index, weight) in self.kernel.iter().enumerate() {
+                    for (index, weight) in kernel.iter().enumerate() {
                         let step = index as i64 - radius;
                         let at = match axis {
                             0 => (clamp(x as i64 + step, width), y, z),
@@ -78,8 +109,8 @@ impl Smoothing {
 
 pub(crate) fn halo(level: Level, grain: f32) -> u32 {
     Smoothing::new(level, grain)
-        .map_or(0, |smoothing| smoothing.radius as u32)
-        .saturating_add(MARGIN)
+        .radius()
+        .saturating_add(MARGIN as usize) as u32
 }
 
 pub(crate) fn elevations(
@@ -99,20 +130,12 @@ pub(crate) fn elevations(
     if dims.iter().any(|axis| *axis < 3) {
         return Some(vec![0; count]);
     }
+    let smoothing = Smoothing::new(level, grain);
     let mut smoothed = values.to_vec();
-    if let Some(smoothing) = Smoothing::new(level, grain)
-        && !smoothing.apply(&mut smoothed, dims, cancel)
-    {
+    if !smoothing.apply(&mut smoothed, dims, cancel) {
         return None;
     }
-    let sigma = sigma(level, grain).max(0.5);
-    let spacing = level.voxel();
-    let narrowest = spacing[0].min(spacing[1]).min(spacing[2]);
-    let weights = [
-        sigma * sigma * (narrowest / spacing[0]).powi(2),
-        sigma * sigma * (narrowest / spacing[1]).powi(2),
-        sigma * sigma * (narrowest / spacing[2]).powi(2),
-    ];
+    let weights = smoothing.weights();
     let cross = [
         0.25 * (weights[0] * weights[1]).sqrt(),
         0.25 * (weights[0] * weights[2]).sqrt(),
@@ -270,15 +293,6 @@ fn otsu(histogram: &[u64; BINS]) -> Option<usize> {
         }
     }
     Some(best)
-}
-
-fn sigma(level: Level, grain: f32) -> f32 {
-    let spacing = level.spacing();
-    let narrowest = spacing.x().min(spacing.y()).min(spacing.z());
-    if narrowest <= 0.0 {
-        return 0.5;
-    }
-    (grain / narrowest).min(SIGMA_LIMIT)
 }
 
 fn plate(hessian: [[f32; 3]; 3]) -> f32 {

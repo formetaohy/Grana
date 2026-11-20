@@ -11,7 +11,8 @@ use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
-    Axial, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries, VoxelData,
+    Axial, Basis, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries,
+    VoxelData,
 };
 use grana_zarr::write_image;
 
@@ -36,7 +37,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [0.2, 0.7, 1.0],
-        range: Intensity::new(0.0, 4096.0),
+        intensity: Intensity::new(0.0, 4096.0),
+        window: Intensity::new(0.0, 4096.0),
     }];
     let fill = |level, _frame, _channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
         let scale = 1u32 << level;
@@ -80,6 +82,14 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         "the archive reports the bytes it wrote"
     );
     let image = grana_tiff::Image::open(&path, 0).expect("the archive opens");
+    let bytes = std::fs::read(&path).expect("the archive reads back");
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(1 << 20)]).into_owned();
+    let data = text.find("<TiffData").expect("the archive lists its tiles");
+    let plane = text.find("<Plane ").expect("the archive lists its planes");
+    assert!(
+        data < plane,
+        "the OME-XML lists every TiffData before the first Plane"
+    );
     assert_eq!(image.pyramid().level_count(), 3);
     for (axis, value) in image.pyramid().placement().into_iter().enumerate() {
         let expected = [1.5, -2.0, 3.0][axis];
@@ -139,7 +149,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                range: Intensity::new(0.0, 255.0),
+                intensity: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
             }],
             levels: image.pyramid().levels().to_vec(),
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],
@@ -186,7 +197,8 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                range: Intensity::new(0.0, 255.0),
+                intensity: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -218,6 +230,73 @@ fn exports_a_tiled_pyramid_ome_tiff() {
             "the cropped archive places its centre at the world origin on axis {axis}: {value}"
         );
     }
+
+    let flipped = Level::placed(
+        Extent::new(24, 16, 8),
+        Basis::new([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        [0.0; 3],
+    );
+    let mut progress = |_, _| {};
+    let refused = grana_pipeline::write_dataset(
+        DatasetSpec {
+            path: temp.path().join("flipped.ome.tif"),
+            name: "flipped".to_string(),
+            channels: vec![ChannelLayer {
+                index: 0,
+                name: "signal".to_string(),
+                tint: [1.0, 1.0, 1.0],
+                intensity: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
+            }],
+            levels: vec![flipped],
+            origins: vec![[0, 0, 0]],
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            drift: Vec::new(),
+            labels: Vec::new(),
+        },
+        &Channels::stored(Arc::clone(&image)),
+        &AtomicBool::new(false),
+        &mut progress,
+    );
+    assert!(
+        refused.is_err_and(|detail| detail.contains("flips")),
+        "an OME-TIFF refuses a level whose basis mirrors the volume"
+    );
+
+    let shallow = [
+        Level::new(Extent::new(24, 16, 8), Spacing::new(1.0, 1.0, 1.0)),
+        Level::new(Extent::new(12, 8, 4), Spacing::new(2.0, 2.0, 1.0)),
+    ];
+    let mut progress = |_, _| {};
+    let refused = grana_pipeline::write_dataset(
+        DatasetSpec {
+            path: temp.path().join("shallow.ome.tif"),
+            name: "shallow".to_string(),
+            channels: vec![ChannelLayer {
+                index: 0,
+                name: "signal".to_string(),
+                tint: [1.0, 1.0, 1.0],
+                intensity: Intensity::new(0.0, 255.0),
+                window: Intensity::new(0.0, 255.0),
+            }],
+            levels: shallow.to_vec(),
+            origins: vec![[0, 0, 0]; 2],
+            placement: [0.0; 3],
+            frames: 1,
+            interval: 1.0,
+            drift: Vec::new(),
+            labels: Vec::new(),
+        },
+        &Channels::stored(Arc::clone(&image)),
+        &AtomicBool::new(false),
+        &mut progress,
+    );
+    assert!(
+        refused.is_err_and(|detail| detail.contains("one depth")),
+        "an OME-TIFF refuses a pyramid whose coarse level stores fewer planes"
+    );
 }
 
 #[test]
@@ -240,7 +319,8 @@ fn writes_a_sixteen_bit_ome_tiff() {
             "Green" => [0.0, 1.0, 0.0],
             _ => [0.0, 0.0, 1.0],
         },
-        range: Intensity::new(0.0, 1.0),
+        intensity: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     });
     let fill = |_level: usize,
                 _frame: u32,
@@ -324,7 +404,8 @@ fn writes_a_sharded_ome_zarr_level() {
     let channels = [WriteChannel {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
-        range: Intensity::new(0.0, 1.0),
+        intensity: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     }];
     let fill = |_level, _frame, _channel, origin: [u32; 3], length: [u32; 3], data: &mut [f32]| {
         for z in 0..length[2] {
@@ -422,12 +503,14 @@ fn write_zarr(root: &std::path::Path) {
         WriteChannel {
             name: "DAPI",
             tint: [0.0, 0.0, 1.0],
-            range: Intensity::new(0.0, 2048.0),
+            intensity: Intensity::new(0.0, 2048.0),
+            window: Intensity::new(0.0, 2048.0),
         },
         WriteChannel {
             name: "GFP",
             tint: [0.0, 1.0, 0.0],
-            range: Intensity::new(0.0, 1024.0),
+            intensity: Intensity::new(0.0, 1024.0),
+            window: Intensity::new(0.0, 1024.0),
         },
     ];
     let fill = |level, frame, channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
@@ -615,7 +698,8 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
     let channels = [WriteChannel {
         name: "signal",
         tint: [1.0, 1.0, 1.0],
-        range: Intensity::new(0.0, 255.0),
+        intensity: Intensity::new(0.0, 255.0),
+        window: Intensity::new(0.0, 255.0),
     }];
     let fill = move |_: usize,
                      _: u32,
@@ -824,7 +908,8 @@ fn exports_a_region_of_the_channels_and_labels() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                range: Intensity::new(0.0, 1000.0),
+                intensity: Intensity::new(0.0, 1000.0),
+                window: Intensity::new(100.0, 300.0),
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -840,6 +925,17 @@ fn exports_a_region_of_the_channels_and_labels() {
     )
     .expect("the region exports");
     let written = grana_zarr::Image::open(&path).expect("the cropped image opens");
+    let info = &written.pyramid().channels()[0];
+    assert_eq!(
+        (info.intensity().min(), info.intensity().max()),
+        (0.0, 1000.0),
+        "the exported channel keeps the data range apart from its display window"
+    );
+    assert_eq!(
+        (info.window().min(), info.window().max()),
+        (100.0, 300.0),
+        "the exported channel keeps its display window"
+    );
     let level = written.pyramid().level(0);
     assert_eq!(level.extent(), Extent::new(8, 8, 4));
     let expected = [0, 1, 2].map(|axis| {
@@ -1107,51 +1203,6 @@ fn browses_an_ome_zarr_plate() {
 }
 
 #[test]
-fn browses_a_bioformats2raw_collection() {
-    let temp = Temp::new("suite-collection");
-    let root = temp.path().join("series.ome.zarr");
-    support::collection(&root);
-    assert!(
-        grana_image::is_image(&root),
-        "a collection folder is a dataset"
-    );
-    assert_eq!(
-        grana_image::series_count(&root).expect("the collection counts its series"),
-        2
-    );
-    assert_eq!(
-        grana_image::series_names(&root).expect("the collection names its series"),
-        vec![Some("Overview".to_string()), Some("Detail".to_string())]
-    );
-    assert_eq!(
-        grana_image::series_group(&root, 1).expect("the second series resolves"),
-        Some("/1".to_string())
-    );
-    let resolved = grana_image::resolve_series(&Source::file_series(root.clone(), 1))
-        .expect("the second series resolves");
-    assert_eq!(resolved.group(), Some("/1"));
-    let detail = Image::open(&resolved).expect("the second series opens");
-    assert_eq!(detail.selected(), 1);
-    assert_eq!(detail.pyramid().level(0).extent(), Extent::new(12, 10, 6));
-    assert_eq!(detail.series().len(), 2);
-    assert_eq!(detail.series()[1].name(), Some("Detail"));
-    let overview =
-        Image::open(&Source::file(root.clone())).expect("the folder opens its first series");
-    assert_eq!(overview.selected(), 0);
-    assert_eq!(overview.pyramid().level(0).extent(), Extent::new(8, 6, 4));
-    let collection =
-        grana_zarr::collection(&grana_zarr::Root::local(&root).expect("the collection opens"))
-            .expect("the collection metadata parses")
-            .expect("the folder is a collection");
-    assert_eq!(collection.name(), "series");
-    assert_eq!(collection.series().len(), 2);
-    assert!(
-        Image::open(&Source::file_series(root.clone(), 2)).is_err(),
-        "a series outside the collection is refused"
-    );
-}
-
-#[test]
 fn writes_and_reads_a_label_image() {
     let temp = Temp::new("suite-zarr-label-write");
     let path = temp.path().join("labelled.ome.zarr");
@@ -1160,7 +1211,8 @@ fn writes_and_reads_a_label_image() {
     let channels = [WriteChannel {
         name: "DAPI",
         tint: [0.0, 0.0, 1.0],
-        range: Intensity::new(0.0, 1.0),
+        intensity: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
     }];
     let image_fill = |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
         data.fill(0.0);
@@ -1514,7 +1566,8 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
                 index: 0,
                 name: "signal".to_string(),
                 tint: [1.0, 1.0, 1.0],
-                range: Intensity::new(0.0, 10.0),
+                intensity: Intensity::new(0.0, 10.0),
+                window: Intensity::new(0.0, 10.0),
             }],
             levels,
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],

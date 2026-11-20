@@ -117,6 +117,7 @@ fn histogram(
 fn accumulate(source: &[super::Point], target: &Lattice<'_>, reach: f32, counts: &mut [f64]) {
     let width = f64::from(reach) / BINS as f64;
     for point in source {
+        let mut nearest = f64::INFINITY;
         target.visit_near(*point, reach, |other| {
             if other.group != point.group {
                 return;
@@ -125,10 +126,13 @@ fn accumulate(source: &[super::Point], target: &Lattice<'_>, reach: f32, counts:
             let y = f64::from(point.center[1]) - f64::from(other.center[1]);
             let distance = (x * x + y * y).sqrt();
             if distance < f64::from(reach) {
-                let bin = (distance / width) as usize;
-                counts[bin.min(BINS - 1)] += 1.0;
+                nearest = nearest.min(distance);
             }
         });
+        if nearest.is_finite() {
+            let bin = (nearest / width) as usize;
+            counts[bin.min(BINS - 1)] += 1.0;
+        }
     }
 }
 

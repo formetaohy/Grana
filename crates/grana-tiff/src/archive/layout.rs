@@ -291,6 +291,8 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
     let columns = [basis.column(0), basis.column(1), basis.column(2)];
     let corner = level.origin();
     let middle = [0.5 * extent.x() as f32, 0.5 * extent.y() as f32];
+    let mut data = String::new();
+    let mut planes = String::new();
     for frame in 0..spec.frames {
         for channel in 0..spec.channels.len() {
             for z in 0..extent.z() {
@@ -302,19 +304,21 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
                         + columns[2][axis] * local[2]
                         + spec.placement[axis]
                 });
-                xml.push_str(&format!(
+                planes.push_str(&format!(
                     "   <Plane TheT=\"{frame}\" TheC=\"{channel}\" TheZ=\"{z}\" PositionX=\"{}\" PositionXUnit=\"µm\" PositionY=\"{}\" PositionYUnit=\"µm\" PositionZ=\"{}\" PositionZUnit=\"µm\"/>\n",
                     located(centre[0]),
                     located(centre[1]),
                     located(centre[2])
                 ));
-                xml.push_str(&format!(
+                data.push_str(&format!(
                     "   <TiffData IFD=\"{ifd}\" PlaneCount=\"1\" FirstT=\"{frame}\" FirstC=\"{channel}\" FirstZ=\"{z}\"/>\n"
                 ));
                 ifd += 1;
             }
         }
     }
+    xml.push_str(&data);
+    xml.push_str(&planes);
     xml.push_str("  </Pixels>\n </Image>\n</OME>");
     xml
 }
