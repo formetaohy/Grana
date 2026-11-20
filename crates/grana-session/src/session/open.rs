@@ -627,7 +627,6 @@ impl Session {
                     let format = opened.format;
                     let restored = self.pending.is_some();
                     let imported = !restored && !opened.imports.is_empty();
-                    let calibration = opened.pyramid.calibration();
                     let file = current
                         .as_ref()
                         .map(Source::label)
@@ -684,13 +683,6 @@ impl Session {
                     }
                     if let Some(detail) = opened.imports_error {
                         self.message = Some(Message::error(detail));
-                    }
-                    if self.message.is_none() {
-                        let calibration = self
-                            .scene
-                            .as_ref()
-                            .map_or(calibration, |scene| scene.dataset.pyramid().calibration());
-                        self.message = calibration_notice(calibration);
                     }
                     if imported {
                         self.baseline = self.document_hash();
@@ -781,21 +773,6 @@ impl Session {
 fn frame_duration(scene: &Scene) -> f32 {
     (scene.dataset.frame_count() as f32 * scene.dataset.frame_interval())
         .clamp(1.0, Timeline::MAX_DURATION)
-}
-
-fn calibration_notice(calibration: Calibration) -> Option<Message> {
-    match calibration {
-        Calibration::Recorded => None,
-        Calibration::Inferred => Some(Message::info(
-            "the file records no depth spacing, so it was inferred from the plane positions",
-        )),
-        Calibration::Assumed => Some(Message::info(
-            "the file records the lateral spacing but no depth spacing, so the depth spacing equals the lateral spacing",
-        )),
-        Calibration::Uncalibrated => Some(Message::info(
-            "the file records no voxel size, so a 1 µm placeholder is in use until the voxel size is set",
-        )),
-    }
 }
 
 fn endpoint(url: &str) -> &str {

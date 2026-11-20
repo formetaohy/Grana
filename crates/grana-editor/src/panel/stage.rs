@@ -4,7 +4,6 @@ use grana_ui::{
     Align, BuildContext, Color, Corners, Edges, Element, Fill, Icon, IconStyle, Key, Layer, Length,
     Level, Motion, Rect, Role, State, TextStyle, icon,
 };
-use grana_volume::Calibration;
 
 use crate::message::Message;
 use crate::panel::{Layout, STAGE_INSET};
@@ -284,11 +283,17 @@ pub(crate) fn calibration<'a>(
     let palette = theme.palette;
     let language = ctx.language();
     let authoring = state.access.author();
+    let known = sheet.known();
+    let values = sheet
+        .fields
+        .clone()
+        .map(|text| crate::state::voxel_value(&text));
+    let valid = values.iter().all(Option::is_some);
     let alpha = effect.clamp(0.0, 1.0);
     let scale = (0.90 + 0.10 * spatial).max(0.5);
     let slide = (1.0 - spatial) * -14.0;
-    let width = (stage.width() - 64.0).clamp(320.0, 520.0);
-    let height = 320.0;
+    let width = (stage.width() - 64.0).clamp(420.0, 560.0);
+    let height = 292.0;
     let rect = Rect::from_center_size(
         stage.center() + Vec2::new(0.0, slide),
         Vec2::new(width * scale, height * scale),
@@ -306,13 +311,18 @@ pub(crate) fn calibration<'a>(
     } else {
         backdrop
     };
+    let symbol = if known.iter().all(|known| *known) {
+        Icon::Ruler
+    } else {
+        Icon::Warning
+    };
     let head = grana_ui::row()
         .width(Length::Fill)
         .align(Align::Center)
         .children([
             crate::view::card_title(
                 ctx,
-                Icon::Ruler,
+                symbol,
                 grana_i18n::inspector::voxel_size(language),
                 None,
             )
@@ -331,81 +341,224 @@ pub(crate) fn calibration<'a>(
         "{} · {}×{}×{}",
         sheet.name, sheet.extent[0], sheet.extent[1], sheet.extent[2]
     );
-    let reason = match sheet.reason {
-        Calibration::Uncalibrated => grana_i18n::inspector::calibration_uncalibrated(language),
-        Calibration::Assumed => grana_i18n::inspector::calibration_assumed(language),
-        Calibration::Inferred => grana_i18n::inspector::calibration_inferred(language),
-        Calibration::Recorded => grana_i18n::inspector::calibration_recorded(language),
-    };
-    let style = TextStyle::new(theme.font(Level::Body), palette.on_surface);
-    let field_width = (width - 32.0 - 16.0) / 3.0;
+    let diagram_spacing = [0, 1, 2].map(|axis| values[axis].unwrap_or(1.0));
+    let font = theme.font(Level::Caption);
+    let diagram = grana_ui::canvas(Length::Fixed(120.0), 120.0)
+        .view(
+            (diagram_spacing.map(f32::to_bits), known),
+            move |_, painter, info| {
+                paint_voxel_cell(painter, info.rect, diagram_spacing, known, palette, font);
+            },
+        )
+        .named("calibration.cell");
+    let field_width = (width - 40.0 - 120.0 - 16.0 - 16.0) / 3.0;
+    let caption_style = TextStyle::new(font, palette.on_surface_variant);
     let mut fields = Vec::with_capacity(3);
     for (axis, text) in sheet.fields.iter().enumerate() {
         let name = format!("calibration.{}", AXES[axis].to_ascii_lowercase());
+        let color = if known[axis] {
+            palette.on_surface
+        } else {
+            palette.warning
+        };
+        let style = TextStyle::new(theme.font(Level::Body), color);
         let field = grana_ui::widget::text_field(text, style, field_width, false)
             .key(Key::new(&name))
             .select_all()
-            .editing(authoring)
+            .enabled(authoring)
+            .error(values[axis].is_none())
             .on_commit(move |text: &str| Message::SetVoxelField {
                 axis,
                 text: text.to_string(),
             });
+        let known_axis = known[axis];
+        let bar = grana_ui::canvas(Length::Fixed(field_width), 4.0).view(
+            known_axis,
+            move |_, painter, info| {
+                paint_provenance(painter, info.rect, known_axis, palette);
+            },
+        );
+        let label_style = TextStyle::new(
+            font,
+            if known[axis] {
+                palette.on_surface_variant
+            } else {
+                palette.warning
+            },
+        );
         fields.push(
             grana_ui::column()
                 .width(Length::Fixed(field_width))
                 .gap(4.0)
-                .children([crate::view::caption(ctx, AXES[axis]), field]),
+                .children([
+                    grana_ui::canvas(Length::Fill, 16.0).view(
+                        (axis, known[axis]),
+                        move |_, painter, info| {
+                            painter.text_in(info.rect, AXES[axis], label_style, Align::Center);
+                        },
+                    ),
+                    field,
+                    bar,
+                ]),
         );
     }
-    let mut rows = vec![
-        head,
-        crate::view::caption(ctx, &detail),
-        crate::view::weak(ctx, reason),
-        grana_ui::row().gap(8.0).children(fields),
-        crate::view::caption(ctx, grana_i18n::inspector::voxel_size_unit(language)),
-    ];
-    if authoring {
-        rows.push(crate::view::caption(
+    let unit = grana_ui::canvas(Length::Fill, 14.0).view_static(move |painter, info| {
+        painter.text_in(
+            info.rect,
+            "µm",
+            caption_style.aligned(Align::End),
+            Align::Center,
+        );
+    });
+    let fields_column = grana_ui::column()
+        .width(Length::Fill)
+        .gap(6.0)
+        .children([grana_ui::row().gap(8.0).children(fields), unit]);
+    let body = grana_ui::row()
+        .gap(16.0)
+        .align(Align::Center)
+        .children([diagram, fields_column]);
+    let actions = grana_ui::row().gap(8.0).children([
+        crate::view::button_with(
             ctx,
-            if sheet.error {
-                grana_i18n::inspector::voxel_size_invalid(language)
-            } else {
-                grana_i18n::inspector::voxel_size_hint(language)
-            },
-        ));
-    }
-    rows.push(
-        grana_ui::row().gap(8.0).children([
-            crate::view::button_with(
-                ctx,
-                grana_i18n::common::cancel(language),
-                Role::SurfaceHigh,
-                Length::Fill,
-            )
-            .named("calibration.dismiss")
-            .press(Message::DismissCalibration),
-            crate::view::button_with(
-                ctx,
-                grana_i18n::common::apply(language),
-                Role::Filled,
-                Length::Fill,
-            )
-            .named("calibration.apply")
-            .press(Message::ApplyCalibration),
-        ]),
-    );
+            grana_i18n::common::cancel(language),
+            Role::SurfaceHigh,
+            Length::Fill,
+        )
+        .named("calibration.dismiss")
+        .press(Message::DismissCalibration),
+        crate::view::button_with(
+            ctx,
+            grana_i18n::common::apply(language),
+            Role::Filled,
+            Length::Fill,
+        )
+        .named("calibration.apply")
+        .press(Message::ApplyCalibration)
+        .enabled(valid && authoring),
+    ]);
     let mut surface = theme.surface(Role::Sheet, State::Rest);
     surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
     surface.corners = Corners::all(theme.metrics.corner_xxl);
     let sheet_element = grana_ui::column()
-        .padding(Edges::all(16.0))
-        .gap(10.0)
+        .padding(Edges::all(20.0))
+        .gap(14.0)
         .background(surface)
         .clipped()
-        .children(rows)
+        .children([head, crate::view::caption(ctx, &detail), body, actions])
         .at(rect)
         .layer(Layer::Popup);
     vec![backdrop, sheet_element]
+}
+
+fn paint_voxel_cell(
+    painter: &mut grana_ui::Painter,
+    rect: Rect,
+    spacing: [f32; 3],
+    known: [bool; 3],
+    palette: grana_ui::Palette,
+    font: grana_ui::TypeStyle,
+) {
+    let largest = spacing.iter().copied().fold(0.0f32, f32::max).max(1.0e-6);
+    let ratio = spacing.map(|value| (value / largest).clamp(0.05, 1.0));
+    let depth = Vec2::new(0.62, -0.42);
+    let reach = Vec2::new(ratio[0] + ratio[2] * depth.x, ratio[1] - ratio[2] * depth.y);
+    let margin = 26.0;
+    let scale = ((rect.width() - margin) / reach.x).min((rect.height() - margin) / reach.y);
+    let scale = scale.max(8.0);
+    let lengths = Vec2::new(ratio[0] * scale, ratio[1] * scale);
+    let depth_length = ratio[2] * scale;
+    let extent = reach * scale;
+    let origin = Vec2::new(
+        rect.center().x - extent.x * 0.5,
+        rect.center().y + extent.y * 0.5,
+    );
+    let corner = |x: f32, y: f32, z: f32| {
+        origin
+            + Vec2::new(x * lengths.x, 0.0)
+            + Vec2::new(0.0, -y * lengths.y)
+            + depth * (z * depth_length)
+    };
+    let faint = palette.outline_variant.with_alpha(0.55);
+    let coordinate = |flag: bool| f32::from(u8::from(flag));
+    for vertex in 0..8u8 {
+        let bits = [0, 1, 2].map(|axis| vertex & (1u8 << axis) != 0);
+        for axis in 0..3 {
+            if bits[axis] {
+                continue;
+            }
+            let mut end = bits;
+            end[axis] = true;
+            painter.segment(
+                corner(
+                    coordinate(bits[0]),
+                    coordinate(bits[1]),
+                    coordinate(bits[2]),
+                ),
+                corner(coordinate(end[0]), coordinate(end[1]), coordinate(end[2])),
+                1.0,
+                faint,
+            );
+        }
+    }
+    for axis in 0..3 {
+        let mut end = [false; 3];
+        end[axis] = true;
+        let tip = corner(coordinate(end[0]), coordinate(end[1]), coordinate(end[2]));
+        let color = if known[axis] {
+            palette.primary
+        } else {
+            palette.warning
+        };
+        if known[axis] {
+            painter.segment(origin, tip, 2.0, color);
+        } else {
+            dashed(painter, origin, tip, 2.0, color);
+        }
+        let anchor = match axis {
+            0 => Vec2::new(tip.x - 4.0, tip.y + 5.0),
+            1 => Vec2::new(tip.x - 12.0, tip.y - 6.0),
+            _ => Vec2::new(tip.x + 5.0, tip.y - 2.0),
+        };
+        painter.text_at(anchor, ["X", "Y", "Z"][axis], TextStyle::new(font, color));
+    }
+}
+
+fn paint_provenance(
+    painter: &mut grana_ui::Painter,
+    rect: Rect,
+    known: bool,
+    palette: grana_ui::Palette,
+) {
+    let rect = rect.shrink2(Vec2::new(4.0, 0.0));
+    let y = rect.center().y;
+    let from = Vec2::new(rect.min.x, y);
+    let to = Vec2::new(rect.max.x, y);
+    if known {
+        painter.segment(from, to, 2.0, palette.primary);
+    } else {
+        dashed(painter, from, to, 2.0, palette.warning);
+    }
+}
+
+fn dashed(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, width: f32, color: Color) {
+    const DASH: f32 = 5.0;
+    const GAP: f32 = 4.0;
+    let length = (to - from).length();
+    if length <= 0.0 {
+        return;
+    }
+    let mut offset = 0.0;
+    while offset < length {
+        let end = (offset + DASH).min(length);
+        painter.segment(
+            from.lerp(to, offset / length),
+            from.lerp(to, end / length),
+            width,
+            color,
+        );
+        offset += DASH + GAP;
+    }
 }
 
 fn viewport<'a>(

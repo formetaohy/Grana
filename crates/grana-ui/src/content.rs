@@ -279,6 +279,7 @@ pub struct FieldContent {
     pub radius: f32,
     pub editing: bool,
     pub select_all: bool,
+    pub error: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

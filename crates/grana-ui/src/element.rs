@@ -577,6 +577,13 @@ impl<'a, A> Element<'a, A> {
         self
     }
 
+    pub fn error(mut self, error: bool) -> Self {
+        if let Content::Field(field) = &mut self.content {
+            field.error = error;
+        }
+        self
+    }
+
     pub fn on_color(mut self, action: impl Fn([f32; 3]) -> A + 'static) -> Self {
         self.interaction = Interaction::Color {
             action: Box::new(action),

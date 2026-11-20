@@ -1,5 +1,4 @@
 use grana_session::{Command, SessionView};
-use grana_volume::Spacing;
 
 use super::{DOCK_DEFAULT, DOCK_MINIMUM, Frame, Panel, Stage};
 use crate::message::Message;
@@ -405,31 +404,16 @@ pub fn apply(
                 }
                 if let Some(sheet) = workspace.calibration.as_mut() {
                     sheet.fields[axis] = text;
-                    sheet.error = false;
                 }
             }
             Message::ApplyCalibration => {
                 let Some(sheet) = workspace.calibration.as_mut() else {
                     continue;
                 };
-                let mut values = [0.0f32; 3];
-                let mut valid = true;
-                for (slot, text) in values.iter_mut().zip(&sheet.fields) {
-                    match text.trim().parse::<f32>() {
-                        Ok(value) if Spacing::EDITABLE.contains(&value) => *slot = value,
-                        _ => {
-                            valid = false;
-                            break;
-                        }
-                    }
-                }
-                if !valid {
-                    sheet.error = true;
+                let Some(spacing) = crate::state::voxel_spacing(&sheet.fields) else {
                     continue;
-                }
-                sheet.error = false;
+                };
                 sheet.open = false;
-                let spacing = Spacing::new(values[0], values[1], values[2]);
                 if view.scene.is_some() {
                     commands.push(Command::SetVoxelSize(spacing));
                 }

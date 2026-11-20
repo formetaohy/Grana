@@ -11,6 +11,15 @@ pub(super) struct Recording {
     analyses: usize,
 }
 
+fn voxel_size_line(spacing: Spacing) -> String {
+    format!(
+        "voxel size {:.4} × {:.4} × {:.4} µm",
+        spacing.x(),
+        spacing.y(),
+        spacing.z()
+    )
+}
+
 fn absorb(transfer: Transfer, effects: &mut Effects) {
     if let Transfer::Held(held) = transfer {
         effects.held = held;
@@ -625,10 +634,9 @@ impl Session {
                     return Effects::default();
                 };
                 if scene.dataset.spacing() == spacing {
-                    self.message = Some(Message::info("the voxel size is unchanged"));
+                    self.message = Some(Message::info(voxel_size_line(spacing)));
                     return Effects::default();
                 }
-                let cleared = !scene.objects.is_empty();
                 if let Some(scene) = self.scene.as_mut() {
                     scene.recalibrate(spacing);
                 }
@@ -640,21 +648,7 @@ impl Session {
                     self.mask_stamps = scene.mask_stamps();
                     self.mask_extents = scene.mask_extents(scene.time());
                 }
-                self.message = Some(Message::info(if cleared {
-                    format!(
-                        "the voxel size is now {:.4} × {:.4} × {:.4} µm, and the analysis measured in µm was cleared",
-                        spacing.x(),
-                        spacing.y(),
-                        spacing.z()
-                    )
-                } else {
-                    format!(
-                        "the voxel size is now {:.4} × {:.4} × {:.4} µm",
-                        spacing.x(),
-                        spacing.y(),
-                        spacing.z()
-                    )
-                }));
+                self.message = Some(Message::info(voxel_size_line(spacing)));
             }
             Command::SetExposure(exposure) => {
                 if let Some(scene) = self.scene.as_mut() {

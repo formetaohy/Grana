@@ -7,7 +7,7 @@ use grana_measure::{MeasureView, Measurement};
 use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
 use grana_ui::Key;
-use grana_volume::Calibration;
+use grana_volume::{Calibration, Spacing};
 
 use crate::overlay::Overlay;
 use crate::panel::Panel;
@@ -219,7 +219,6 @@ pub struct CalibrationSheet {
     pub extent: [u32; 3],
     pub reason: Calibration,
     pub fields: [String; 3],
-    pub error: bool,
 }
 
 impl CalibrationSheet {
@@ -232,7 +231,6 @@ impl CalibrationSheet {
             extent: [extent.x(), extent.y(), extent.z()],
             reason: scene.dataset.pyramid().calibration(),
             fields: [spacing.x(), spacing.y(), spacing.z()].map(voxel_text),
-            error: false,
         }
     }
 
@@ -244,6 +242,14 @@ impl CalibrationSheet {
         );
         (authoring && attention).then(|| Self::of(scene))
     }
+
+    pub fn known(&self) -> [bool; 3] {
+        match self.reason {
+            Calibration::Recorded | Calibration::Inferred => [true; 3],
+            Calibration::Assumed => [true, true, false],
+            Calibration::Uncalibrated => [false; 3],
+        }
+    }
 }
 
 pub fn voxel_text(value: f32) -> String {
@@ -254,6 +260,18 @@ pub fn voxel_text(value: f32) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+pub fn voxel_value(text: &str) -> Option<f32> {
+    text.trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| Spacing::EDITABLE.contains(value))
+}
+
+pub fn voxel_spacing(fields: &[String; 3]) -> Option<Spacing> {
+    let [x, y, z] = fields.clone().map(|text| voxel_value(&text));
+    Some(Spacing::new(x?, y?, z?))
 }
 
 pub struct Workspace {

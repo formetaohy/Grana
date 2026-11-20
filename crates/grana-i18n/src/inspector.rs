@@ -29,13 +29,6 @@ labels! {
     series => "Series" / "序列";
     scene => "Scene" / "场景";
     voxel_size => "Voxel size" / "体素尺寸";
-    voxel_size_unit => "µm per voxel" / "µm/体素";
-    voxel_size_hint => "Enter values and press apply" / "输入数值后点应用";
-    voxel_size_invalid => "Voxel sizes are positive micrometres" / "体素尺寸要用正的微米值";
-    calibration_uncalibrated => "The file records no voxel size, so every measurement in µm is a placeholder until you set it." / "文件没有记录体素尺寸，设定之前所有以 µm 计的量测都只是占位值。";
-    calibration_assumed => "The file records the lateral spacing but no depth spacing, so the depth spacing was set equal to it." / "文件没有记录深度间距，目前按横向间距代替。";
-    calibration_inferred => "The depth spacing was inferred from the plane positions." / "深度间距由各层位置推算得到。";
-    calibration_recorded => "The file records the voxel size; editing it rescales the dataset." / "文件已记录体素尺寸；修改会重新缩放数据集。";
 
     iterations => "Iterations" / "迭代次数";
     emission => "Emission" / "发射波长";
