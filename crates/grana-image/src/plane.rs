@@ -3,7 +3,8 @@ use std::sync::Arc;
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const SOURCE_BUDGET: u64 = 512 << 20;
-const LEVEL_CEILING: u64 = 1024 << 20;
+const TOTAL_BUDGET: u64 = 1536 << 20;
+const MINIMUM_BUDGET: u64 = 48 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
@@ -51,17 +52,22 @@ impl Caches {
             .iter()
             .map(|channel| channel.format().bytes() as u64)
             .sum::<u64>();
+        let mut remaining = TOTAL_BUDGET;
         let budgets = pyramid
             .levels()
             .iter()
             .enumerate()
             .map(|(level, info)| {
                 let extent = info.extent();
-                if level < stored {
-                    return SOURCE_BUDGET;
-                }
-                let plane = u64::from(extent.x()) * u64::from(extent.y()) * channel_bytes;
-                (plane * u64::from(extent.z())).min(LEVEL_CEILING)
+                let wanted = if level < stored {
+                    SOURCE_BUDGET
+                } else {
+                    let plane = u64::from(extent.x()) * u64::from(extent.y()) * channel_bytes;
+                    plane * u64::from(extent.z())
+                };
+                let budget = wanted.min(remaining).max(MINIMUM_BUDGET);
+                remaining = remaining.saturating_sub(budget);
+                budget
             })
             .collect();
         Self {
