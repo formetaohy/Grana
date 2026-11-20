@@ -691,15 +691,8 @@ fn field(path: &Path, extent: Extent) {
         extent,
         Spacing::new(1.0, 1.0, 1.0),
     )];
-    let fill = |_: usize,
-                _: u32,
-                _: usize,
-                _: [u32; 3],
-                _: [u32; 3],
-                data: &mut [f32]|
-     -> Result<(), String> {
-        data.fill(64.0);
-        Ok(())
+    let fill = |block: grana_archive::Block| -> Result<grana_volume::VoxelData, String> {
+        Ok(grana_volume::VoxelData::F32(vec![64.0; block.voxels()]))
     };
     let mut progress = |_, _| {};
     grana_zarr::write_image(

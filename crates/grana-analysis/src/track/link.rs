@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use glam::Vec3;
 use grana_object::{Link, TrackParams};
 
-use super::assign::{self, Edge};
 use super::chain::Chains;
 use super::detection::{Detections, Grid};
+use crate::assign::{self, Edge};
 
 const DUMMY_COST: f64 = 1.0;
 const GAP_COST: f64 = 0.25;

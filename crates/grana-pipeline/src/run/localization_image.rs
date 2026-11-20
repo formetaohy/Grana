@@ -5,10 +5,10 @@ use grana_analysis::localization::{
     CompositionEntry, CompositionSpec, LocalizationComposition, LocalizationDepth,
     LocalizationGeometry, LocalizationLayout, LocalizationPreview, LocalizationRenderer,
 };
-use grana_archive::{Channel, Fill, ImageSpec};
+use grana_archive::{Block, Channel, Fill, ImageSpec};
 use grana_object::LocalizationSpec;
 use grana_raster::{Bitmap, Overlay};
-use grana_volume::{Extent, Level, Spacing};
+use grana_volume::{Extent, Level, Spacing, VoxelData};
 
 use super::localization_window::LocalizationWindow;
 use crate::event::Event;
@@ -214,26 +214,23 @@ fn write_stack(
         intensity: grana_volume::Intensity::new(0.0, 1.0),
         window: grana_volume::Intensity::new(0.0, 1.0),
     });
-    let fill = |_: usize,
-                _: u32,
-                channel: usize,
-                origin: [u32; 3],
-                extent: [u32; 3],
-                data: &mut [f32]|
-     -> Result<(), String> {
+    let fill = |block: Block| -> Result<VoxelData, String> {
         let width = size[0] as usize;
+        let origin = block.origin;
+        let extent = block.extent;
+        let mut values = vec![0u8; block.voxels()];
         for line in 0..extent[1] as usize {
             let row =
                 &pixels[((origin[2] as usize * size[1] as usize) + line + origin[1] as usize)
                     * width
                     * 3..];
             let start = line * extent[0] as usize;
-            let values = &mut data[start..start + extent[0] as usize];
-            for (column, value) in values.iter_mut().enumerate() {
-                *value = f32::from(row[(origin[0] as usize + column) * 3 + channel]);
+            let held = &mut values[start..start + extent[0] as usize];
+            for (column, value) in held.iter_mut().enumerate() {
+                *value = row[(origin[0] as usize + column) * 3 + block.channel];
             }
         }
-        Ok(())
+        Ok(VoxelData::U8(values))
     };
     let mut progress = |_: usize, _: usize| {};
     grana_tiff::write_archive(

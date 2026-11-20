@@ -1,3 +1,4 @@
+mod assign;
 mod budget;
 mod cell;
 mod channel;

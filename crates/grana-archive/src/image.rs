@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_volume::{Intensity, Level, VoxelFormat};
+use grana_volume::{Intensity, Level, VoxelData, VoxelFormat};
 
 pub struct Channel<'a> {
     pub name: &'a str,
@@ -10,10 +10,35 @@ pub struct Channel<'a> {
     pub window: Intensity,
 }
 
-pub type Filler<'a> = dyn Fn(usize, u32, usize, [u32; 3], [u32; 3], &mut [f32]) -> Result<(), String>
-    + Send
-    + Sync
-    + 'a;
+#[derive(Clone, Copy)]
+pub struct Block {
+    pub level: usize,
+    pub frame: u32,
+    pub channel: usize,
+    pub origin: [u32; 3],
+    pub extent: [u32; 3],
+}
+
+impl Block {
+    pub fn voxels(self) -> usize {
+        (self.extent[0] as usize) * (self.extent[1] as usize) * (self.extent[2] as usize)
+    }
+
+    pub fn check(self, format: VoxelFormat, data: &VoxelData) {
+        assert_eq!(
+            data.format().union(format),
+            Some(format),
+            "an exported block widens the sample type"
+        );
+        assert_eq!(
+            data.voxel_count(),
+            self.voxels(),
+            "an exported block covers every voxel of its extent"
+        );
+    }
+}
+
+pub type Filler<'a> = dyn Fn(Block) -> Result<VoxelData, String> + Send + Sync + 'a;
 
 #[derive(Clone, Copy)]
 pub enum Fill<'a> {

@@ -278,7 +278,7 @@ fn area_of(points: [[f32; 3]; 3]) -> f64 {
 }
 
 fn cap(radius: f32, reach: f32, gate: f32) -> f32 {
-    if !(radius.is_finite() && radius > 0.0) || reach < radius {
+    if !(radius.is_finite() && radius > 0.0) {
         return 0.0;
     }
     let height = (radius + gate - reach).clamp(0.0, 2.0 * radius);

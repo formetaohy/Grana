@@ -6,7 +6,7 @@ const CHECK: usize = 256;
 const EPSILON: f64 = 1.0e-12;
 
 #[derive(Clone, Copy)]
-pub(super) struct Edge {
+pub(crate) struct Edge {
     pub column: usize,
     pub cost: f64,
 }
@@ -33,7 +33,7 @@ impl PartialOrd for Candidate {
     }
 }
 
-pub(super) fn solve(
+pub(crate) fn solve(
     edges: &[Vec<Edge>],
     columns: usize,
     cancel: &AtomicBool,

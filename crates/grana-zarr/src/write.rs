@@ -2,11 +2,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_archive::{Fill, Filler, ImageSpec, Written};
-use grana_volume::{Level, VoxelFormat};
+use grana_archive::{Block, Fill, Filler, ImageSpec, Written};
+use grana_volume::{Level, Placement, VoxelData, VoxelFormat};
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
-use zarrs::array::{Array, ArrayBuilder, ArraySubset, data_type};
+use zarrs::array::{Array, ArrayBuilder, ArrayBytes, ArraySubset, FillValue, data_type};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
 
@@ -22,7 +22,8 @@ const AXIS_NAMES: [&str; 5] = ["t", "c", "z", "y", "x"];
 
 pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Error> {
     spec.check();
-    let expected = crate::space::image_space(spec.levels, spec.frames, spec.channels.len());
+    let expected =
+        crate::space::image_space(spec.levels, spec.frames, spec.channels.len(), spec.sample);
     let mut archive = Archive::create(path, expected)?;
     archive.image(spec)?;
     let bytes = archive.commit()?;
@@ -37,11 +38,6 @@ pub fn write_image(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, Err
 }
 
 pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String> {
-    assert_eq!(
-        spec.sample,
-        VoxelFormat::F32,
-        "an OME-Zarr image stores float samples"
-    );
     assert!(
         spec.interval.is_some(),
         "an OME-Zarr image declares its frame interval"
@@ -57,6 +53,7 @@ pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String>
     group
         .store_metadata()
         .map_err(|error| format!("failed to write the root metadata: {error}"))?;
+    let sample = spec.sample;
     let frames = spec.frames;
     let channels = spec.channels.len();
     let fill = spec.fill;
@@ -78,8 +75,8 @@ pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String>
         let array = ArrayBuilder::new(
             shape(spec.levels[level], frames, channels),
             chunk_shape(plan).to_vec(),
-            data_type::float32(),
-            0.0f32,
+            sample_type(sample),
+            blank(sample),
         )
         .subchunk_shape(subchunk_shape(plan).to_vec())
         .bytes_to_bytes_codecs(vec![Arc::new(ZstdCodec::new(3, false))])
@@ -100,6 +97,7 @@ pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String>
                     &array,
                     plan,
                     filler,
+                    sample,
                     &mut LevelProgress {
                         base,
                         total,
@@ -117,6 +115,7 @@ pub(crate) fn build(path: &Path, spec: &mut ImageSpec<'_>) -> Result<(), String>
                     plan,
                     child,
                     &plans[level - 1],
+                    sample,
                     &mut LevelProgress {
                         base,
                         total,
@@ -143,6 +142,7 @@ fn fill_level(
     array: &Array<FilesystemStore>,
     plan: &Plan,
     fill: &Filler<'_>,
+    sample: VoxelFormat,
     progress: &mut LevelProgress<'_>,
 ) -> Result<(), String> {
     let block = plan.block();
@@ -154,20 +154,14 @@ fn fill_level(
         &mut |done, _| (progress.progress)(report + done, total),
         |index| {
             let located = plan.locate(index);
-            let data = staged(block, &located, voxels, |target| {
-                fill(
-                    plan.level(),
-                    located.frame,
-                    located.channel as usize,
-                    located.origin,
-                    located.length,
-                    target,
-                )
-            })?;
+            let data = staged(block, &located, plan.level(), sample, fill)?;
             array
-                .store_chunk(&plan.indices(&located), data)
+                .store_chunk(
+                    &plan.indices(&located),
+                    ArrayBytes::new_flen(data.to_le_bytes()),
+                )
                 .map_err(|error| format!("failed to write a chunk: {error}"))?;
-            Ok((voxels * size_of::<f32>()) as u64)
+            Ok((voxels * sample.bytes()) as u64)
         },
     )?;
     Ok(())
@@ -178,6 +172,7 @@ fn derive_level(
     plan: &Plan,
     child: &Array<FilesystemStore>,
     source: &Plan,
+    sample: VoxelFormat,
     progress: &mut LevelProgress<'_>,
 ) -> Result<(), String> {
     let block = plan.block();
@@ -193,46 +188,95 @@ fn derive_level(
                 return Err(CANCELLED.to_string());
             }
             let located = plan.locate(index);
-            let data = staged(block, &located, voxels, |target| {
-                reduce(child, source, &located, target)
-            })?;
+            let data = derived(block, &located, sample, child, source)?;
             array
-                .store_chunk(&plan.indices(&located), data)
+                .store_chunk(
+                    &plan.indices(&located),
+                    ArrayBytes::new_flen(data.to_le_bytes()),
+                )
                 .map_err(|error| format!("failed to write a chunk: {error}"))?;
-            Ok((voxels * size_of::<f32>()) as u64)
+            Ok((voxels * sample.bytes()) as u64)
         },
     )?;
     Ok(())
 }
 
+fn request(plan: usize, located: &Located) -> Block {
+    Block {
+        level: plan,
+        frame: located.frame,
+        channel: located.channel as usize,
+        origin: located.origin,
+        extent: located.length,
+    }
+}
+
 fn staged(
     block: Chunk,
     located: &Located,
-    voxels: usize,
-    write: impl FnOnce(&mut [f32]) -> Result<(), String>,
-) -> Result<Vec<f32>, String> {
-    let shape = block.shape();
-    let mut data = vec![0.0f32; voxels];
-    if (0..3).all(|axis| located.length[axis] == shape[axis]) {
-        write(&mut data)?;
+    level: usize,
+    sample: VoxelFormat,
+    fill: &Filler<'_>,
+) -> Result<VoxelData, String> {
+    let extent = block.shape();
+    let held = request(level, located);
+    let data = fill(held)?;
+    held.check(sample, &data);
+    let data = data.cast(sample);
+    if (0..3).all(|axis| located.length[axis] == extent[axis]) {
         return Ok(data);
     }
-    let length = located.length;
-    let mut region = vec![0.0f32; length[0] as usize * length[1] as usize * length[2] as usize];
-    write(&mut region)?;
-    block.stage(length, &region, &mut data);
-    Ok(data)
+    let mut staged = VoxelData::blank(sample, block.voxels());
+    staged_into(&mut staged, extent, located.length, &data);
+    Ok(staged)
+}
+
+fn staged_into(target: &mut VoxelData, extent: [u32; 3], length: [u32; 3], data: &VoxelData) {
+    for plane in 0..length[2] {
+        target.blit(
+            data,
+            Placement::new(length[0], [0, plane * length[1]]),
+            Placement::new(extent[0], [0, plane * extent[1]]),
+            length[0],
+            length[1],
+        );
+    }
+}
+
+fn derived(
+    block: Chunk,
+    located: &Located,
+    sample: VoxelFormat,
+    child: &Array<FilesystemStore>,
+    source: &Plan,
+) -> Result<VoxelData, String> {
+    let extent = block.shape();
+    let count =
+        (located.length[0] as usize) * (located.length[1] as usize) * (located.length[2] as usize);
+    let mut values = Vec::with_capacity(count);
+    reduce(child, source, located, &mut values)?;
+    let mut cursor = 0;
+    let sampled = VoxelData::from_values(sample, count, || {
+        let value = values[cursor];
+        cursor += 1;
+        value
+    });
+    if (0..3).all(|axis| located.length[axis] == extent[axis]) {
+        return Ok(sampled);
+    }
+    let mut staged = VoxelData::blank(sample, block.voxels());
+    staged_into(&mut staged, extent, located.length, &sampled);
+    Ok(staged)
 }
 
 fn reduce(
     child: &Array<FilesystemStore>,
     source: &Plan,
     located: &Located,
-    region: &mut [f32],
+    values: &mut Vec<f64>,
 ) -> Result<(), String> {
     let extent = source.extent();
     let width = located.length[0] as usize;
-    let line = located.length[1] as usize;
     let origin = [
         2 * located.origin[0],
         2 * located.origin[1],
@@ -258,9 +302,7 @@ fn reduce(
             u64::from(origin[1])..u64::from(end[1]),
             u64::from(origin[0])..u64::from(end[0]),
         ];
-        let read = child
-            .retrieve_array_subset::<Vec<f32>>(&ArraySubset::new_with_ranges(&ranges))
-            .map_err(|error| format!("failed to read the finer level back: {error}"))?;
+        let read = retrieve(child, &ArraySubset::new_with_ranges(&ranges))?;
         let depth_z = (high - low) as usize;
         for slice in 0..held {
             for y in 0..located.length[1] {
@@ -275,20 +317,94 @@ fn reduce(
                                 let at = column as usize
                                     + covered[0] as usize * (row as usize)
                                     + plane * dz as usize;
-                                sum += f64::from(read[at]);
+                                sum += read.wide_value(at);
                                 count += 1.0;
                             }
                         }
                     }
                     debug_assert!(count > 0.0, "a derived voxel averages its children");
-                    region[x as usize + width * (y as usize + line * (z + slice) as usize)] =
-                        (sum / count) as f32;
+                    values.push(sum / count);
                 }
             }
         }
         z += held;
     }
+    debug_assert_eq!(
+        values.len(),
+        width * located.length[1] as usize * located.length[2] as usize
+    );
     Ok(())
+}
+
+fn retrieve(array: &Array<FilesystemStore>, subset: &ArraySubset) -> Result<VoxelData, String> {
+    let failed =
+        |error: zarrs::array::ArrayError| format!("failed to read the finer level back: {error}");
+    let held = array.data_type();
+    if held == &data_type::uint8() {
+        Ok(VoxelData::U8(
+            array
+                .retrieve_array_subset::<Vec<u8>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::uint16() {
+        Ok(VoxelData::U16(
+            array
+                .retrieve_array_subset::<Vec<u16>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::uint32() {
+        Ok(VoxelData::U32(
+            array
+                .retrieve_array_subset::<Vec<u32>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::uint64() {
+        Ok(VoxelData::U64(
+            array
+                .retrieve_array_subset::<Vec<u64>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::int8() {
+        Ok(VoxelData::I8(
+            array
+                .retrieve_array_subset::<Vec<i8>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::int16() {
+        Ok(VoxelData::I16(
+            array
+                .retrieve_array_subset::<Vec<i16>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::int32() {
+        Ok(VoxelData::I32(
+            array
+                .retrieve_array_subset::<Vec<i32>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::int64() {
+        Ok(VoxelData::I64(
+            array
+                .retrieve_array_subset::<Vec<i64>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::float32() {
+        Ok(VoxelData::F32(
+            array
+                .retrieve_array_subset::<Vec<f32>>(subset)
+                .map_err(failed)?,
+        ))
+    } else if held == &data_type::float64() {
+        Ok(VoxelData::F64(
+            array
+                .retrieve_array_subset::<Vec<f64>>(subset)
+                .map_err(failed)?,
+        ))
+    } else {
+        Err(format!(
+            "the finer level stores the unsupported data type `{held}`"
+        ))
+    }
 }
 
 fn slab(extent: [u32; 3]) -> u32 {
@@ -297,6 +413,36 @@ fn slab(extent: [u32; 3]) -> u32 {
         inner / 2
     } else {
         inner
+    }
+}
+
+fn sample_type(sample: VoxelFormat) -> zarrs::array::DataType {
+    match sample {
+        VoxelFormat::U8 => data_type::uint8(),
+        VoxelFormat::U16 => data_type::uint16(),
+        VoxelFormat::U32 => data_type::uint32(),
+        VoxelFormat::U64 => data_type::uint64(),
+        VoxelFormat::I8 => data_type::int8(),
+        VoxelFormat::I16 => data_type::int16(),
+        VoxelFormat::I32 => data_type::int32(),
+        VoxelFormat::I64 => data_type::int64(),
+        VoxelFormat::F32 => data_type::float32(),
+        VoxelFormat::F64 => data_type::float64(),
+    }
+}
+
+fn blank(sample: VoxelFormat) -> FillValue {
+    match sample {
+        VoxelFormat::U8 => FillValue::from(0u8),
+        VoxelFormat::U16 => FillValue::from(0u16),
+        VoxelFormat::U32 => FillValue::from(0u32),
+        VoxelFormat::U64 => FillValue::from(0u64),
+        VoxelFormat::I8 => FillValue::from(0i8),
+        VoxelFormat::I16 => FillValue::from(0i16),
+        VoxelFormat::I32 => FillValue::from(0i32),
+        VoxelFormat::I64 => FillValue::from(0i64),
+        VoxelFormat::F32 => FillValue::from(0.0f32),
+        VoxelFormat::F64 => FillValue::from(0.0f64),
     }
 }
 

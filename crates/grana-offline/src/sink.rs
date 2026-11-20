@@ -5,7 +5,7 @@ use grana_archive::{Channel, Fill, ImageSpec};
 use grana_render::Pixels;
 use grana_scene::Scene;
 use grana_video::{Recorder, Sequence};
-use grana_volume::{Extent, Level, Spacing};
+use grana_volume::{Extent, Level, Spacing, VoxelData};
 
 use crate::quantize::{Depth, Quantizer};
 
@@ -65,26 +65,27 @@ impl Sink {
                     Extent::new(size[0], size[1], 1),
                     Spacing::new(physical, physical, physical),
                 )];
-                let fill = |_: usize,
-                            _: u32,
-                            channel: usize,
-                            origin: [u32; 3],
-                            extent: [u32; 3],
-                            data: &mut [f32]|
-                 -> Result<(), String> {
+                let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+                    let extent = block.extent;
+                    let origin = block.origin;
+                    let mut values = vec![0u16; block.voxels()];
                     for line in 0..extent[1] {
                         let row = picture.row(origin[1] + line).as_chunks::<16>().0;
                         let start = (line * extent[0]) as usize;
-                        let values = &mut data[start..start + extent[0] as usize];
-                        for (value, texel) in values.iter_mut().zip(&row[origin[0] as usize..]) {
-                            *value = f32::from_le_bytes(
-                                texel[channel * 4..channel * 4 + 4]
+                        let held = &mut values[start..start + extent[0] as usize];
+                        for (value, texel) in held.iter_mut().zip(&row[origin[0] as usize..]) {
+                            let sample = f32::from_le_bytes(
+                                texel[block.channel * 4..block.channel * 4 + 4]
                                     .try_into()
                                     .expect("a picture sample spans four bytes"),
-                            ) * f32::from(u16::MAX);
+                            );
+                            *value = (sample * f32::from(u16::MAX))
+                                .round()
+                                .clamp(0.0, f32::from(u16::MAX))
+                                as u16;
                         }
                     }
-                    Ok(())
+                    Ok(VoxelData::U16(values))
                 };
                 let cancel = AtomicBool::new(false);
                 let mut progress = |_: usize, _: usize| {};

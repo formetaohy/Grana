@@ -7,7 +7,6 @@ use grana_object::{FilamentStatistics, FilamentTopology};
 
 use super::Grid;
 use super::spanning::Spanning;
-use super::volume;
 
 pub(super) struct Point {
     pub position: [f32; 3],
@@ -27,8 +26,7 @@ pub(super) fn trace(mask: &[u8], distance: &[u16], grid: &Grid, min_length: f32)
         return Vec::new();
     }
     spanning.build(distance, grid);
-    let spacing = grid.mean_spacing();
-    let radius = |index: usize| volume::radius(distance[index], spacing);
+    let radius = |index: usize| grid.radius(distance[index]);
     let components = spanning.components();
     let mut filaments = components
         .iter()

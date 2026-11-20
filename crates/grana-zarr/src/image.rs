@@ -5,7 +5,9 @@ use std::sync::{Arc, OnceLock};
 use grana_volume::{
     Axial, ChannelInfo, Intensity, Probe, Pyramid, VoxelData, VoxelFormat, name_of, tint_of,
 };
-use zarrs::array::data_type::{float32, uint8, uint16};
+use zarrs::array::data_type::{
+    float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
+};
 use zarrs::array::{Array, ArraySubset, CodecOptions};
 use zarrs::group::Group;
 use zarrs::storage::ReadableStorageTraits;
@@ -391,18 +393,25 @@ fn supported_format(
     array: &Array<dyn ReadableStorageTraits>,
 ) -> Result<VoxelFormat, Error> {
     let data_type = array.data_type();
-    if data_type == &uint8() {
-        Ok(VoxelFormat::U8)
-    } else if data_type == &uint16() {
-        Ok(VoxelFormat::U16)
-    } else if data_type == &float32() {
-        Ok(VoxelFormat::F32)
-    } else {
-        Err(Error::Unsupported {
+    let formats = [
+        (uint8(), VoxelFormat::U8),
+        (uint16(), VoxelFormat::U16),
+        (uint32(), VoxelFormat::U32),
+        (uint64(), VoxelFormat::U64),
+        (int8(), VoxelFormat::I8),
+        (int16(), VoxelFormat::I16),
+        (int32(), VoxelFormat::I32),
+        (int64(), VoxelFormat::I64),
+        (float32(), VoxelFormat::F32),
+        (float64(), VoxelFormat::F64),
+    ];
+    formats
+        .into_iter()
+        .find_map(|(held, format)| (data_type == &held).then_some(format))
+        .ok_or_else(|| Error::Unsupported {
             path: path.to_string(),
             detail: format!("the voxel data type `{data_type}` is not supported"),
         })
-    }
 }
 
 fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData, Error> {
@@ -413,18 +422,40 @@ fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData
     let options = CodecOptions::default();
     let array = cache.array();
     let data_type = array.data_type();
+    macro_rules! held {
+        ($variant:ident, $type:ty) => {
+            Ok(VoxelData::$variant(
+                cache
+                    .retrieve::<$type>(subset, &options)
+                    .map_err(&mut read)?,
+            ))
+        };
+    }
     if data_type == &uint8() {
-        Ok(VoxelData::U8(
-            cache.retrieve::<u8>(subset, &options).map_err(&mut read)?,
-        ))
+        held!(U8, u8)
     } else if data_type == &uint16() {
-        Ok(VoxelData::U16(
-            cache.retrieve::<u16>(subset, &options).map_err(&mut read)?,
-        ))
+        held!(U16, u16)
+    } else if data_type == &uint32() {
+        held!(U32, u32)
+    } else if data_type == &uint64() {
+        held!(U64, u64)
+    } else if data_type == &int8() {
+        held!(I8, i8)
+    } else if data_type == &int16() {
+        held!(I16, i16)
+    } else if data_type == &int32() {
+        held!(I32, i32)
+    } else if data_type == &int64() {
+        held!(I64, i64)
+    } else if data_type == &float64() {
+        held!(F64, f64)
+    } else if data_type == &float32() {
+        held!(F32, f32)
     } else {
-        Ok(VoxelData::F32(
-            cache.retrieve::<f32>(subset, &options).map_err(&mut read)?,
-        ))
+        Err(Error::Unsupported {
+            path: path.to_string(),
+            detail: format!("the voxel data type `{data_type}` is not supported"),
+        })
     }
 }
 
@@ -459,17 +490,17 @@ fn channels(
             let omero_window = metadata
                 .and_then(|metadata| metadata.window)
                 .and_then(valid);
-            let sampled = if data_range.is_none() && omero_window.is_none() {
-                sample_range(levels, index as usize, frames)?
-            } else {
-                None
-            };
+            if let Some(intensity) = data_range.or(omero_window) {
+                let window = omero_window.or(data_range).unwrap_or(intensity);
+                return Ok(ChannelInfo::new(name, tint, intensity, window, format));
+            }
+            let sampled = sample_range(levels, index as usize, frames)?;
             Ok(ChannelInfo::resolve(
                 name,
                 tint,
                 format,
-                &[data_range, omero_window, sampled],
-                &[omero_window, data_range, sampled],
+                &[sampled],
+                &[sampled],
             ))
         })
         .collect()

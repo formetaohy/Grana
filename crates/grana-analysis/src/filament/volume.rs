@@ -2,24 +2,17 @@ use glam::Vec3;
 use grana_volume::{Region, VoxelData};
 
 use super::Grid;
+use super::neighbour;
 use crate::local::{LocalField, RowKey};
 use grana_object::Mask;
-
-const AXIS: u16 = 16;
-const FACE: u16 = 23;
-const CUBE: u16 = 27;
 
 const SCALE: f32 = 16.0;
 const MINIMUM_RADIUS: f32 = 0.5;
 
 type Chamfer = ([isize; 3], u16);
 
-const FORWARD: [Chamfer; 13] = forward();
-
-const BACKWARD: [Chamfer; 13] = backward();
-
-pub(super) fn radius(distance: u16, spacing: f32) -> f32 {
-    ((f32::from(distance) / SCALE) - 0.5).max(MINIMUM_RADIUS) * spacing
+pub(super) fn radius(distance: u16, unit: f32) -> f32 {
+    ((f32::from(distance) / SCALE) - 0.5).max(MINIMUM_RADIUS) * unit
 }
 
 pub(super) struct Gate<'a> {
@@ -59,8 +52,21 @@ pub(super) fn distance(mask: &[u8], grid: &Grid, distance: &mut [u16]) {
     for (index, value) in mask.iter().enumerate() {
         distance[index] = if *value != 0 { u16::MAX } else { 0 };
     }
-    sweep(mask, grid, distance, &FORWARD, false);
-    sweep(mask, grid, distance, &BACKWARD, true);
+    let weights = weights(grid, grid.unit());
+    let forward = weights.map(|(offset, weight)| (offset.map(|value| -value), weight));
+    sweep(mask, grid, distance, &forward, false);
+    sweep(mask, grid, distance, &weights, true);
+}
+
+fn weights(grid: &Grid, unit: f32) -> [Chamfer; 13] {
+    neighbour::HALF.map(|position| {
+        let offset = neighbour::OFFSET[position];
+        let length = (0..3)
+            .map(|axis| (offset[axis] as f32 * grid.spacing[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        (offset, (SCALE * length / unit).round() as u16)
+    })
 }
 
 fn fill<T: Sample>(
@@ -150,48 +156,6 @@ fn sweep(mask: &[u8], grid: &Grid, distance: &mut [u16], offsets: &[Chamfer; 13]
             }
         }
     }
-}
-
-const fn forward() -> [Chamfer; 13] {
-    let mut table = [([0isize; 3], 0u16); 13];
-    let mut found = 0;
-    let mut z = -1isize;
-    while z <= 1 {
-        let mut y = -1isize;
-        while y <= 1 {
-            let mut x = -1isize;
-            while x <= 1 {
-                if (x != 0 || y != 0 || z != 0)
-                    && (z < 0 || (z == 0 && (y < 0 || (y == 0 && x < 0))))
-                {
-                    let mut weight = AXIS;
-                    if (x != 0) as u16 + (y != 0) as u16 + (z != 0) as u16 == 2 {
-                        weight = FACE;
-                    } else if x != 0 && y != 0 && z != 0 {
-                        weight = CUBE;
-                    }
-                    table[found] = ([x, y, z], weight);
-                    found += 1;
-                }
-                x += 1;
-            }
-            y += 1;
-        }
-        z += 1;
-    }
-    table
-}
-
-const fn backward() -> [Chamfer; 13] {
-    let forward = forward();
-    let mut table = [([0isize; 3], 0u16); 13];
-    let mut index = 0;
-    while index < 13 {
-        let offset = forward[index].0;
-        table[index] = ([-offset[0], -offset[1], -offset[2]], forward[index].1);
-        index += 1;
-    }
-    table
 }
 
 trait Sample: Copy {

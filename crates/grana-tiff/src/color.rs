@@ -181,7 +181,7 @@ impl ColorModel {
                 }
                 _ => f64::from(data.value(base + channel)) / scale,
             };
-            (color.clamp(0.0, 1.0) * scale) as f32
+            color.clamp(0.0, 1.0) * scale
         })
     }
 }

@@ -1,4 +1,4 @@
-use grana_volume::Level;
+use grana_volume::{Level, VoxelFormat};
 
 use crate::shape;
 
@@ -6,8 +6,13 @@ const SHARD_OVERHEAD: u64 = 8 << 10;
 const COMPRESSED_EXPANSION: u64 = 128;
 const METADATA: u64 = 1 << 20;
 
-pub fn image_space(levels: &[Level], frames: u32, channels: usize) -> u64 {
-    planned(levels, u64::from(frames), channels as u64, 4)
+pub fn image_space(levels: &[Level], frames: u32, channels: usize, sample: VoxelFormat) -> u64 {
+    planned(
+        levels,
+        u64::from(frames),
+        channels as u64,
+        sample.bytes() as u64,
+    )
 }
 
 pub fn label_space(levels: &[Level], frames: usize, labels: usize) -> u64 {

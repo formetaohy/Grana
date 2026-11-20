@@ -4,7 +4,6 @@ use glam::Vec3;
 
 use super::Grid;
 use super::neighbour::{HALF, OFFSET};
-use super::volume;
 
 const SEARCH_BUDGET: usize = 64;
 
@@ -56,7 +55,7 @@ impl Spanning {
         if self.voxels.len() < 2 {
             return;
         }
-        let spacing = grid.mean_spacing();
+        let radius = |index: usize| grid.radius(distance[index]);
         for steps in 1..=3usize {
             for node in 0..self.voxels.len() {
                 for position in HALF {
@@ -76,8 +75,7 @@ impl Spanning {
                         .distance(Vec3::from(self.positions[other]));
                     if find(&mut self.parent, node as u32) == find(&mut self.parent, other as u32) {
                         self.generation += 1;
-                        if let Some((alternative, peak)) =
-                            self.cycle_path(node, other, distance, spacing)
+                        if let Some((alternative, peak)) = self.cycle_path(node, other, &radius)
                             && length + alternative < std::f32::consts::TAU * 2.0 * peak
                         {
                             continue;
@@ -122,16 +120,11 @@ impl Spanning {
         &mut self,
         source: usize,
         target: usize,
-        distance: &[u16],
-        spacing: f32,
+        radius: &impl Fn(usize) -> f32,
     ) -> Option<(f32, f32)> {
         let mut queue = VecDeque::new();
         self.visited[source] = self.generation;
-        queue.push_back((
-            source,
-            0.0f32,
-            volume::radius(distance[self.voxels[source]], spacing),
-        ));
+        queue.push_back((source, 0.0f32, radius(self.voxels[source])));
         let mut explored = 0;
         while let Some((node, travelled, peak)) = queue.pop_front() {
             explored += 1;
@@ -151,7 +144,7 @@ impl Spanning {
                 let step =
                     Vec3::from(self.positions[node]).distance(Vec3::from(self.positions[next]));
                 let travelled = travelled + step;
-                let peak = peak.max(volume::radius(distance[self.voxels[next]], spacing));
+                let peak = peak.max(radius(self.voxels[next]));
                 if next == target {
                     return Some((travelled, peak));
                 }

@@ -541,12 +541,62 @@ fn relates_objects_by_surface_centre_and_neighbours() {
         "the pair sits {} apart",
         pair.distance()
     );
+
+    let surface = Reference::new(&Shape::mesh(
+        first.geometry().expect("the ball carries geometry"),
+    ));
+    let measure = |reach: f32, gate: f32| {
+        let frame = surface.relate(&Shape::spots(approaching(reach)), gate, false);
+        (frame.distance(0), frame.contact(0))
+    };
+    let (reach, area) = measure(0.3, 0.0);
+    assert!(
+        (reach - 0.3).abs() < 0.15,
+        "the bead sits {reach:.2} µm from the surface"
+    );
+    let expected = std::f32::consts::TAU * BEAD * (BEAD - reach);
+    assert!(
+        (area - expected).abs() < 0.6,
+        "the cut bead shares {area:.2} µm² against {expected:.2}"
+    );
+    let (_, gated) = measure(0.3, 0.5);
+    assert!(
+        gated > area + 1.0,
+        "a wider gate shares {gated:.2} µm² against {area:.2}"
+    );
+    let (_, apart) = measure(3.0, 0.0);
+    assert_eq!(apart, 0.0, "a bead beyond its reach shares no face");
+}
+
+const BALL: f32 = 8.0;
+const BEAD: f32 = 1.2;
+const BALL_SPACING: f32 = 0.2;
+
+fn approach_grid() -> Level {
+    Level::new(
+        Extent::new(64, 64, 48),
+        Spacing::new(BALL_SPACING, BALL_SPACING, BALL_SPACING),
+    )
+}
+
+fn approaching(reach: f32) -> Arc<[Spot]> {
+    let center = approach_grid().voxel_center([24.0, 32.0, 24.0]);
+    let spot = Spot::new(
+        [
+            center[0] + BALL * BALL_SPACING + reach,
+            center[1],
+            center[2],
+        ],
+        BEAD,
+        1.0,
+    );
+    Arc::from(vec![spot])
 }
 
 fn relation_surfaces(balls: &[([f32; 3], f32)]) -> SurfaceSet {
     let volume = support::spheres(
         Extent::new(64, 64, 48),
-        Spacing::new(0.2, 0.2, 0.2),
+        approach_grid().spacing(),
         balls,
         HIGH,
     );
@@ -796,6 +846,7 @@ fn registers_channels_from_fiducial_beads() {
         }
     }
 }
+
 fn moved(source: &[f32], dims: [usize; 3], offset: [f32; 3]) -> Vec<f32> {
     let mut values = vec![0.0f32; source.len()];
     for z in 0..dims[2] {
@@ -1087,13 +1138,10 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
         intensity: Intensity::new(0.0, 50_000.0),
         window: Intensity::new(0.0, 50_000.0),
     }];
-    let fill = |_level: usize,
-                _frame: u32,
-                _channel: usize,
-                origin: [u32; 3],
-                length: [u32; 3],
-                data: &mut [f32]|
-     -> Result<(), String> {
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let origin = block.origin;
+        let length = block.extent;
+        let mut values = vec![0.0f32; block.voxels()];
         for z in 0..length[2] {
             for y in 0..length[1] {
                 for x in 0..length[0] {
@@ -1111,11 +1159,11 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
                             .sum::<f32>();
                         value += 40_000.0 * (-squared / (2.0 * 1.2 * 1.2)).exp();
                     }
-                    data[index] = value;
+                    values[index] = value;
                 }
             }
         }
-        Ok(())
+        Ok(VoxelData::F32(values))
     };
     let mut progress = |_, _| {};
     write_image(

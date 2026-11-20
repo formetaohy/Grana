@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+
 use grana_warp::Warp;
 
+use crate::assign::{self, Edge};
 use crate::drift::{self, Lattice, Sample};
 
 const BINS: usize = 64;
@@ -158,6 +162,13 @@ fn reach(reference: &[[f32; 3]], low: [f32; 3], high: [f32; 3]) -> f32 {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Candidate {
+    distance: f32,
+    moving: usize,
+    reference: usize,
+}
+
 fn pairs(
     reference: &[[f32; 3]],
     moving: &[[f32; 3]],
@@ -166,6 +177,22 @@ fn pairs(
     shift: [f32; 3],
     reach: f32,
 ) -> Vec<([f32; 3], [f32; 3])> {
+    let candidates = candidates(reference, moving, low, high, shift, reach);
+    matching(&candidates, moving.len(), reference.len(), reach)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, member)| member.map(|member| (reference[member], moving[index])))
+        .collect()
+}
+
+fn candidates(
+    reference: &[[f32; 3]],
+    moving: &[[f32; 3]],
+    low: [f32; 3],
+    high: [f32; 3],
+    shift: [f32; 3],
+    reach: f32,
+) -> Vec<Candidate> {
     let span = [0, 1, 2].map(|axis| (high[axis] - low[axis]).max(reach));
     let cells = [0, 1, 2].map(|axis| (span[axis] / reach).ceil().max(1.0) as isize);
     let cell = |point: &[f32; 3]| {
@@ -175,7 +202,7 @@ fn pairs(
                 .clamp(0.0, (cells[axis] - 1) as f32) as isize
         })
     };
-    let mut grid = std::collections::HashMap::<(isize, isize, isize), Vec<usize>>::new();
+    let mut grid = HashMap::<(isize, isize, isize), Vec<usize>>::new();
     for (index, point) in reference.iter().enumerate() {
         let at = cell(point);
         grid.entry((at[0], at[1], at[2])).or_default().push(index);
@@ -184,7 +211,6 @@ fn pairs(
     for (index, point) in moving.iter().enumerate() {
         let moved = [0, 1, 2].map(|axis| point[axis] - shift[axis]);
         let at = cell(&moved);
-        let mut best: Option<(f32, usize)> = None;
         for dz in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
             for dy in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
                 for dx in -NEIGHBOURHOOD..=NEIGHBOURHOOD {
@@ -204,30 +230,100 @@ fn pairs(
                     for member in members {
                         let other = &reference[*member];
                         let offset = [0, 1, 2].map(|axis| other[axis] - moved[axis]);
-                        let distance = offset.iter().map(|value| value * value).sum::<f32>();
-                        if distance <= reach * reach && best.is_none_or(|(best, _)| distance < best)
-                        {
-                            best = Some((distance, *member));
+                        let squared = offset.iter().map(|value| value * value).sum::<f32>();
+                        if squared <= reach * reach {
+                            found.push(Candidate {
+                                distance: squared.sqrt(),
+                                moving: index,
+                                reference: *member,
+                            });
                         }
                     }
                 }
             }
         }
-        if let Some((distance, member)) = best {
-            found.push((distance, index, member));
+    }
+    found
+}
+
+fn matching(
+    candidates: &[Candidate],
+    moving: usize,
+    reference: usize,
+    reach: f32,
+) -> Vec<Option<usize>> {
+    let mut parent = (0..moving + reference).collect::<Vec<usize>>();
+    for candidate in candidates {
+        join(&mut parent, candidate.moving, moving + candidate.reference);
+    }
+    let mut groups = HashMap::<usize, Vec<Candidate>>::new();
+    for candidate in candidates {
+        let root = find(&mut parent, candidate.moving);
+        groups.entry(root).or_default().push(*candidate);
+    }
+    let mut assigned = vec![None; moving];
+    for group in groups.into_values() {
+        let mut row_of = HashMap::<usize, usize>::new();
+        let mut rows = Vec::<usize>::new();
+        let mut column_of = HashMap::<usize, usize>::new();
+        let mut columns = Vec::<usize>::new();
+        for candidate in &group {
+            let row = *row_of.entry(candidate.moving).or_insert_with(|| {
+                rows.push(candidate.moving);
+                rows.len() - 1
+            });
+            debug_assert_eq!(rows[row], candidate.moving);
+            column_of.entry(candidate.reference).or_insert_with(|| {
+                columns.push(candidate.reference);
+                columns.len() - 1
+            });
+        }
+        let mut edges = vec![Vec::new(); rows.len()];
+        for candidate in &group {
+            edges[row_of[&candidate.moving]].push(Edge {
+                column: column_of[&candidate.reference],
+                cost: f64::from(candidate.distance) * f64::from(candidate.distance),
+            });
+        }
+        let penalty = rows.len() as f64 * f64::from(reach) * f64::from(reach) + 1.0;
+        for (row, held) in edges.iter_mut().enumerate() {
+            held.push(Edge {
+                column: columns.len() + row,
+                cost: penalty,
+            });
+        }
+        let cancel = AtomicBool::new(false);
+        let assignment = assign::solve(&edges, columns.len() + rows.len(), &cancel)
+            .expect("a fiducial pairing solves");
+        for (row, column) in assignment.into_iter().enumerate() {
+            if column < columns.len() {
+                assigned[rows[row]] = Some(columns[column]);
+            }
         }
     }
-    found.sort_by(|left, right| left.0.total_cmp(&right.0));
-    let mut claimed = vec![false; reference.len()];
-    let mut paired = Vec::with_capacity(found.len());
-    for (_, index, member) in found {
-        if claimed[member] {
-            continue;
-        }
-        claimed[member] = true;
-        paired.push((reference[member], moving[index]));
+    assigned
+}
+
+fn find(parent: &mut [usize], node: usize) -> usize {
+    let mut root = node;
+    while parent[root] != root {
+        root = parent[root];
     }
-    paired
+    let mut current = node;
+    while parent[current] != root {
+        let next = parent[current];
+        parent[current] = root;
+        current = next;
+    }
+    root
+}
+
+fn join(parent: &mut [usize], left: usize, right: usize) {
+    let left = find(parent, left);
+    let right = find(parent, right);
+    if left != right {
+        parent[right] = left;
+    }
 }
 
 fn lattice(low: [f32; 3], high: [f32; 3]) -> Lattice {

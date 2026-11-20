@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::Vec3;
-use grana_archive::{Channel as WriteChannel, Fill, Format, ImageSpec};
+use grana_archive::{Block, Channel as WriteChannel, Fill, Format, ImageSpec};
 use grana_scene::ObjectSet;
-use grana_volume::{Extent, Intensity, Level, Region, VoxelFormat};
+use grana_volume::{Extent, Intensity, Level, Region, VoxelData, VoxelFormat};
 use grana_warp::Warps;
 
 use crate::channels::Channels;
@@ -243,62 +243,40 @@ pub fn write_dataset(
             window: layer.window,
         })
         .collect::<Vec<_>>();
-    let fill = |level: usize,
-                time: u32,
-                channel: usize,
-                origin: [u32; 3],
-                extent: [u32; 3],
-                data: &mut [f32]| {
+    let fill = |block: Block| -> Result<VoxelData, String> {
         if cancel.load(Ordering::Relaxed) {
             return Err("the dataset export was cancelled".to_string());
         }
         let index = layers
-            .get(channel)
+            .get(block.channel)
             .map(|layer| layer.index)
-            .ok_or_else(|| format!("the export names no channel {channel}"))?;
+            .ok_or_else(|| format!("the export names no channel {}", block.channel))?;
         let base = origins
-            .get(level)
-            .ok_or_else(|| format!("the export names no resolution level {level}"))?;
+            .get(block.level)
+            .ok_or_else(|| format!("the export names no resolution level {}", block.level))?;
         let start = [
-            origin[0] + base[0],
-            origin[1] + base[1],
-            origin[2] + base[2],
+            block.origin[0] + base[0],
+            block.origin[1] + base[1],
+            block.origin[2] + base[2],
         ];
         let ranges = [
-            start[0]..start[0] + extent[0],
-            start[1]..start[1] + extent[1],
-            start[2]..start[2] + extent[2],
+            start[0]..start[0] + block.extent[0],
+            start[1]..start[1] + block.extent[1],
+            start[2]..start[2] + block.extent[2],
         ];
         let warp = drift
-            .get(time as usize)
+            .get(block.frame as usize)
             .map_or(&grana_warp::Warp::IDENTITY, |warps| warps.get(index));
-        let values = channels
-            .read_region(time, level, index, &ranges, warp)
-            .map_err(|error| error.to_string())?;
-        values.write_values(data);
-        Ok(())
+        channels
+            .read_region(block.frame, block.level, index, &ranges, warp)
+            .map_err(|error| error.to_string())
     };
     let mut image_total = 0usize;
     let mut image_progress = |done: usize, total: usize| {
         image_total = total;
         progress(done, total);
     };
-    let sample = match format {
-        Format::Zarr => VoxelFormat::F32,
-        Format::Tiff => channels
-            .pyramid()
-            .channels()
-            .iter()
-            .map(|channel| channel.format())
-            .reduce(|held, format| {
-                if held == format {
-                    held
-                } else {
-                    VoxelFormat::F32
-                }
-            })
-            .unwrap_or(VoxelFormat::F32),
-    };
+    let sample = sample_of(channels, &layers)?;
     let mut image = ImageSpec {
         name: &name,
         channels: &write_channels,
@@ -314,7 +292,7 @@ pub fn write_dataset(
     let mut written = 0usize;
     match format {
         Format::Zarr => {
-            let expected = grana_zarr::image_space(&levels, frames, layers.len())
+            let expected = grana_zarr::image_space(&levels, frames, layers.len(), sample)
                 + labels
                     .iter()
                     .map(|layer| {
@@ -382,4 +360,25 @@ pub fn write_dataset(
         levels: levels.len(),
         cropped: origins.iter().any(|origin| *origin != [0, 0, 0]),
     })
+}
+
+fn sample_of(channels: &Channels, layers: &[ChannelLayer]) -> Result<VoxelFormat, String> {
+    let mut sample: Option<VoxelFormat> = None;
+    for layer in layers {
+        let format = channels
+            .pyramid()
+            .channels()
+            .get(layer.index)
+            .ok_or_else(|| format!("the export names no channel {}", layer.index))?
+            .format();
+        sample = Some(match sample {
+            None => format,
+            Some(held) => held.union(format).ok_or_else(|| {
+                format!(
+                    "the dataset stores the voxel types {held:?} and {format:?}, and one archive image holds a single type"
+                )
+            })?,
+        });
+    }
+    sample.ok_or_else(|| "the dataset holds no channel to export".to_string())
 }

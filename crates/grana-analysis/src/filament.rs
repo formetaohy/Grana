@@ -67,8 +67,12 @@ impl Grid {
             .corner([0, 1, 2].map(|axis| (voxel[axis] + 0.5) * self.step[axis] as f32))
     }
 
-    pub(super) fn mean_spacing(&self) -> f32 {
-        (self.spacing[0] + self.spacing[1] + self.spacing[2]) / 3.0
+    pub(super) fn unit(&self) -> f32 {
+        self.spacing[0].min(self.spacing[1]).min(self.spacing[2])
+    }
+
+    pub(super) fn radius(&self, distance: u16) -> f32 {
+        volume::radius(distance, self.unit())
     }
 
     pub(super) fn voxel(&self, index: usize) -> [f32; 3] {

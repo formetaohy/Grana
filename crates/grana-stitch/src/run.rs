@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
+use grana_archive::{Block, Channel as WriteChannel, Fill, ImageSpec};
 use grana_exec::Cancel;
 use grana_image::{Image, Source};
-use grana_volume::{Extent, Intensity, Level, Spacing};
+use grana_volume::{Extent, Intensity, Level, Spacing, VoxelData};
 
 use crate::Error;
 use crate::mosaic::{self, Edge, Offset, Plane, Side};
@@ -86,17 +86,20 @@ pub fn stitch(request: &Request, cancel: &Cancel) -> Result<Summary, Error> {
     );
     let levels = mosaic.levels();
     let channels = mosaic.channels();
-    let fill = |level: usize,
-                time: u32,
-                channel: usize,
-                origin: [u32; 3],
-                length: [u32; 3],
-                out: &mut [f32]| {
-        assert_eq!(level, 0, "a stitched mosaic fills its finest level");
+    let fill = |block: Block| -> Result<VoxelData, String> {
+        assert_eq!(block.level, 0, "a stitched mosaic fills its finest level");
         if cancel.cancelled() {
             return Err(CANCELLED.to_string());
         }
-        mosaic.fill(time, channel, origin, length, out)
+        let mut values = vec![0.0f32; block.voxels()];
+        mosaic.fill(
+            block.frame,
+            block.channel,
+            block.origin,
+            block.extent,
+            &mut values,
+        )?;
+        Ok(VoxelData::F32(values))
     };
     let mut progress = |_: usize, _: usize| {};
     let mut image = ImageSpec {

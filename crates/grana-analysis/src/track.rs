@@ -2,7 +2,6 @@ use std::sync::atomic::AtomicBool;
 
 use grana_object::{TrackDetection, TrackParams, TrackSet};
 
-mod assign;
 mod chain;
 mod detection;
 mod junction;

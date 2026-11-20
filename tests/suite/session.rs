@@ -1651,9 +1651,8 @@ fn rewrite_field(path: &std::path::Path, extent: Extent) {
         window: grana_volume::Intensity::new(0.0, 255.0),
     }];
     let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
-    let fill = |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
-        data.fill(80.0);
-        Ok(())
+    let fill = |block: grana_archive::Block| -> Result<grana_volume::VoxelData, String> {
+        Ok(grana_volume::VoxelData::F32(vec![80.0; block.voxels()]))
     };
     let mut progress = |_, _| {};
     grana_zarr::write_image(

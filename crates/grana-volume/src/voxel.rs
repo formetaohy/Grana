@@ -41,6 +41,7 @@ pub struct VoxelUnits<'a> {
 
 pub(crate) trait Sample: Copy + 'static {
     fn to_f32(self) -> f32;
+    fn to_f64(self) -> f64;
 }
 
 impl VoxelFormat {
@@ -89,6 +90,31 @@ impl VoxelFormat {
             Self::F64 => 7,
             Self::U64 => 8,
             Self::I64 => 9,
+        }
+    }
+
+    pub fn union(self, other: Self) -> Option<Self> {
+        use VoxelFormat::{F32, F64, I8, I16, I32, I64, U8, U16, U32, U64};
+        match (self, other) {
+            (held, other) if held == other => Some(held),
+            (U8, U16) | (U16, U8) => Some(U16),
+            (U8 | U16, U32) | (U32, U8 | U16) => Some(U32),
+            (U8 | U16 | U32, U64) | (U64, U8 | U16 | U32) => Some(U64),
+            (I8, I16) | (I16, I8) => Some(I16),
+            (I8 | I16, I32) | (I32, I8 | I16) => Some(I32),
+            (I8 | I16 | I32, I64) | (I64, I8 | I16 | I32) => Some(I64),
+            (U8, I8 | I16) | (I8 | I16, U8) => Some(I16),
+            (U16, I8 | I16) | (I8 | I16, U16) => Some(I32),
+            (U8 | U16, I32) | (I32, U8 | U16) => Some(I32),
+            (U32, I8 | I16 | I32) | (I8 | I16 | I32, U32) => Some(I64),
+            (U8 | U16 | U32, I64) | (I64, U8 | U16 | U32) => Some(I64),
+            (U8 | U16, F32) | (F32, U8 | U16) => Some(F32),
+            (I8 | I16, F32) | (F32, I8 | I16) => Some(F32),
+            (U32 | I32, F32) | (F32, U32 | I32) => Some(F64),
+            (U8 | U16 | U32, F64) | (F64, U8 | U16 | U32) => Some(F64),
+            (I8 | I16 | I32, F64) | (F64, I8 | I16 | I32) => Some(F64),
+            (F32, F64) | (F64, F32) => Some(F64),
+            _ => None,
         }
     }
 }
@@ -176,27 +202,82 @@ impl VoxelData {
         }
     }
 
-    pub fn from_values(format: VoxelFormat, count: usize, mut next: impl FnMut() -> f32) -> Self {
+    pub fn from_values(format: VoxelFormat, count: usize, mut next: impl FnMut() -> f64) -> Self {
         macro_rules! build {
             ($variant:ident, $type:ty, $minimum:expr, $maximum:expr) => {
                 Self::$variant(
                     (0..count)
-                        .map(|_| next().round().clamp($minimum as f32, $maximum as f32) as $type)
+                        .map(|_| next().round().clamp($minimum, $maximum) as $type)
                         .collect(),
                 )
             };
         }
         match format {
-            VoxelFormat::U8 => build!(U8, u8, u8::MIN, u8::MAX),
-            VoxelFormat::U16 => build!(U16, u16, u16::MIN, u16::MAX),
-            VoxelFormat::U32 => build!(U32, u32, u32::MIN, u32::MAX),
-            VoxelFormat::U64 => build!(U64, u64, u64::MIN, u64::MAX),
-            VoxelFormat::I8 => build!(I8, i8, i8::MIN, i8::MAX),
-            VoxelFormat::I16 => build!(I16, i16, i16::MIN, i16::MAX),
-            VoxelFormat::I32 => build!(I32, i32, i32::MIN, i32::MAX),
-            VoxelFormat::I64 => build!(I64, i64, i64::MIN, i64::MAX),
-            VoxelFormat::F32 => Self::F32((0..count).map(|_| next()).collect()),
-            VoxelFormat::F64 => Self::F64((0..count).map(|_| f64::from(next())).collect()),
+            VoxelFormat::U8 => build!(U8, u8, f64::from(u8::MIN), f64::from(u8::MAX)),
+            VoxelFormat::U16 => build!(U16, u16, f64::from(u16::MIN), f64::from(u16::MAX)),
+            VoxelFormat::U32 => build!(U32, u32, f64::from(u32::MIN), f64::from(u32::MAX)),
+            VoxelFormat::U64 => build!(U64, u64, 0.0, u64::MAX as f64),
+            VoxelFormat::I8 => build!(I8, i8, f64::from(i8::MIN), f64::from(i8::MAX)),
+            VoxelFormat::I16 => build!(I16, i16, f64::from(i16::MIN), f64::from(i16::MAX)),
+            VoxelFormat::I32 => build!(I32, i32, f64::from(i32::MIN), f64::from(i32::MAX)),
+            VoxelFormat::I64 => build!(I64, i64, i64::MIN as f64, i64::MAX as f64),
+            VoxelFormat::F32 => Self::F32((0..count).map(|_| next() as f32).collect()),
+            VoxelFormat::F64 => Self::F64((0..count).map(|_| next()).collect()),
+        }
+    }
+
+    pub fn cast(self, format: VoxelFormat) -> Self {
+        if self.format() == format {
+            return self;
+        }
+        assert_eq!(
+            self.format().union(format),
+            Some(format),
+            "a voxel cast widens the sample type"
+        );
+        macro_rules! cast {
+            ($data:expr) => {
+                match format {
+                    VoxelFormat::U8 => Self::U8($data.iter().map(|value| *value as u8).collect()),
+                    VoxelFormat::U16 => {
+                        Self::U16($data.iter().map(|value| *value as u16).collect())
+                    }
+                    VoxelFormat::U32 => {
+                        Self::U32($data.iter().map(|value| *value as u32).collect())
+                    }
+                    VoxelFormat::U64 => {
+                        Self::U64($data.iter().map(|value| *value as u64).collect())
+                    }
+                    VoxelFormat::I8 => Self::I8($data.iter().map(|value| *value as i8).collect()),
+                    VoxelFormat::I16 => {
+                        Self::I16($data.iter().map(|value| *value as i16).collect())
+                    }
+                    VoxelFormat::I32 => {
+                        Self::I32($data.iter().map(|value| *value as i32).collect())
+                    }
+                    VoxelFormat::I64 => {
+                        Self::I64($data.iter().map(|value| *value as i64).collect())
+                    }
+                    VoxelFormat::F32 => {
+                        Self::F32($data.iter().map(|value| *value as f32).collect())
+                    }
+                    VoxelFormat::F64 => {
+                        Self::F64($data.iter().map(|value| *value as f64).collect())
+                    }
+                }
+            };
+        }
+        match &self {
+            Self::U8(data) => cast!(data),
+            Self::U16(data) => cast!(data),
+            Self::U32(data) => cast!(data),
+            Self::U64(data) => cast!(data),
+            Self::I8(data) => cast!(data),
+            Self::I16(data) => cast!(data),
+            Self::I32(data) => cast!(data),
+            Self::I64(data) => cast!(data),
+            Self::F32(data) => cast!(data),
+            Self::F64(data) => cast!(data),
         }
     }
 
@@ -375,6 +456,21 @@ impl VoxelData {
         }
     }
 
+    pub fn wide_value(&self, index: usize) -> f64 {
+        match self {
+            Self::U8(data) => wide_of(data, index),
+            Self::U16(data) => wide_of(data, index),
+            Self::U32(data) => wide_of(data, index),
+            Self::U64(data) => wide_of(data, index),
+            Self::I8(data) => wide_of(data, index),
+            Self::I16(data) => wide_of(data, index),
+            Self::I32(data) => wide_of(data, index),
+            Self::I64(data) => wide_of(data, index),
+            Self::F32(data) => wide_of(data, index),
+            Self::F64(data) => wide_of(data, index),
+        }
+    }
+
     pub fn region(&self, extent: Extent, x: Range<u32>, y: Range<u32>, z: Range<u32>) -> Self {
         assert!(
             x.start < x.end && x.end <= extent.x(),
@@ -455,6 +551,11 @@ fn for_each<T: Sample>(data: &[T], mut visit: impl FnMut(f32)) {
 fn value_of<T: Sample>(data: &[T], index: usize) -> f32 {
     assert!(index < data.len(), "the voxel lies inside the volume");
     data[index].to_f32()
+}
+
+fn wide_of<T: Sample>(data: &[T], index: usize) -> f64 {
+    assert!(index < data.len(), "the voxel lies inside the volume");
+    data[index].to_f64()
 }
 
 fn gather<T: Copy>(data: &[T], offset: usize, stride: usize, count: usize) -> Vec<T> {
@@ -543,6 +644,10 @@ macro_rules! sample {
             fn to_f32(self) -> f32 {
                 self as f32
             }
+
+            fn to_f64(self) -> f64 {
+                self as f64
+            }
         }
     };
 }
@@ -560,10 +665,18 @@ impl Sample for f32 {
     fn to_f32(self) -> f32 {
         self
     }
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
 }
 
 impl Sample for f64 {
     fn to_f32(self) -> f32 {
         self as f32
+    }
+
+    fn to_f64(self) -> f64 {
+        self
     }
 }

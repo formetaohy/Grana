@@ -40,20 +40,23 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         intensity: Intensity::new(0.0, 4096.0),
         window: Intensity::new(0.0, 4096.0),
     }];
-    let fill = |level, _frame, _channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
-        let scale = 1u32 << level;
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let scale = 1u32 << block.level;
+        let origin = block.origin;
+        let extent = block.extent;
+        let mut values = vec![0.0f32; block.voxels()];
         for z in 0..extent[2] {
             for y in 0..extent[1] {
                 for x in 0..extent[0] {
                     let index = x as usize
                         + extent[0] as usize * (y as usize + extent[1] as usize * z as usize);
-                    data[index] = ((origin[0] + x) * scale
+                    values[index] = ((origin[0] + x) * scale
                         + 1000 * (origin[1] + y) * scale
                         + 1000000 * (origin[2] + z)) as f32;
                 }
             }
         }
-        Ok(())
+        Ok(VoxelData::F32(values))
     };
     let mut progress = |_, _| {};
     let path = temp.path().join("pyramid.ome.tif");
@@ -297,6 +300,69 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         refused.is_err_and(|detail| detail.contains("one depth")),
         "an OME-TIFF refuses a pyramid whose coarse level stores fewer planes"
     );
+
+    let wide = Extent::new(16, 8, 4);
+    let values = (0..wide.voxel_count())
+        .map(|index| 16_777_217u32 + index as u32)
+        .collect::<Vec<_>>();
+    let volume = Volume::new(
+        wide,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "signal",
+            [1.0, 1.0, 1.0],
+            VoxelData::U32(values.clone()),
+        )],
+    );
+    let wide_image = Arc::new(
+        Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+            .expect("the wide image opens"),
+    );
+    for name in ["wide.ome.tif", "wide.ome.zarr"] {
+        let mut progress = |_, _| {};
+        let summary = grana_pipeline::write_dataset(
+            DatasetSpec {
+                path: temp.path().join(name),
+                name: "wide".to_string(),
+                channels: vec![ChannelLayer {
+                    index: 0,
+                    name: "signal".to_string(),
+                    tint: [1.0, 1.0, 1.0],
+                    intensity: Intensity::new(0.0, 20_000_000.0),
+                    window: Intensity::new(0.0, 20_000_000.0),
+                }],
+                levels: wide_image.pyramid().levels().to_vec(),
+                origins: vec![[0, 0, 0]; wide_image.pyramid().level_count()],
+                placement: [0.0; 3],
+                frames: 1,
+                interval: 1.0,
+                drift: Vec::new(),
+                labels: Vec::new(),
+            },
+            &Channels::stored(Arc::clone(&wide_image)),
+            &AtomicBool::new(false),
+            &mut progress,
+        )
+        .expect("the wide dataset exports");
+        let read = if name.ends_with(".zarr") {
+            grana_zarr::Image::open(summary.path())
+                .expect("the wide archive opens")
+                .read_region(0, 0, 0, 0..16, 0..8, 0..4)
+                .expect("the wide channel reads")
+        } else {
+            grana_tiff::Image::open(summary.path(), 0)
+                .expect("the wide picture opens")
+                .read_region(0, 0, 0, 0..16, 0..8, 0..4)
+                .expect("the wide plane reads")
+        };
+        let VoxelData::U32(stored) = read else {
+            panic!("{name} keeps the voxel type of its dataset");
+        };
+        assert_eq!(
+            stored, values,
+            "{name} keeps samples beyond the float mantissa"
+        );
+    }
 }
 
 #[test]
@@ -322,19 +388,17 @@ fn writes_a_sixteen_bit_ome_tiff() {
         intensity: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
     });
-    let fill = |_level: usize,
-                _frame: u32,
-                channel: usize,
-                origin: [u32; 3],
-                length: [u32; 3],
-                data: &mut [f32]| {
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let origin = block.origin;
+        let length = block.extent;
+        let mut values = vec![0u16; block.voxels()];
         for y in 0..length[1] {
             for x in 0..length[0] {
                 let index = (origin[0] + x) as usize + size[0] as usize * (origin[1] + y) as usize;
-                data[(x + length[0] * y) as usize] = f32::from(pixels[index * 3 + channel]);
+                values[(x + length[0] * y) as usize] = pixels[index * 3 + block.channel];
             }
         }
-        Ok(())
+        Ok(VoxelData::U16(values))
     };
     let mut progress = |_, _| {};
     grana_tiff::write_archive(
@@ -407,19 +471,22 @@ fn writes_a_sharded_ome_zarr_level() {
         intensity: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
     }];
-    let fill = |_level, _frame, _channel, origin: [u32; 3], length: [u32; 3], data: &mut [f32]| {
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let origin = block.origin;
+        let length = block.extent;
+        let mut values = vec![0.0f32; block.voxels()];
         for z in 0..length[2] {
             for y in 0..length[1] {
                 for x in 0..length[0] {
                     let index = x as usize
                         + length[0] as usize * (y as usize + length[1] as usize * z as usize);
-                    data[index] = (origin[0] + x) as f32
+                    values[index] = (origin[0] + x) as f32
                         + 1000.0 * (origin[1] + y) as f32
                         + 1_000_000.0 * (origin[2] + z) as f32;
                 }
             }
         }
-        Ok(())
+        Ok(VoxelData::F32(values))
     };
     let mut progress = |_, _| {};
     write_image(
@@ -513,8 +580,11 @@ fn write_zarr(root: &std::path::Path) {
             window: Intensity::new(0.0, 1024.0),
         },
     ];
-    let fill = |level, frame, channel, origin: [u32; 3], extent: [u32; 3], data: &mut [f32]| {
-        let scale = 1u32 << level;
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let scale = 1u32 << block.level;
+        let origin = block.origin;
+        let extent = block.extent;
+        let mut values = vec![0.0f32; block.voxels()];
         for z in 0..extent[2] {
             for y in 0..extent[1] {
                 for x in 0..extent[0] {
@@ -525,11 +595,11 @@ fn write_zarr(root: &std::path::Path) {
                         (origin[1] + y) * scale,
                         (origin[2] + z) * scale,
                     ];
-                    data[index] = sample(channel, frame, position) as f32;
+                    values[index] = sample(block.channel, block.frame, position) as f32;
                 }
             }
         }
-        Ok(())
+        Ok(VoxelData::F32(values))
     };
     let mut progress = |_, _| {};
     write_image(
@@ -701,15 +771,8 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
         intensity: Intensity::new(0.0, 255.0),
         window: Intensity::new(0.0, 255.0),
     }];
-    let fill = move |_: usize,
-                     _: u32,
-                     _: usize,
-                     _: [u32; 3],
-                     _: [u32; 3],
-                     data: &mut [f32]|
-          -> Result<(), String> {
-        data.fill(value);
-        Ok(())
+    let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
+        Ok(VoxelData::F32(vec![value; block.voxels()]))
     };
     let mut progress = |_, _| {};
     write_image(
@@ -953,14 +1016,10 @@ fn exports_a_region_of_the_channels_and_labels() {
     let data = written
         .read_region(0, 0, 0, 0..8, 0..8, 0..4)
         .expect("the cropped channel reads");
-    let VoxelData::F32(data) = data else {
-        panic!("the cropped channel stores float voxels");
+    let VoxelData::U16(data) = data else {
+        panic!("the cropped channel keeps the voxel type of its dataset");
     };
-    assert_eq!(
-        data[0],
-        4.0 + 20.0 + 100.0,
-        "the crop starts at voxel 4,2,1"
-    );
+    assert_eq!(data[0], 124, "the crop starts at voxel 4,2,1");
     let labels = written.labels().expect("the cropped labels read");
     let label = labels.get("spot").expect("the cropped label exists");
     let crop = label
@@ -1214,9 +1273,8 @@ fn writes_and_reads_a_label_image() {
         intensity: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
     }];
-    let image_fill = |_: usize, _: u32, _: usize, _: [u32; 3], _: [u32; 3], data: &mut [f32]| {
-        data.fill(0.0);
-        Ok(())
+    let image_fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        Ok(VoxelData::F32(vec![0.0; block.voxels()]))
     };
     let mut progress = |_, _| {};
     write_image(
@@ -1492,7 +1550,8 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
         .map(|level| level.extent().voxel_count())
         .sum::<u64>();
     assert!(
-        grana_zarr::image_space(&levels, 2, 3) >= voxels * 2 * 3 * 4,
+        grana_zarr::image_space(&levels, 2, 3, grana_volume::VoxelFormat::F32)
+            >= voxels * 2 * 3 * 4,
         "the planned image covers every stored float voxel"
     );
     assert!(
