@@ -65,6 +65,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         [offset, target.jitter],
         intact,
         clamp,
+        taa::weight(!intact, phase),
     );
     let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume, volume);
     let group = taa.bind(device, target.scene.color(), target.taa.read());

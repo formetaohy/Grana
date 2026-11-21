@@ -30,13 +30,23 @@ const SHADER: &str = concat!(
     include_str!("shader/taa.wgsl")
 );
 
-const FEEDBACK: f32 = 1.0 / 16.0;
+const MOVING_WEIGHT: f32 = 1.0 / 16.0;
 
 const MOTION_REACH: f32 = 8.0;
 
 pub const SETTLE: u32 = 32;
 
 pub(crate) const APERTURE_PHASE: u32 = 8;
+
+pub(crate) fn weight(moving: bool, samples: u32) -> f32 {
+    if moving {
+        return MOVING_WEIGHT;
+    }
+    if samples >= SETTLE {
+        return 0.0;
+    }
+    1.0 / (samples as f32 + 1.0)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -241,13 +251,18 @@ impl Resolve {
         jitter: [Vec2; 2],
         intact: bool,
         clamp: bool,
+        feedback: f32,
     ) {
+        assert!(
+            (0.0..=1.0).contains(&feedback),
+            "a temporal feedback weights the current sample between zero and one"
+        );
         let uniforms = Uniforms {
             previous: previous.to_cols_array_2d(),
             jitter: [jitter[0].x, jitter[0].y, jitter[1].x, jitter[1].y],
             flags: [
                 f32::from(u8::from(intact)),
-                FEEDBACK,
+                feedback,
                 MOTION_REACH,
                 f32::from(u8::from(clamp)),
             ],

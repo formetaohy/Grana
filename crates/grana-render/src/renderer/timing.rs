@@ -82,7 +82,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
     target.detail = Some(detail);
     target.view = Some(view);
     target.camera = Some(camera);
-    if refresh {
+    if refresh || moved || changed {
         target.taa.invalidate();
         target.phase = 0;
     }

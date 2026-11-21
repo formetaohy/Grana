@@ -108,6 +108,10 @@ fn fs_main(input: VertexOutput) -> TaaOutput {
     let color = textureLoad(current, pixel, 0);
     var output = color;
     if (taa.flags.x > 0.5) {
+        if (taa.flags.y <= 0.0) {
+            let converged = textureLoad(history, pixel, 0);
+            return TaaOutput(converged, converged);
+        }
         let sample = ndc - frame.jitter.xy;
         let projection = reproject(pixel, sample, extent);
         if (projection.valid) {

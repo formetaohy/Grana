@@ -342,7 +342,7 @@ fn streams_and_shades_two_channels() {
     settle_with(&gpu, &mut renderer, || capped(&view, CAP), &volume);
     let shaded = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
     let occluder = bricked_volume(Some([1, 1, 0]));
-    let region = voxel_region(&pyramid, 0, [48, 48, 16]);
+    let region = brick_region(&pyramid, 0, BrickCoord::new(1, 1, 0));
     let damage = Damage::new(region, ChannelSet::of(0)).expect("the damage names a channel");
     renderer.damage(&[damage]);
     refresh(&gpu, &mut renderer, &view, &occluder, CAP);
@@ -356,19 +356,34 @@ fn streams_and_shades_two_channels() {
         moved > 2.0,
         "the streamed brick left the shading unchanged: {moved:.3}"
     );
-    let stale = max_difference(&streamed, &rebuilt);
-    assert!(
-        stale <= 60,
-        "the streamed shadow departs from a full rebuild by {stale}"
+    assert_eq!(
+        max_difference(&streamed, &rebuilt),
+        0,
+        "the streamed brick departs from a full rebuild"
+    );
+    let repeated = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
+    assert_eq!(
+        max_difference(&repeated, &streamed),
+        0,
+        "the settled frame keeps drifting instead of converging"
     );
 }
 
-fn voxel_region(pyramid: &Pyramid, level: usize, voxel: [u32; 3]) -> Region {
+fn brick_region(pyramid: &Pyramid, level: usize, coord: BrickCoord) -> Region {
     let source = pyramid.level(level);
     let basis = source.basis().matrix();
+    let grid = BrickGrid::new(source.extent());
+    let origin = grid.origin(coord);
+    let extent = grid.extent_of(coord);
     let low = Vec3::from(source.origin())
-        + basis * Vec3::new(voxel[0] as f32, voxel[1] as f32, voxel[2] as f32);
-    let high = low + basis * Vec3::new(1.0, 1.0, 1.0);
+        + basis * Vec3::new(origin[0] as f32, origin[1] as f32, origin[2] as f32);
+    let high = low
+        + basis
+            * Vec3::new(
+                (origin[0] + extent.x()) as f32,
+                (origin[1] + extent.y()) as f32,
+                (origin[2] + extent.z()) as f32,
+            );
     Region::axis_aligned(low, high)
 }
 
