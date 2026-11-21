@@ -20,9 +20,19 @@
 
 Grana is a next-generation 3D and 4D microscopy platform written in Rust, delivering high performance with a low memory footprint. Open major microscopy formats directly to explore large volumes, segment and track structures over time, automate batch analysis, and export results as images, videos, and other formats.
 
-## Download
+## Quick Start
 
-Installers are on the [Releases](https://github.com/formetaohy/Grana/releases) page.
+### Installer
+
+Download the installer from the [Releases](https://github.com/formetaohy/Grana/releases) page.
+
+### From Source
+
+```sh
+git clone https://github.com/formetaohy/Grana.git
+cd Grana
+cargo run --release
+```
 
 ## Status
 
