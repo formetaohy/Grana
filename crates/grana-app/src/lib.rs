@@ -11,5 +11,5 @@ mod window;
 
 pub use app::{App, Wake};
 pub use capture::OfflineCapture;
-pub use cli::{batch, clear_cache, gui, render as render_command, viewer};
+pub use cli::{batch, clear_cache, gui, render as render_command, update_assist, viewer};
 pub use stitch::command as stitch_command;

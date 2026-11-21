@@ -1,4 +1,7 @@
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -71,9 +74,9 @@ pub struct Client {
     agent: Agent,
 }
 
-enum Outcome<T> {
+enum Outcome<S, T> {
     Ready(T),
-    Retry(Error, Vec<u8>),
+    Retry(Error, S),
     Refuse(Error),
 }
 
@@ -81,6 +84,88 @@ enum Body {
     Complete,
     Truncated(Error),
     Refused(Error),
+}
+
+trait Store {
+    fn held(&self) -> u64;
+
+    fn expect(&mut self, total: u64);
+
+    fn absorb(&mut self, bytes: &[u8]) -> Result<(), Error>;
+
+    fn reset(&mut self) -> Result<(), Error>;
+}
+
+impl Store for Vec<u8> {
+    fn held(&self) -> u64 {
+        self.len() as u64
+    }
+
+    fn expect(&mut self, _total: u64) {}
+
+    fn absorb(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        self.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        self.clear();
+        Ok(())
+    }
+}
+
+struct Sink<'a> {
+    file: File,
+    path: &'a Path,
+    url: &'a str,
+    written: u64,
+    total: u64,
+    cancel: &'a AtomicBool,
+    progress: &'a mut dyn FnMut(u64, u64),
+}
+
+impl Sink<'_> {
+    fn failed(&self, detail: String) -> Error {
+        Error::Transport {
+            url: self.url.to_string(),
+            detail,
+        }
+    }
+}
+
+impl Store for Sink<'_> {
+    fn held(&self) -> u64 {
+        self.written
+    }
+
+    fn expect(&mut self, total: u64) {
+        self.total = total;
+    }
+
+    fn absorb(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(Error::Stopped {
+                url: self.url.to_string(),
+            });
+        }
+        let held = format!("`{}`", self.path.display());
+        self.file
+            .write_all(bytes)
+            .map_err(|error| self.failed(format!("{held}: {error}")))?;
+        self.written += bytes.len() as u64;
+        (self.progress)(self.written, self.total);
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<(), Error> {
+        let held = format!("`{}`", self.path.display());
+        self.file
+            .set_len(0)
+            .and_then(|()| self.file.seek(SeekFrom::Start(0)).map(|_| ()))
+            .map_err(|error| self.failed(format!("{held}: {error}")))?;
+        self.written = 0;
+        Ok(())
+    }
 }
 
 impl Client {
@@ -103,22 +188,59 @@ impl Client {
     }
 
     pub fn get(&self, url: &str, span: Option<Span>) -> Result<Option<Fetch>, Error> {
-        attempt(|held| self.drain(url, span, held))
+        let fetched = attempt(Vec::new(), |held| self.drain(url, span, held))?;
+        Ok(fetched.map(|(bytes, resumed)| Fetch { bytes, resumed }))
     }
 
     pub fn probe(&self, url: &str) -> Result<Presence, Error> {
-        attempt(|_| self.head(url))
+        attempt((), |()| self.head(url))
     }
 
-    fn drain(&self, url: &str, wanted: Option<Span>, held: Vec<u8>) -> Outcome<Option<Fetch>> {
-        let base = held.len() as u64;
+    pub fn download(
+        &self,
+        url: &str,
+        path: &Path,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<u64, Error> {
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|error| Error::Transport {
+                url: url.to_string(),
+                detail: format!("`{}`: {error}", path.display()),
+            })?;
+        let sink = Sink {
+            file,
+            path,
+            url,
+            written: 0,
+            total: 0,
+            cancel,
+            progress,
+        };
+        let Some((sink, _)) = attempt(sink, |sink| self.drain(url, None, sink))? else {
+            return Err(Error::Status {
+                url: url.to_string(),
+                status: 404,
+            });
+        };
+        Ok(sink.written)
+    }
+
+    fn drain<S: Store>(
+        &self,
+        url: &str,
+        wanted: Option<Span>,
+        mut store: S,
+    ) -> Outcome<S, Option<(S, u64)>> {
+        let base = store.held();
         if let Some(length) = wanted.and_then(Span::length)
             && base >= length
         {
-            return Outcome::Ready(Some(Fetch {
-                bytes: held,
-                resumed: base,
-            }));
+            return Outcome::Ready(Some((store, base)));
         }
         let resume = wanted.is_none() && base > 0;
         let span = match wanted {
@@ -136,28 +258,31 @@ impl Client {
         };
         let mut response = match request.call() {
             Ok(response) => response,
-            Err(error) => return classify(url, error, held),
+            Err(error) => return classify(url, error, store),
         };
         let status = response.status().as_u16();
         if matches!(status, 404 | 410) {
             return Outcome::Ready(None);
         }
         if retryable(status) {
-            return Outcome::Retry(status_error(url, status), held);
+            return Outcome::Retry(status_error(url, status), store);
         }
         if !(200..300).contains(&status) {
             return Outcome::Refuse(status_error(url, status));
         }
-        let (span, mut held, base) = match (span, status) {
-            (Some(_), 206) => (span, held, base),
+        let (span, base) = match (span, status) {
+            (Some(_), 206) => (span, base),
             (Some(_), _) if wanted.is_some() => {
                 return Outcome::Refuse(Error::Range {
                     url: url.to_string(),
                     detail: "the server answered the byte range with a whole response".to_string(),
                 });
             }
-            (Some(_), _) => (None, Vec::new(), 0),
-            (None, _) => (None, held, base),
+            (Some(_), _) => match store.reset() {
+                Ok(()) => (None, 0),
+                Err(error) => return Outcome::Refuse(error),
+            },
+            (None, _) => (None, base),
         };
         let want = match span {
             Some(span) => match expected(url, &response, span) {
@@ -170,27 +295,27 @@ impl Client {
             },
             None => header(&response, "content-length").and_then(|value| value.parse().ok()),
         };
-        match read(&mut response, url, want, &mut held) {
-            Body::Complete => Outcome::Ready(Some(Fetch {
-                bytes: held,
-                resumed: base,
-            })),
-            Body::Truncated(error) => Outcome::Retry(error, held),
+        if let Some(want) = want {
+            store.expect(base + want);
+        }
+        match read(&mut response, url, want, &mut store) {
+            Body::Complete => Outcome::Ready(Some((store, base))),
+            Body::Truncated(error) => Outcome::Retry(error, store),
             Body::Refused(error) => Outcome::Refuse(error),
         }
     }
 
-    fn head(&self, url: &str) -> Outcome<Presence> {
+    fn head(&self, url: &str) -> Outcome<(), Presence> {
         let response = match self.agent.head(url).call() {
             Ok(response) => response,
-            Err(error) => return classify(url, error, Vec::new()),
+            Err(error) => return classify(url, error, ()),
         };
         let status = response.status().as_u16();
         if matches!(status, 404 | 410) {
             return Outcome::Ready(Presence::Missing);
         }
         if retryable(status) {
-            return Outcome::Retry(status_error(url, status), Vec::new());
+            return Outcome::Retry(status_error(url, status), ());
         }
         if matches!(status, 403 | 405 | 501) {
             return self.head_ranged(url);
@@ -202,7 +327,7 @@ impl Client {
         Outcome::Ready(presence(&response, size))
     }
 
-    fn head_ranged(&self, url: &str) -> Outcome<Presence> {
+    fn head_ranged(&self, url: &str) -> Outcome<(), Presence> {
         let response = match self
             .agent
             .get(url)
@@ -211,14 +336,14 @@ impl Client {
             .call()
         {
             Ok(response) => response,
-            Err(error) => return classify(url, error, Vec::new()),
+            Err(error) => return classify(url, error, ()),
         };
         let status = response.status().as_u16();
         if matches!(status, 404 | 410) {
             return Outcome::Ready(Presence::Missing);
         }
         if retryable(status) {
-            return Outcome::Retry(status_error(url, status), Vec::new());
+            return Outcome::Retry(status_error(url, status), ());
         }
         if !(200..300).contains(&status) {
             return Outcome::Refuse(status_error(url, status));
@@ -246,8 +371,8 @@ impl Presence {
     }
 }
 
-fn attempt<T>(mut call: impl FnMut(Vec<u8>) -> Outcome<T>) -> Result<T, Error> {
-    let mut held = Vec::new();
+fn attempt<S, T>(seed: S, mut call: impl FnMut(S) -> Outcome<S, T>) -> Result<T, Error> {
+    let mut held = seed;
     for round in 0..ATTEMPTS {
         match call(held) {
             Outcome::Ready(value) => return Ok(value),
@@ -264,7 +389,7 @@ fn attempt<T>(mut call: impl FnMut(Vec<u8>) -> Outcome<T>) -> Result<T, Error> {
     unreachable!("the retry loop returns on its final round")
 }
 
-fn classify<T>(url: &str, error: ureq::Error, held: Vec<u8>) -> Outcome<T> {
+fn classify<S, T>(url: &str, error: ureq::Error, held: S) -> Outcome<S, T> {
     if matches!(error, ureq::Error::StatusCode(_)) {
         return Outcome::Refuse(Error::Transport {
             url: url.to_string(),
@@ -331,13 +456,13 @@ fn expected(
     Ok(expected)
 }
 
-fn read(
+fn read<S: Store>(
     response: &mut ureq::http::Response<ureq::Body>,
     url: &str,
     want: Option<u64>,
-    held: &mut Vec<u8>,
+    store: &mut S,
 ) -> Body {
-    let already = held.len() as u64;
+    let already = store.held();
     if already > BODY_LIMIT || want.is_some_and(|want| already + want > BODY_LIMIT) {
         return Body::Refused(Error::Size {
             url: url.to_string(),
@@ -349,18 +474,22 @@ fn read(
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
-            Ok(count) => held.extend_from_slice(&buffer[..count]),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(count) => {
+                if let Err(error) = store.absorb(&buffer[..count]) {
+                    return Body::Refused(error);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Body::Truncated(transport(url, error.into())),
         }
     }
-    let gained = held.len() as u64 - already;
+    let gained = store.held() - already;
     match want {
         Some(want) if gained != want => Body::Truncated(Error::Range {
             url: url.to_string(),
             detail: format!("the server sent {gained} of the {want} bytes still awaited"),
         }),
-        _ if held.len() as u64 > BODY_LIMIT => Body::Refused(Error::Size {
+        _ if store.held() > BODY_LIMIT => Body::Refused(Error::Size {
             url: url.to_string(),
         }),
         _ => Body::Complete,

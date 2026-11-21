@@ -32,6 +32,7 @@ mod release;
 mod surface;
 mod sync;
 mod time;
+mod update;
 mod viewport;
 
 use self::dialog::{Awaiting, Service};
@@ -39,6 +40,7 @@ use self::export::Export;
 use self::placement::{Fit, Placement};
 use self::release::{Deferred, Release};
 use self::surface::Surface;
+use self::update::Update;
 use self::viewport::AnnotationKey;
 use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
@@ -63,19 +65,20 @@ const EDITOR_MINIMUM: LogicalSize<f64> = LogicalSize::new(1080.0, 700.0);
 enum Resume {
     Exit,
     Command(Command),
+    Update,
 }
 
 impl Resume {
     fn replaces_document(&self) -> bool {
         match self {
-            Self::Exit => true,
+            Self::Exit | Self::Update => true,
             Self::Command(command) => command.replaces_document(),
         }
     }
 
     fn replaces_dataset(&self) -> bool {
         match self {
-            Self::Exit => true,
+            Self::Exit | Self::Update => true,
             Self::Command(command) => command.replaces_dataset(),
         }
     }
@@ -127,7 +130,6 @@ pub struct App {
     autosave_at: Option<Instant>,
     changed_at: Option<Instant>,
     revision: Revision,
-    language: Language,
     camera_touched: bool,
     activity: Option<Instant>,
     animating: bool,
@@ -136,6 +138,8 @@ pub struct App {
     closing: bool,
     placement: Placement,
     annotation_placement: Option<(AnnotationKey, Vec<grana_figure::PlacedAnnotation>)>,
+    preference: Preference,
+    update: Update,
 }
 
 impl App {
@@ -158,6 +162,7 @@ impl App {
         let language = Language::from_environment().unwrap_or(preference.language);
         let mut workspace = Workspace::default();
         workspace.language = language;
+        let update = Update::new(&preference, wake.clone());
         let fit = if startup.is_some() {
             Fit::Editor
         } else {
@@ -204,7 +209,6 @@ impl App {
             autosave_at: None,
             changed_at: None,
             revision: Revision::ZERO,
-            language,
             camera_touched: false,
             activity: None,
             animating: false,
@@ -213,6 +217,8 @@ impl App {
             closing: false,
             placement: Placement::new(fit),
             annotation_placement: None,
+            preference,
+            update,
         }
     }
 
@@ -324,6 +330,9 @@ impl App {
         if !self.pump() {
             return;
         }
+        self.poll_update();
+        self.begin_update_check();
+        self.sync_update();
         self.track_changes();
         self.poll_export();
         self.sync_plate_panel();
@@ -341,6 +350,9 @@ impl App {
             if self.exiting {
                 return;
             }
+        }
+        if self.consume_update() {
+            return;
         }
         let animating = wait.is_some_and(|wait| wait.is_zero());
         self.place_window(&frame);
@@ -440,6 +452,8 @@ impl App {
             Some(STREAM_POLL)
         } else if self.export.running() {
             Some(EXPORT_POLL)
+        } else if let Some(wait) = self.update_wait() {
+            Some(wait)
         } else if self.capture.is_none()
             && self.deferred.is_none()
             && self.workspace.prompt.is_none()

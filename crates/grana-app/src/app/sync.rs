@@ -7,13 +7,15 @@ use super::{AUTOSAVE_IDLE, AUTOSAVE_INTERVAL, App};
 use crate::preference::Preference;
 impl App {
     pub(super) fn sync_preference(&mut self) {
-        if self.workspace.language == self.language {
+        let preference = Preference {
+            language: self.workspace.language,
+            check: self.update.automatic(),
+            last: self.update.last(),
+        };
+        if preference == self.preference {
             return;
         }
-        self.language = self.workspace.language;
-        let preference = Preference {
-            language: self.language,
-        };
+        self.preference = preference;
         if let Err(detail) = preference.save() {
             self.output = Some(detail);
         }

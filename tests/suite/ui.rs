@@ -1,4 +1,4 @@
-use grana_editor::{Message, Prompt, PromptChoice, Workspace};
+use grana_editor::{Message, Prompt, PromptChoice, UpdateAction, UpdatePhase, Workspace};
 use grana_ui::{Button, Element, Event, InputKey, Layout, Length, Rect, Size, TextStyle, Ui, Vec2};
 
 use crate::support::gpu;
@@ -250,6 +250,73 @@ fn the_unsaved_prompt_covers_the_editor_and_resolves_its_choice() {
     );
 }
 
+#[test]
+fn the_update_sheet_offers_the_release_it_found() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let mut ui: Ui<Message> = Ui::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
+    );
+    ui.update(PROMPT_SIZE, 1.0, 0.0);
+    ui.resize([PROMPT_SIZE.x as u32, PROMPT_SIZE.y as u32]);
+    let mut workspace = Workspace::default();
+    workspace.update.open = true;
+    workspace.update.phase = UpdatePhase::Available;
+    workspace.update.version = Some("9.9.9".to_string());
+    workspace.update.size = Some(28 << 20);
+    workspace.update.notes =
+        Some("https://github.com/formetaohy/Grana/releases/tag/v9.9.9".to_string());
+    let element = update_screen(&mut ui, &workspace);
+    ui.present(element);
+    for name in [
+        "update.title",
+        "update.version",
+        "update.status",
+        "update.automatic",
+        "update.notes",
+        "update.download",
+    ] {
+        assert!(
+            ui.bounds(name).is_some(),
+            "the update sheet lays out {name}"
+        );
+    }
+    let download = ui
+        .bounds("update.download")
+        .expect("the update sheet offers the download")
+        .center();
+    for event in [Event::Moved(download), Event::Down(Button::Primary)] {
+        ui.input_mut().push(event);
+    }
+    assert!(
+        ui.update(PROMPT_SIZE, 1.0, 0.1).is_empty(),
+        "pressing the download activates nothing yet"
+    );
+    let element = update_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Up(Button::Primary));
+    let pressed = ui.update(PROMPT_SIZE, 1.0, 0.2);
+    assert!(
+        matches!(
+            pressed.as_slice(),
+            [Message::Update(UpdateAction::Download)]
+        ),
+        "the update sheet asks for the download it offers"
+    );
+    workspace.update.phase = UpdatePhase::Ready;
+    workspace.update.progress = None;
+    let element = update_screen(&mut ui, &workspace);
+    ui.present(element);
+    assert!(
+        ui.bounds("update.restart").is_some(),
+        "a staged update offers the restart"
+    );
+}
+
 fn prompt_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
     let behind = Element::new(Layout {
@@ -263,6 +330,16 @@ fn prompt_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static
     {
         let mut ctx = ui.build();
         elements.extend(grana_editor::prompt::view(&mut ctx, full, workspace));
+    }
+    grana_ui::place(full, elements)
+}
+
+fn update_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
+    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
+    let mut elements = Vec::new();
+    {
+        let mut ctx = ui.build();
+        elements.extend(grana_editor::update_sheet::view(&mut ctx, full, workspace));
     }
     grana_ui::place(full, elements)
 }

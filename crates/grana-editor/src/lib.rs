@@ -24,6 +24,7 @@ mod state;
 mod text;
 mod track_panel;
 mod transfer;
+pub mod update_sheet;
 mod view;
 pub use grana_ui::widget;
 
@@ -32,14 +33,14 @@ pub use chrome::{ChromeView, WindowAction, title_band};
 pub use command::shortcut;
 pub use fitting::slice_step;
 pub use grana_chart::Page as ChartPage;
-pub use message::{Message, PlotEvent};
+pub use message::{Message, PlotEvent, UpdateAction};
 pub use panel::{Frame, Panel, apply, build};
 pub use prompt::{Choice as PromptChoice, Prompt};
 pub use shell::STARTUP_SIZE;
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
     AnnotationTool, CalibrationSheet, Disclosures, MaskBrush, MaskBrushTool, Playback,
-    RelationMetric, Settings, View, Workspace,
+    RelationMetric, Settings, Update, UpdateFailure, UpdatePhase, UpdateRequest, View, Workspace,
 };
 
 pub(crate) const RECENT_LIMIT: usize = 5;

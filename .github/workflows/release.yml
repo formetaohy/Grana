@@ -70,6 +70,12 @@ jobs:
         shell: pwsh
         run: ./installer/windows/build.ps1 -Output dist
 
+      - name: Build portable distribution
+        run: cargo run -p grana-package --release --locked -- dist --binary target/release/grana.exe
+
+      - name: Generate update manifest
+        run: cargo run -p grana-package --release --locked -- manifest
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
@@ -77,6 +83,8 @@ jobs:
           path: |
             dist/*.msi
             dist/*.exe
+            dist/*.zip
+            dist/latest.toml
           if-no-files-found: error
           retention-days: 3
 
@@ -106,13 +114,25 @@ jobs:
           else
             compare="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME"
           fi
-          echo "**Full Changelog**: $compare" > notes.md
+          {
+            echo "**Full Changelog**: $compare"
+            echo
+            echo "Windows 11 (64-bit)."
+            echo
+            echo "### Downloads"
+            echo
+            for asset in dist/*-setup.exe dist/*.zip dist/*.msi; do
+              echo "- $(basename "$asset")"
+            done
+            echo
+            echo "The zip runs without installation; it updates itself in place. Checksums are listed in latest.toml."
+          } > notes.md
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(dist/*.msi dist/*.exe)
+          assets=(dist/*-setup.exe dist/*.zip dist/*.msi dist/latest.toml)
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else

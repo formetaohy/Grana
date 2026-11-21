@@ -55,7 +55,11 @@ weezl = "0.2"
 fax = "0.3"
 zune-jpeg = "0.5"
 sha2 = "0.10"
+semver = "1"
+self-replace = "1"
 ureq = "3"
+windows-sys = "0.61"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 grana-animation = { version = "0.2.2", path = "crates/grana-animation" }
 grana-archive = { version = "0.2.2", path = "crates/grana-archive" }
@@ -109,6 +113,7 @@ grana-segment = { version = "0.2.2", path = "crates/grana-segment" }
 grana-session = { version = "0.2.2", path = "crates/grana-session" }
 grana-stitch = { version = "0.2.2", path = "crates/grana-stitch" }
 grana-store = { version = "0.2.2", path = "crates/grana-store" }
+grana-update = { version = "0.2.2", path = "crates/grana-update" }
 grana-video = { version = "0.2.2", path = "crates/grana-video" }
 grana-weight = { version = "0.2.2", path = "crates/grana-weight" }
 grana-warp = { version = "0.2.2", path = "crates/grana-warp" }
@@ -147,8 +152,11 @@ embed-resource = { workspace = true }
 [dev-dependencies]
 glam = { workspace = true }
 hdf5-pure = { workspace = true }
+semver = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 toml = { workspace = true }
+zip = { workspace = true }
 grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-archive = { workspace = true }
@@ -185,6 +193,7 @@ grana-store = { workspace = true }
 grana-tiff = { workspace = true }
 grana-text = { workspace = true }
 grana-ui = { workspace = true }
+grana-update = { workspace = true }
 grana-vector = { workspace = true }
 grana-video = { workspace = true }
 grana-volume = { workspace = true }

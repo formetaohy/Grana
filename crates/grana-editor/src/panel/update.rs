@@ -1,8 +1,8 @@
 use grana_session::{Command, SessionView};
 
 use super::{DOCK_DEFAULT, DOCK_MINIMUM, Frame, Panel, Stage};
-use crate::message::Message;
-use crate::state::Workspace;
+use crate::message::{Message, UpdateAction};
+use crate::state::{UpdateRequest, Workspace};
 
 pub fn apply(
     ui: &mut grana_ui::Ui<Message>,
@@ -58,6 +58,21 @@ pub fn apply(
             }
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
             Message::SetLanguage(language) => workspace.language = language,
+            Message::Update(action) => match action {
+                UpdateAction::Open => {
+                    workspace.settings.open = false;
+                    workspace.update.open = true;
+                }
+                UpdateAction::Close => workspace.update.open = false,
+                UpdateAction::Check => workspace.update.request = Some(UpdateRequest::Check),
+                UpdateAction::Download => workspace.update.request = Some(UpdateRequest::Download),
+                UpdateAction::Cancel => workspace.update.request = Some(UpdateRequest::Cancel),
+                UpdateAction::Apply => workspace.update.request = Some(UpdateRequest::Apply),
+                UpdateAction::Notes => workspace.update.request = Some(UpdateRequest::Notes),
+                UpdateAction::ToggleCheck => {
+                    workspace.update.request = Some(UpdateRequest::ToggleCheck);
+                }
+            },
             Message::ToggleSettings(open) => {
                 workspace.settings.open = open;
             }

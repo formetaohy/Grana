@@ -35,17 +35,32 @@ impl From<StoredLanguage> for Language {
 struct Stored {
     #[serde(default)]
     language: Option<StoredLanguage>,
+    #[serde(default)]
+    update: Option<StoredUpdate>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredUpdate {
+    #[serde(default)]
+    check: Option<bool>,
+    #[serde(default)]
+    last: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preference {
     pub language: Language,
+    pub check: bool,
+    pub last: Option<u64>,
 }
 
 impl Default for Preference {
     fn default() -> Self {
         Self {
             language: Language::system(),
+            check: true,
+            last: None,
         }
     }
 }
@@ -62,8 +77,14 @@ impl Preference {
         let Ok(stored) = toml::from_str::<Stored>(text) else {
             return Self::default();
         };
+        let update = stored.update.unwrap_or(StoredUpdate {
+            check: None,
+            last: None,
+        });
         Self {
             language: stored.language.map_or_else(Language::system, Into::into),
+            check: update.check.unwrap_or(true),
+            last: update.last,
         }
     }
 
@@ -77,6 +98,10 @@ impl Preference {
         }
         let stored = Stored {
             language: Some(self.language.into()),
+            update: Some(StoredUpdate {
+                check: Some(self.check),
+                last: self.last,
+            }),
         };
         let text = toml::to_string_pretty(&stored)
             .map_err(|error| format!("failed to encode the preferences: {error}"))?;

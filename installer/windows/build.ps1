@@ -72,6 +72,8 @@ function Set-Signature([string]$Path) {
     }
 }
 
+Set-Signature $Binary
+
 $msi = Join-Path $stage 'Grana.msi'
 wix build -arch x64 -d Version=$Version -d Binary=$Binary -d Art=$art (Join-Path $PSScriptRoot 'Grana.wxs') -o $msi
 if ($LASTEXITCODE -ne 0) {

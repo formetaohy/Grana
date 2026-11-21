@@ -14,6 +14,8 @@ pub enum Error {
     Size { url: String },
     #[error("the byte range of `{url}` is unusable: {detail}")]
     Range { url: String, detail: String },
+    #[error("the transfer of `{url}` was stopped")]
+    Stopped { url: String },
 }
 
 impl From<Error> for String {

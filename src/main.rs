@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: grana [<dataset>] | grana --view <project|dataset> | grana --capture <image.png> [<dataset>] | grana --capture <image.png> --view <project|dataset> | grana --render <project|dataset> <image.png|image.ome.tif|image.svg|image.pdf|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--lineage <set>] [--transparent] | grana --batch <protocol.toml> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --stitch <folder> <output.zarr> <rows>x<cols> [--channel <n>] [--series <n>] | grana --clear-cache";
+const USAGE: &str = "usage: grana [<dataset>] | grana --view <project|dataset> | grana --capture <image.png> [<dataset>] | grana --capture <image.png> --view <project|dataset> | grana --render <project|dataset> <image.png|image.ome.tif|image.svg|image.pdf|movie.mp4|movie.mov|folder> [--width <n>] [--height <n>] [--time <n>] [--view <name>] [--lineage <set>] [--transparent] | grana --batch <protocol.toml> <datasets> <output> [--jobs <n>] [--project] [--channels] | grana --stitch <folder> <output.zarr> <rows>x<cols> [--channel <n>] [--series <n>] | grana --clear-cache | grana --apply-update <setup> --wait <pid> --launch <exe>";
 
 fn main() -> ExitCode {
     console();
@@ -107,6 +107,7 @@ fn run(arguments: &[String]) -> Option<ExitCode> {
             [_] => Some(grana_app::clear_cache()),
             _ => None,
         },
+        Some("--apply-update") => Some(grana_app::update_assist(&arguments[1..])),
         Some("--render") => grana_app::render_command(&arguments[1..]),
         Some("--batch") => {
             let mut paths = Vec::new();

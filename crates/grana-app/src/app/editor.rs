@@ -108,8 +108,14 @@ impl App {
         } = frame;
         if let Some(choice) = prompt {
             self.resolve_prompt(choice);
+            if self.exiting {
+                return true;
+            }
         }
         let exited = self.apply(commands);
+        if self.consume_update() {
+            return true;
+        }
         self.perform_window(window);
         exited || self.exiting
     }

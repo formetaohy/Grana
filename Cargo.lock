@@ -3414,6 +3414,7 @@ dependencies = [
  "grana-text",
  "grana-tiff",
  "grana-ui",
+ "grana-update",
  "grana-vector",
  "grana-video",
  "grana-volume",
@@ -3421,10 +3422,13 @@ dependencies = [
  "grana-weight",
  "grana-zarr",
  "hdf5-pure",
+ "semver",
  "serde_json",
+ "sha2",
  "toml",
  "wgpu",
  "zarrs",
+ "zip 9.4.1",
 ]
 
 [[package]]
@@ -3479,6 +3483,7 @@ dependencies = [
  "grana-session",
  "grana-stitch",
  "grana-ui",
+ "grana-update",
  "grana-volume",
  "grana-warp",
  "rfd",
@@ -3778,7 +3783,11 @@ dependencies = [
  "grana-brand",
  "grana-ui",
  "png",
+ "serde",
  "serde_json",
+ "sha2",
+ "toml",
+ "zip 9.4.1",
 ]
 
 [[package]]
@@ -4105,6 +4114,23 @@ dependencies = [
  "grana-text",
  "slotmap",
  "wgpu",
+]
+
+[[package]]
+name = "grana-update"
+version = "0.2.2"
+dependencies = [
+ "grana-dir",
+ "grana-log",
+ "grana-net",
+ "self-replace",
+ "semver",
+ "serde",
+ "sha2",
+ "thiserror 2.0.21",
+ "toml",
+ "windows-sys 0.61.2",
+ "zip 9.4.1",
 ]
 
 [[package]]
@@ -7483,6 +7509,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "self-replace"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "609c5606d9d357b26e4ee1a7a01beac396628d0fa01ebbade2a09cefb88e65af"
+dependencies = [
+ "fastrand",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10101,6 +10138,7 @@ dependencies = [
  "nix",
  "typed-path",
  "windows-sys 0.61.2",
+ "zopfli",
 ]
 
 [[package]]
@@ -10114,6 +10152,18 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zstd"

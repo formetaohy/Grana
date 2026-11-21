@@ -70,7 +70,7 @@ pub(crate) fn view<'a>(
     let children = vec![
         title_bar(ctx, header_rect, alpha, open),
         language_block(ctx, lang_rect, workspace.language, alpha, open),
-        about_block(ctx, about_rect, alpha),
+        about_block(ctx, about_rect, alpha, &workspace.update),
     ];
 
     let backdrop = grana_ui::canvas(Length::Fill, full.height())
@@ -325,10 +325,12 @@ fn about_block<'a>(
     ctx: &mut BuildContext<'_, Message>,
     rect: Rect,
     alpha: f32,
+    update: &crate::state::Update,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
+    let noticed = update.phase.noticed();
     let corners = Corners::group_vertical(
         1,
         2,
@@ -346,14 +348,21 @@ fn about_block<'a>(
     let mono_font = theme.font(Level::Monospace);
     let content = grana_ui::canvas(Length::Fill, ABOUT_CARD)
         .view(
-            (version, alpha.to_bits()),
-            move |(version, _): &(String, u32), painter, info| {
+            (version, noticed, alpha.to_bits()),
+            move |(version, noticed, _): &(String, bool, u32), painter, info| {
                 let badge = Rect::from_center_size(
                     Vec2::new(info.rect.min.x + 28.0, info.rect.center().y),
                     Vec2::splat(30.0),
                 );
                 if alpha > 0.15 {
                     grana_brand::paint(painter, badge);
+                }
+                if *noticed {
+                    painter.rect(
+                        Rect::from_center_size(badge.max - Vec2::new(1.0, 1.0), Vec2::splat(9.0)),
+                        Corners::capsule(),
+                        palette.primary.with_alpha(alpha),
+                    );
                 }
                 painter.text_in(
                     Rect::from_min_max(
@@ -381,7 +390,14 @@ fn about_block<'a>(
             },
         )
         .named("settings.brand")
+        .tooltip(grana_i18n::settings::open(language))
+        .cursor(grana_ui::Cursor::Pointing)
         .at(rect);
+    let content = if alpha > 0.5 {
+        content.press(Message::Update(crate::message::UpdateAction::Open))
+    } else {
+        content
+    };
 
     grana_ui::column()
         .at(rect)

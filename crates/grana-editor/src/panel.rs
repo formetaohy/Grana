@@ -166,6 +166,7 @@ pub fn build(
             let mut ctx = ui.build();
             let mut elements = crate::chrome::view(&mut ctx, full, workspace.chrome);
             elements.extend(crate::shell::view(&mut ctx, view, workspace, full));
+            elements.extend(crate::update_sheet::view(&mut ctx, full, workspace));
             elements
         };
         ui.present(grana_ui::place(full, elements));
@@ -247,6 +248,7 @@ fn view_elements<'a>(
     elements.extend(crate::panel::remote(ctx, full, state.workspace.remote_open));
     elements.extend(stage::calibration(ctx, full, state));
     elements.extend(crate::settings_panel::view(ctx, full, state.workspace));
+    elements.extend(crate::update_sheet::view(ctx, full, state.workspace));
     elements.extend(crate::prompt::view(ctx, full, state.workspace));
     elements
 }

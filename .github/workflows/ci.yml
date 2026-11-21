@@ -112,6 +112,12 @@ jobs:
         shell: pwsh
         run: ./installer/windows/build.ps1 -Output dist
 
+      - name: Build portable distribution
+        run: cargo run -p grana-package --release --locked -- dist --binary target/release/grana.exe
+
+      - name: Generate update manifest
+        run: cargo run -p grana-package --release --locked -- manifest
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
@@ -119,6 +125,8 @@ jobs:
           path: |
             dist/*.msi
             dist/*.exe
+            dist/*.zip
+            dist/latest.toml
           if-no-files-found: error
           retention-days: 7
 

@@ -14,11 +14,24 @@ pub struct PlotEvent {
     pub shift: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateAction {
+    Open,
+    Close,
+    Check,
+    Download,
+    Cancel,
+    Apply,
+    Notes,
+    ToggleCheck,
+}
+
 #[derive(Clone)]
 pub enum Message {
     Noop,
     Copy(String),
     Command(Command),
+    Update(UpdateAction),
     SetPanel(Option<Panel>),
     SetSidebarTab(usize),
     ToggleSidebar,

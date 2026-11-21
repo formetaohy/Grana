@@ -213,6 +213,72 @@ pub struct Settings {
     pub open: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateFailure {
+    Offline,
+    Corrupt,
+    Storage,
+    Installer,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdatePhase {
+    Idle,
+    Checking,
+    Current,
+    Available,
+    Downloading,
+    Ready,
+    Failed(UpdateFailure),
+}
+
+impl UpdatePhase {
+    pub fn noticed(self) -> bool {
+        matches!(
+            self,
+            Self::Available | Self::Downloading | Self::Ready | Self::Failed(_)
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateRequest {
+    Check,
+    Download,
+    Cancel,
+    Apply,
+    Notes,
+    ToggleCheck,
+}
+
+#[derive(Clone, Debug)]
+pub struct Update {
+    pub phase: UpdatePhase,
+    pub version: Option<String>,
+    pub size: Option<u64>,
+    pub notes: Option<String>,
+    pub progress: Option<(u64, u64)>,
+    pub automatic: bool,
+    pub open: bool,
+    pub request: Option<UpdateRequest>,
+}
+
+impl Default for Update {
+    fn default() -> Self {
+        Self {
+            phase: UpdatePhase::Idle,
+            version: None,
+            size: None,
+            notes: None,
+            progress: None,
+            automatic: true,
+            open: false,
+            request: None,
+        }
+    }
+}
+
 pub struct CalibrationSheet {
     pub open: bool,
     pub name: String,
@@ -318,6 +384,7 @@ pub struct Workspace {
     pub comparison_open: Option<(String, String)>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
     pub settings: Settings,
+    pub update: Update,
     pub prompt: Option<Prompt>,
     pub(crate) prompt_last: Option<Prompt>,
     pub language: grana_i18n::Language,
@@ -368,6 +435,7 @@ impl Default for Workspace {
             comparison_open: None,
             batch_chart: crate::batch_panel::Chart::default(),
             settings: Settings::default(),
+            update: Update::default(),
             prompt: None,
             prompt_last: None,
             language: grana_i18n::Language::English,

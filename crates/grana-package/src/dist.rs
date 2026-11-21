@@ -1,19 +1,56 @@
 use std::ffi::OsString;
+use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub fn write(root: &Path) -> io::Result<PathBuf> {
+use zip::write::SimpleFileOptions;
+
+const CONTENT: [&str; 2] = ["grana.exe", "LICENSE"];
+
+pub fn write(root: &Path, binary: Option<&Path>) -> io::Result<PathBuf> {
     let name = folder_name()?;
-    let executable = build(root)?;
-    let folder = root.join("dist").join(name);
+    let executable = match binary {
+        Some(binary) => locate(root, binary)?,
+        None => build(root)?,
+    };
+    let folder = root.join("dist").join(&name);
     if folder.exists() {
         std::fs::remove_dir_all(&folder)?;
     }
     std::fs::create_dir_all(&folder)?;
     std::fs::copy(&executable, folder.join(executable_name()))?;
     std::fs::copy(root.join("LICENSE"), folder.join("LICENSE"))?;
+    archive(&folder, &root.join("dist").join(format!("{name}.zip")))?;
     Ok(folder)
+}
+
+fn locate(root: &Path, binary: &Path) -> io::Result<PathBuf> {
+    let path = if binary.is_absolute() {
+        binary.to_path_buf()
+    } else {
+        root.join(binary)
+    };
+    if !path.is_file() {
+        return Err(io::Error::other(format!(
+            "the release binary is missing: {}",
+            path.display()
+        )));
+    }
+    Ok(path)
+}
+
+fn archive(folder: &Path, target: &Path) -> io::Result<()> {
+    let file = File::create(target)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for name in CONTENT {
+        zip.start_file(name, options).map_err(io::Error::other)?;
+        let mut source = File::open(folder.join(name))?;
+        io::copy(&mut source, &mut zip)?;
+    }
+    zip.finish().map_err(io::Error::other)?;
+    Ok(())
 }
 
 fn build(root: &Path) -> io::Result<PathBuf> {

@@ -22,6 +22,11 @@
           </File>
           <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
         </Component>
+        <Component Id="Installation" Guid="*">
+          <RegistryKey Root="HKLM" Key="SOFTWARE\Grana">
+            <RegistryValue Name="Install" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+          </RegistryKey>
+        </Component>
       </Directory>
     </StandardDirectory>
 
@@ -31,6 +36,7 @@
 
     <Feature Id="Complete" Title="Grana" Level="1">
       <ComponentRef Id="Application" />
+      <ComponentRef Id="Installation" />
     </Feature>
   </Package>
 </Wix>

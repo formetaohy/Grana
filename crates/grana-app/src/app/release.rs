@@ -316,6 +316,19 @@ impl App {
                 self.exiting = true;
                 true
             }
+            Resume::Update => match self.update.apply() {
+                Some(Ok(())) => {
+                    self.exiting = true;
+                    true
+                }
+                Some(Err(error)) => {
+                    self.update.fail(&error);
+                    self.sync_update();
+                    self.request_redraw();
+                    false
+                }
+                None => false,
+            },
             Resume::Command(command) => {
                 let view = self.view_state();
                 self.session.observe_view(view);
@@ -331,6 +344,7 @@ impl App {
             surface.ui.close_popups();
         }
         self.workspace.settings.open = false;
+        self.workspace.update.open = false;
         self.workspace.remote_open = false;
         self.workspace.prompt = Some(prompt);
         self.request_redraw();

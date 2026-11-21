@@ -110,7 +110,8 @@ fn hero_header<'a>(
         })
         .named("shell.brand");
     let close = workspace.chrome.controls && workspace.chrome.close_only;
-    let trail_width = if close { 32.0 } else { 0.0 };
+    let noticed = workspace.update.phase.noticed();
+    let trail_width = (if close { 32.0 } else { 0.0 }) + (if noticed { 38.0 } else { 0.0 });
     let display = theme.font(Level::Display);
     let title_width = PANEL_WIDTH - 2.0 * PANEL_PADDING - 40.0 - 12.0 - trail_width;
     let title = grana_ui::canvas(Length::Fixed(title_width), HERO_HEIGHT).view_static(
@@ -124,6 +125,18 @@ fn hero_header<'a>(
         },
     );
     let mut row = vec![brand, title];
+    if noticed {
+        row.push(
+            grana_ui::widget::icon_button(
+                Icon::Sparkles,
+                30.0,
+                Role::SurfaceHigh,
+                grana_i18n::settings::open(ctx.language()),
+            )
+            .named("shell.update")
+            .press(Message::Update(crate::message::UpdateAction::Open)),
+        );
+    }
     if close {
         row.push(crate::chrome::close_button(ctx, 32.0));
     }

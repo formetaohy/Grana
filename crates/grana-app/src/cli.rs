@@ -19,6 +19,17 @@ pub fn viewer(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
     open(capture, startup, Access::Viewer)
 }
 
+pub fn update_assist(arguments: &[String]) -> ExitCode {
+    match grana_update::assist(arguments) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            grana_log::error!(target: "grana::update", %error, "the updater agent stopped");
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> ExitCode {
     grana_log::info!(
         target: "grana::app",
