@@ -217,6 +217,7 @@ pub struct Settings {
 pub enum UpdateFailure {
     Offline,
     Corrupt,
+    Signature,
     Storage,
     Installer,
     Other,

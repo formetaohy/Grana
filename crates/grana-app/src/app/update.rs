@@ -272,6 +272,7 @@ fn phase_of(failure: Failure) -> UpdatePhase {
     UpdatePhase::Failed(match failure {
         Failure::Offline => UpdateFailure::Offline,
         Failure::Corrupt => UpdateFailure::Corrupt,
+        Failure::Signature => UpdateFailure::Signature,
         Failure::Storage => UpdateFailure::Storage,
         Failure::Installer => UpdateFailure::Installer,
         Failure::Other => UpdateFailure::Other,

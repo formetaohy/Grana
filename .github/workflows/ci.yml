@@ -60,7 +60,7 @@ jobs:
           cache-on-failure: true
 
       - name: Test
-        run: cargo test -p grana --test suite --all-features --locked
+        run: cargo test -p grana --test suite --all-features --locked -- --test-threads=1
 
   build:
     name: Release Build

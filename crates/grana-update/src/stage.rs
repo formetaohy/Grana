@@ -24,6 +24,14 @@ pub enum StagedArtifact {
     Installer(PathBuf),
 }
 
+impl StagedArtifact {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Portable(path) | Self::Installer(path) => path,
+        }
+    }
+}
+
 pub struct Staging {
     root: PathBuf,
 }
@@ -70,6 +78,9 @@ impl Staging {
                 StagedArtifact::Installer(setup)
             }
         };
+        if let Ok(current) = std::env::current_exe() {
+            crate::signature::admits(&current, artifact.path())?;
+        }
         Ok(Staged {
             version: offer.version.clone(),
             artifact,

@@ -17,6 +17,7 @@ labels! {
     automatic => "Check for updates automatically" / "自动检查更新";
     offline => "The release cannot be reached" / "无法连接发布服务器";
     corrupt => "The download does not match the release" / "下载内容与发布不符";
+    signature => "The release is not signed by the publisher" / "发布包的签名与发布者不符";
     storage => "The update cannot be written" / "无法写入更新文件";
     installer => "The installer did not finish" / "安装程序未完成";
     failure => "The update failed" / "更新失败";

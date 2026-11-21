@@ -14,6 +14,8 @@ pub enum Error {
     Corrupt { path: String },
     #[error("`{path}` cannot be written: {detail}")]
     Storage { path: String, detail: String },
+    #[error("`{path}` is not signed by the publisher of this build: {detail}")]
+    Signature { path: String, detail: String },
     #[error("the update was stopped")]
     Cancelled,
     #[error("the installer did not run: {detail}")]
@@ -26,6 +28,7 @@ pub enum Error {
 pub enum Failure {
     Offline,
     Corrupt,
+    Signature,
     Storage,
     Installer,
     Other,
@@ -36,6 +39,7 @@ impl Error {
         match self {
             Self::Network { .. } => Failure::Offline,
             Self::Corrupt { .. } => Failure::Corrupt,
+            Self::Signature { .. } => Failure::Signature,
             Self::Storage { .. } => Failure::Storage,
             Self::Installer { .. } => Failure::Installer,
             Self::Source { .. } | Self::Manifest { .. } | Self::Offer { .. } => Failure::Other,

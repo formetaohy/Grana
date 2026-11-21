@@ -3,6 +3,7 @@ mod assist;
 mod error;
 mod manifest;
 mod query;
+mod signature;
 mod source;
 mod stage;
 mod target;

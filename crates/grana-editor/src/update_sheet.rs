@@ -472,6 +472,7 @@ fn failure_text(failure: UpdateFailure, language: grana_i18n::Language) -> &'sta
     match failure {
         UpdateFailure::Offline => grana_i18n::settings::offline(language),
         UpdateFailure::Corrupt => grana_i18n::settings::corrupt(language),
+        UpdateFailure::Signature => grana_i18n::settings::signature(language),
         UpdateFailure::Storage => grana_i18n::settings::storage(language),
         UpdateFailure::Installer => grana_i18n::settings::installer(language),
         UpdateFailure::Other => grana_i18n::settings::failure(language),
