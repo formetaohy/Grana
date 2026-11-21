@@ -1,13 +1,16 @@
-struct TaaData {
+struct TemporalData {
     previous: mat4x4<f32>,
     jitter: vec4<f32>,
     flags: vec4<f32>,
 }
 
-@group(2) @binding(0) var<uniform> taa: TaaData;
+@group(2) @binding(0) var<uniform> temporal: TemporalData;
 @group(2) @binding(1) var current: texture_2d<f32>;
-@group(2) @binding(2) var history: texture_2d<f32>;
-@group(2) @binding(3) var history_sampler: sampler;
+@group(2) @binding(2) var history_color: texture_2d<f32>;
+@group(2) @binding(3) var history_statistics: texture_2d<f32>;
+@group(2) @binding(4) var history_sampler: sampler;
+
+const SAMPLE_CEILING: f32 = 128.0;
 
 struct VertexOutput {
     @builtin(position) clip: vec4<f32>,
@@ -25,9 +28,10 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
     return output;
 }
 
-struct TaaOutput {
+struct TemporalOutput {
     @location(0) retained: vec4<f32>,
     @location(1) resolved: vec4<f32>,
+    @location(2) statistics: vec2<f32>,
 }
 
 struct Range {
@@ -37,8 +41,11 @@ struct Range {
 
 struct Reprojection {
     uv: vec2<f32>,
-    motion: f32,
     valid: bool,
+}
+
+fn luminance(color: vec3<f32>) -> f32 {
+    return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 fn to_ycocg(rgb: vec3<f32>) -> vec3<f32> {
@@ -75,22 +82,21 @@ fn clamp_history(stored: vec4<f32>, range: Range) -> vec4<f32> {
 fn reproject(pixel: vec2<i32>, ndc: vec2<f32>, extent: vec2<f32>) -> Reprojection {
     let surface = motion_surface(pixel, ndc);
     if (!surface.known) {
-        return Reprojection(input_uv(pixel, extent), 0.0, true);
+        return Reprojection(input_uv(pixel, extent), true);
     }
     let world = unproject(vec3<f32>(ndc, surface.depth));
-    let clip = taa.previous * vec4<f32>(world, 1.0);
+    let clip = temporal.previous * vec4<f32>(world, 1.0);
     let previous = clip.xy / clip.w;
     let uv = vec2<f32>(
-        (previous.x + taa.jitter.z) * 0.5 + 0.5,
-        0.5 - (previous.y + taa.jitter.w) * 0.5,
+        (previous.x + temporal.jitter.z) * 0.5 + 0.5,
+        0.5 - (previous.y + temporal.jitter.w) * 0.5,
     );
     let at = uv * extent;
     let valid = at.x >= frame.viewport.x
         && at.y >= frame.viewport.y
         && at.x <= frame.viewport.x + frame.viewport.z - 1.0
         && at.y <= frame.viewport.y + frame.viewport.w - 1.0;
-    let motion = length((previous - ndc) * 0.5 * frame.viewport.zw);
-    return Reprojection(uv, motion, valid);
+    return Reprojection(uv, valid);
 }
 
 fn input_uv(pixel: vec2<i32>, extent: vec2<f32>) -> vec2<f32> {
@@ -98,32 +104,37 @@ fn input_uv(pixel: vec2<i32>, extent: vec2<f32>) -> vec2<f32> {
 }
 
 @fragment
-fn fs_main(input: VertexOutput) -> TaaOutput {
+fn fs_main(input: VertexOutput) -> TemporalOutput {
     let pixel = vec2<i32>(input.clip.xy);
     let extent = vec2<f32>(textureDimensions(current));
     let origin = vec2<i32>(frame.viewport.xy);
-    let size = vec2<i32>(frame.viewport.zw);
+    let last = origin + vec2<i32>(frame.viewport.zw) - vec2<i32>(1);
     let local = (input.clip.xy - frame.viewport.xy) / frame.viewport.zw;
     let ndc = vec2<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0);
     let color = textureLoad(current, pixel, 0);
-    var output = color;
-    if (taa.flags.x > 0.5) {
-        if (taa.flags.y <= 0.0) {
-            let converged = textureLoad(history, pixel, 0);
-            return TaaOutput(converged, converged);
-        }
-        let sample = ndc - frame.jitter.xy;
-        let projection = reproject(pixel, sample, extent);
-        if (projection.valid) {
-            let stored = textureSampleLevel(history, history_sampler, projection.uv, 0.0);
-            var clamped = stored;
-            if (taa.flags.w > 0.5) {
-                let range = neighbourhood(pixel, origin, origin + size - vec2<i32>(1));
-                clamped = clamp_history(stored, range);
-            }
-            let feedback = max(clamp(projection.motion / max(taa.flags.z, 1.0), 0.0, 1.0), taa.flags.y);
-            output = mix(clamped, color, feedback);
-        }
+    if (temporal.flags.x <= 0.5) {
+        return TemporalOutput(color, color, vec2<f32>(1.0, 0.0));
     }
-    return TaaOutput(output, output);
+    let projection = reproject(pixel, ndc - frame.jitter.xy, extent);
+    if (!projection.valid) {
+        return TemporalOutput(color, color, vec2<f32>(1.0, 0.0));
+    }
+    let stored = textureSampleLevel(history_color, history_sampler, projection.uv, 0.0);
+    let at = clamp(vec2<i32>(projection.uv * extent), origin, last);
+    let carried = textureLoad(history_statistics, at, 0);
+    let count = clamp(carried.x, 1.0, SAMPLE_CEILING);
+    var history = stored;
+    if (temporal.flags.y > 0.5) {
+        history = clamp_history(stored, neighbourhood(pixel, origin, last));
+    }
+    let sample = luminance(color.rgb);
+    let alpha = 1.0 / (count + 1.0);
+    let resolved = mix(history, color, alpha);
+    let spread = sample - luminance(history.rgb);
+    let moment = max(carried.y, 0.0) + spread * (sample - luminance(resolved.rgb));
+    return TemporalOutput(
+        resolved,
+        resolved,
+        vec2<f32>(count + 1.0, max(moment, 0.0)),
+    );
 }

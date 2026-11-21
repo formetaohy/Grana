@@ -1,7 +1,7 @@
 use super::*;
 use crate::jitter;
 use crate::schema::Overlay;
-use crate::taa;
+use crate::temporal;
 use glam::Mat4;
 
 pub(super) struct Stage<'a> {
@@ -10,7 +10,8 @@ pub(super) struct Stage<'a> {
     pub(super) encoder: &'a mut CommandEncoder,
     pub(super) layouts: &'a Layouts,
     pub(super) present: &'a Present,
-    pub(super) taa: &'a taa::Resolve,
+    pub(super) temporal: &'a temporal::Resolve,
+    pub(super) convergence: &'a mut temporal::Convergence,
     pub(super) scene: &'a BindGroup,
     pub(super) target: &'a mut FrameTarget,
     pub(super) overlay: &'a mut Overlays,
@@ -37,7 +38,8 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         encoder,
         layouts,
         present,
-        taa,
+        temporal: temporal_pass,
+        convergence,
         scene,
         target,
         overlay,
@@ -58,25 +60,27 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
     } = stage;
     let current = Mat4::from_cols_array_2d(&data.view_projection);
     let offset = jitter::offset(phase, [region[2], region[3]]);
-    let intact = target.taa.intact() && !reset;
-    taa.write(
+    let intact = target.temporal.intact() && !reset;
+    if !intact {
+        convergence.invalidate();
+    }
+    temporal_pass.write(
         queue,
         previous.unwrap_or(current),
         [offset, target.jitter],
         intact,
         clamp,
-        taa::weight(!intact, phase),
     );
     let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume, volume);
-    let group = taa.bind(device, target.scene.color(), target.taa.read());
-    taa.encode(
+    let group = temporal_pass.bind(device, target.scene.color(), &target.temporal);
+    temporal_pass.encode(
         encoder,
         [scene, &geometry, &group],
-        target.taa.write(),
-        target.taa.resolved(),
+        &target.temporal,
         region,
     );
-    target.taa.advance();
+    convergence.evaluate(device, queue, encoder, &target.temporal, region);
+    target.temporal.advance();
     target.jitter = offset;
     overlay.prepare(device, queue, overlays, current);
     overlay.draw(encoder, target.resolved(), region);

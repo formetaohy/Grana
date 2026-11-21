@@ -639,6 +639,7 @@ impl Session {
                     self.plate = opened.plate;
                     self.field = opened.field;
                     self.label_images = opened.labels;
+                    self.network.watch(opened.transfer);
                     let dataset = match (opened.remote, opened.format) {
                         (true, _) => Dataset::remote(opened.name, opened.pyramid),
                         (false, Some(Format::Zarr)) => Dataset::zarr(opened.name, opened.pyramid),

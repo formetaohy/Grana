@@ -318,6 +318,9 @@ fn actions<'a>(
     if pending {
         children.push(crate::view::spinner(ctx, 18.0));
     }
+    if let Some(network) = transfer(ctx, state) {
+        children.push(network);
+    }
     children.extend([history_group, tools_group, analysis(ctx, state)]);
     let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
     let actions = grana_ui::row()
@@ -339,6 +342,66 @@ fn actions<'a>(
         .justify(Align::End)
         .height(Length::Fill)
         .children([actions])
+}
+
+fn transfer<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &View<'a>,
+) -> Option<Element<'a, Message>> {
+    let network = state.io.network?;
+    let language = ctx.language();
+    let theme = *ctx.theme();
+    let fetched = bytes(network.fetched as f64);
+    let resumed = bytes(network.resumed as f64);
+    let rate = network.rate.map_or_else(
+        || fetched.clone(),
+        |rate| format!("{}/s", bytes(rate as f64)),
+    );
+    let label = if network.resumed > 0 {
+        grana_i18n::header::network_transfer(language, &rate, &resumed)
+    } else {
+        rate
+    };
+    let detail = grana_i18n::header::network_detail(language, &fetched, &resumed);
+    let palette = theme.palette;
+    Some(
+        grana_ui::row()
+            .named("header.transfer")
+            .gap(6.0)
+            .padding(Edges::symmetric(10.0, 0.0))
+            .height(Length::Fixed(theme.metrics.control_height))
+            .align(Align::Center)
+            .background(theme.surface(Role::SurfaceHigh, State::Rest))
+            .shaped(Corners::capsule())
+            .tooltip(&detail)
+            .children([
+                grana_ui::widget::icon(
+                    Icon::Globe,
+                    15.0,
+                    palette.on_surface_variant,
+                    IconStyle::REGULAR,
+                ),
+                grana_ui::text(
+                    label,
+                    TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant),
+                ),
+            ]),
+    )
+}
+
+fn bytes(value: f64) -> String {
+    const SCALE: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = value.max(0.0);
+    let mut index = 0;
+    while value >= 1024.0 && index + 1 < SCALE.len() {
+        value /= 1024.0;
+        index += 1;
+    }
+    if index == 0 {
+        format!("{value:.0} {}", SCALE[index])
+    } else {
+        format!("{value:.1} {}", SCALE[index])
+    }
 }
 
 fn analysis<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Element<'a, Message> {

@@ -1226,6 +1226,29 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
         server.downloads() > 0,
         "a rewritten shard invalidates the disk cache"
     );
+    let transfer = rewritten
+        .transfer()
+        .expect("a remote image meters the bytes it transfers");
+    assert!(
+        transfer.fetched() > 0,
+        "the remote image counts the bytes it fetched"
+    );
+    drop(rewritten);
+    let dropped = support::Server::truncating(&path, 2);
+    let retried = Image::open_with_cache(
+        &Source::remote(dropped.url().to_string()),
+        Some(temp.path().join("retry")),
+    )
+    .expect("the image behind a dropping server opens");
+    assert_derived(&retried, &ranges, 200.0);
+    let transfer = retried
+        .transfer()
+        .expect("a dropped body keeps metering the transferred bytes");
+    assert!(
+        transfer.resumed() > 0,
+        "a body the server drops midway is resumed from the bytes already held, and it held {}",
+        transfer.resumed()
+    );
 }
 
 fn assert_derived(image: &Image, ranges: &[std::ops::Range<u32>; 3], value: f32) {

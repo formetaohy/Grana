@@ -39,7 +39,7 @@ impl Started {
     }
 
     pub(super) fn resets_age(self) -> bool {
-        self.refresh || self.changed
+        self.refresh || self.changed || self.moved
     }
 }
 
@@ -82,8 +82,8 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
     target.detail = Some(detail);
     target.view = Some(view);
     target.camera = Some(camera);
-    if refresh || moved || changed {
-        target.taa.invalidate();
+    if refresh || changed {
+        target.temporal.invalidate();
         target.phase = 0;
     }
     Started {

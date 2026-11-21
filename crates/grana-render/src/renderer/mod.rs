@@ -49,8 +49,8 @@ use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
-use crate::taa;
 use crate::target::SceneTarget;
+use crate::temporal;
 use crate::volume::VolumePass;
 use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
 
@@ -89,6 +89,7 @@ pub struct FrameInfo {
     pub settled: bool,
     pub truncated: bool,
     pub fading: bool,
+    pub converged: bool,
 }
 
 #[derive(Default)]
@@ -173,7 +174,8 @@ pub struct Renderer {
     transparent: bool,
     translucent: Option<(u64, bool)>,
     exporting: bool,
-    taa: taa::Resolve,
+    temporal: temporal::Resolve,
+    convergence: temporal::Convergence,
     fade: Option<Fade>,
     sections: Sections,
     sliced: bool,
@@ -220,7 +222,8 @@ impl Renderer {
         let present = Present::new(device, format, pipelines);
         let volume = VolumePass::new(device, &layouts, pipelines);
         let surface = crate::surface::Pipeline::new(device, &layouts, pipelines);
-        let taa = taa::Resolve::new(device, &layouts, pipelines);
+        let temporal = temporal::Resolve::new(device, &layouts, pipelines);
+        let convergence = temporal::Convergence::new(device, pipelines);
         let overlay = Overlays::new(device, pipelines);
         Self {
             present,
@@ -247,7 +250,8 @@ impl Renderer {
             transparent: false,
             translucent: None,
             exporting: false,
-            taa,
+            temporal,
+            convergence,
             fade: None,
             sections,
             sliced: false,
@@ -364,9 +368,10 @@ impl Renderer {
             target.layers = None;
             target.content = None;
             target.detail = None;
-            target.taa.invalidate();
+            target.temporal.invalidate();
             target.phase = 0;
         }
+        self.convergence.invalidate();
         self.motion = None;
         self.fade = None;
         self.info = FrameInfo::default();
@@ -479,8 +484,9 @@ impl Renderer {
         for target in self.targets.iter_mut() {
             target.layers = None;
             target.content = None;
-            target.taa.invalidate();
+            target.temporal.invalidate();
         }
+        self.convergence.invalidate();
         resources.damage(&scopes, &mut self.residence, self.time);
         self.residence.bump();
     }

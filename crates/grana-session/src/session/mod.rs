@@ -55,6 +55,7 @@ use crate::document::{self, Document};
 use crate::history::{History, Snapshot, Undo};
 use crate::input::Input;
 use crate::loader::{Event as LoaderEvent, Loader};
+use crate::network::Watcher;
 use crate::rate::Rate;
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
@@ -201,6 +202,7 @@ pub struct Session {
     mask_extents: Vec<Option<MaskExtent>>,
     damages: Vec<Damage>,
     transfer: Rate,
+    network: Watcher,
     recent: Recent,
     import: Vec<ImportNote>,
     stitch: Option<Stitch>,
@@ -296,6 +298,7 @@ impl Session {
             mask_extents: Vec::new(),
             damages: Vec::new(),
             transfer: Rate::default(),
+            network: Watcher::new(),
             recent: Recent::default(),
             import: Vec::new(),
             stitch: None,
@@ -562,6 +565,7 @@ impl Session {
                 resident: stats.resident(),
                 spilled: stats.spilled(),
             },
+            network: self.network.view(),
         }
     }
     pub fn restore_timeline(&mut self, timeline: Timeline) {
@@ -714,6 +718,7 @@ impl Session {
         }
     }
     pub fn poll(&mut self) -> bool {
+        self.network.sample(Instant::now());
         let mut repaint = self.poll_source();
         let (completions, stepped) = self.tasks.poll();
         for completion in completions {

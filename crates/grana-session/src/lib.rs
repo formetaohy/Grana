@@ -6,6 +6,7 @@ mod history;
 mod input;
 mod job;
 mod loader;
+mod network;
 mod rate;
 mod recent;
 mod recipe;
@@ -37,6 +38,6 @@ pub use session::{Effects, Localizations, Session};
 pub use task::Poll;
 pub use view::{
     BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSample, BatchSignificance,
-    BatchView, Held, HistoryView, ImportNote, IoView, Kind, Message, PlateView, RecoveryView,
-    SeriesView, SessionView, StitchView, StoreView, Transfer,
+    BatchView, Held, HistoryView, ImportNote, IoView, Kind, Message, Network, PlateView,
+    RecoveryView, SeriesView, SessionView, StitchView, StoreView, Transfer,
 };

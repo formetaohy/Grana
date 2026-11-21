@@ -18,4 +18,6 @@ labels! {
 messages! {
     undo_action(action: &str) => "Undo {action}" / "撤销{action}";
     redo_action(action: &str) => "Redo {action}" / "重做{action}";
+    network_transfer(rate: &str, resumed: &str) => "{rate} · {resumed} reused" / "{rate} · 复用{resumed}";
+    network_detail(fetched: &str, resumed: &str) => "{fetched} read over the network, {resumed} reused after an interrupted transfer" / "网络只取回{fetched}，中断后续传复用{resumed}";
 }

@@ -23,6 +23,7 @@ mod write;
 pub use archive::Archive;
 pub use collection::{Collection, Series, collection};
 pub use error::Error;
+pub use grana_net::Transfer;
 pub use hcs::{
     Field, Kind as GroupKind, Plate, Well, group_path, kind as group_kind, open as open_plate,
 };

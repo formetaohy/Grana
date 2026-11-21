@@ -85,6 +85,13 @@ pub struct StoreView {
     pub spilled: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Network {
+    pub fetched: u64,
+    pub resumed: u64,
+    pub rate: Option<f32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Held {
     pub name: String,
@@ -114,6 +121,7 @@ pub struct IoView<'a> {
     pub export_message: Option<String>,
     pub label: Option<(&'a str, usize, usize)>,
     pub store: StoreView,
+    pub network: Option<Network>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use grana_engine::Viewport;
-use grana_render::{Delivery, FrameInfo, SETTLE};
+use grana_render::{Delivery, FrameInfo};
 
 use super::{App, RETRY_INTERVAL, STREAM_POLL};
 use crate::stream::{Stream, View as StreamView};
@@ -200,7 +200,7 @@ impl App {
 
     pub(super) fn settling(&self) -> bool {
         let info = self.frame_info();
-        (info.drawn && info.age < SETTLE) || info.fading
+        (info.drawn && !info.converged) || info.fading
     }
 
     pub(super) fn streaming(&self) -> bool {

@@ -24,6 +24,7 @@ pub struct Opened {
     pub field: usize,
     pub imports: grana_readout::Imported,
     pub imports_error: Option<String>,
+    pub transfer: Option<Arc<grana_image::Transfer>>,
 }
 
 pub enum Event {
@@ -79,6 +80,7 @@ impl Loader {
             field: 0,
             imports: grana_readout::Imported::default(),
             imports_error: None,
+            transfer: None,
         };
         let channels = Arc::new(Channels::stored(Arc::new(image)));
         let (sender, events) = Pipe::new(CAPACITY);
@@ -315,6 +317,7 @@ fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: 
         field,
         imports,
         imports_error,
+        transfer: reader.transfer(),
     }));
     if cancel.cancelled() || shared.closed.load(AtomicOrdering::Relaxed) {
         return;

@@ -16,6 +16,7 @@ use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, sp
 const SIDE: u32 = 128;
 const CAP: usize = 0;
 const FRAMES: u32 = 8;
+const SAMPLES: u32 = 160;
 const BUDGET: u64 = 256 << 20;
 const WHOLE: [u32; 4] = [0, 0, SIDE, SIDE];
 const EMPTY: Extent = Extent::new(16, 16, 16);
@@ -340,17 +341,17 @@ fn streams_and_shades_two_channels() {
         "the green channel barely rendered"
     );
     settle_with(&gpu, &mut renderer, || capped(&view, CAP), &volume);
-    let shaded = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
+    let shaded = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, SAMPLES);
     let occluder = bricked_volume(Some([1, 1, 0]));
     let region = brick_region(&pyramid, 0, BrickCoord::new(1, 1, 0));
     let damage = Damage::new(region, ChannelSet::of(0)).expect("the damage names a channel");
     renderer.damage(&[damage]);
     refresh(&gpu, &mut renderer, &view, &occluder, CAP);
     settle_with(&gpu, &mut renderer, || capped(&view, CAP), &occluder);
-    let streamed = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
+    let streamed = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, SAMPLES);
     let mut cold = build_renderer(&gpu, &occluder.pyramid());
     settle_with(&gpu, &mut cold, || capped(&view, CAP), &occluder);
-    let rebuilt = settled_pixels(&gpu, &mut cold, &view, &target, CAP);
+    let rebuilt = settled_pixels(&gpu, &mut cold, &view, &target, CAP, SAMPLES);
     let moved = mean_difference(&shaded, &streamed);
     assert!(
         moved > 2.0,
@@ -361,11 +362,11 @@ fn streams_and_shades_two_channels() {
         0,
         "the streamed brick departs from a full rebuild"
     );
-    let repeated = settled_pixels(&gpu, &mut renderer, &view, &target, CAP);
-    assert_eq!(
-        max_difference(&repeated, &streamed),
-        0,
-        "the settled frame keeps drifting instead of converging"
+    let repeated = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, 2 * SAMPLES);
+    let drift = mean_difference(&repeated, &streamed);
+    assert!(
+        drift < 0.5,
+        "the converged frame keeps drifting instead of converging: {drift:.3}"
     );
 }
 
@@ -409,12 +410,27 @@ fn settled_pixels(
     view: &View<'_>,
     target: &wgpu::Texture,
     cap: usize,
+    samples: u32,
 ) -> Vec<[u8; 4]> {
-    for _ in 0..64 {
-        renderer
+    let mut info = renderer
+        .draw(gpu.device(), gpu.queue(), capped(view, cap))
+        .expect("the converged frame draws");
+    for _ in 0..1024 {
+        if info.age >= samples {
+            break;
+        }
+        info = renderer
             .draw(gpu.device(), gpu.queue(), capped(view, cap))
             .expect("the converged frame draws");
     }
+    assert_eq!(
+        info.age, samples,
+        "the accumulation stopped before it held the samples under test"
+    );
+    assert!(
+        info.converged,
+        "a frame holding {samples} samples reports no convergence"
+    );
     read_pixels(gpu, target, [SIDE, SIDE])
 }
 

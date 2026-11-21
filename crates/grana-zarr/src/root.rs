@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use grana_net::{Client, Presence, Span, Target};
+use grana_net::{Client, Presence, Span, Target, Transfer};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::byte_range::{ByteRange, ByteRangeIterator};
 use zarrs::storage::{
@@ -73,6 +73,13 @@ impl Root {
         match &self.origin {
             Origin::Local(path) => path.display().to_string(),
             Origin::Remote { target } => target.display().to_string(),
+        }
+    }
+
+    pub fn transfer(&self) -> Option<Arc<Transfer>> {
+        match &self.store {
+            Store::Local(_) => None,
+            Store::Remote(store) => Some(Arc::clone(&store.transfer)),
         }
     }
 
@@ -230,18 +237,12 @@ enum Block {
     Ranged,
 }
 
-#[derive(Default)]
-struct Transfer {
-    fetched: u64,
-    resumed: u64,
-}
-
 pub(crate) struct RemoteStore {
     target: Target,
     client: Arc<Client>,
     blocks: Mutex<Blocks>,
     probes: Mutex<HashMap<String, Presence>>,
-    transferred: Mutex<Transfer>,
+    transfer: Arc<Transfer>,
 }
 
 fn shared(target: &Target) -> Arc<RemoteStore> {
@@ -259,7 +260,7 @@ fn shared(target: &Target) -> Arc<RemoteStore> {
         client: Client::shared(),
         blocks: Mutex::new(Blocks::default()),
         probes: Mutex::new(HashMap::new()),
-        transferred: Mutex::new(Transfer::default()),
+        transfer: Arc::new(Transfer::default()),
     });
     stores.insert(target.display().to_string(), Arc::downgrade(&store));
     store
@@ -271,10 +272,16 @@ impl RemoteStore {
     }
 
     fn fetch(&self, key: &StoreKey, span: Option<Span>) -> Result<Option<Vec<u8>>, StorageError> {
-        self.client
+        let fetched = self
+            .client
             .get(&self.url(key.as_str()), span)
-            .map(|fetched| fetched.map(|fetch| fetch.bytes))
-            .map_err(|error| StorageError::Other(error.to_string()))
+            .map_err(|error| StorageError::Other(error.to_string()))?;
+        let Some(fetched) = fetched else {
+            return Ok(None);
+        };
+        self.transfer
+            .record(fetched.bytes.len() as u64, fetched.resumed);
+        Ok(Some(fetched.bytes))
     }
 
     fn probe(&self, key: &str) -> Result<Presence, StorageError> {
@@ -344,17 +351,9 @@ impl RemoteStore {
         else {
             return Ok(None);
         };
-        self.count(fetched.resumed, fetched.bytes.len() as u64);
+        self.transfer
+            .record(fetched.bytes.len() as u64, fetched.resumed);
         Ok(Some(Bytes::from(fetched.bytes)))
-    }
-
-    fn count(&self, resumed: u64, arrived: u64) {
-        let mut counted = self
-            .transferred
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        counted.fetched = counted.fetched.saturating_add(arrived);
-        counted.resumed = counted.resumed.saturating_add(resumed);
     }
 }
 

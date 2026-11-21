@@ -211,6 +211,10 @@ impl Image {
         &self.name
     }
 
+    pub fn transfer(&self) -> Option<std::sync::Arc<grana_net::Transfer>> {
+        self.root.transfer()
+    }
+
     pub fn identity(&self) -> Option<u64> {
         let levels = self
             .levels

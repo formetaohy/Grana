@@ -24,10 +24,10 @@ mod section;
 mod shadow;
 mod splat;
 mod surface;
-mod taa;
 mod table;
 mod target;
 mod tau;
+mod temporal;
 mod upload;
 mod volume;
 
@@ -40,4 +40,3 @@ pub use schema::{
     ChannelRow, Digest, Layer, LayerKey, Overlay, SceneFrame, Style, Versions, overlay_digest,
 };
 pub use splat::{SPLAT_LEVELS, Splat, SplatChunk, SplatGeometry, SplatLevel, SplatStyle, Splats};
-pub use taa::SETTLE;

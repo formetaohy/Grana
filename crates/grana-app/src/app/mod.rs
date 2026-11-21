@@ -401,11 +401,8 @@ impl App {
         let info = self.frame_info();
         let loaded = self.session.scene().is_some();
         let streamed = info.view.resident >= info.view.demand;
-        let settled = loaded
-            && streamed
-            && info.age >= grana_render::SETTLE
-            && !info.fading
-            && !self.session.previewing();
+        let settled =
+            loaded && streamed && info.converged && !info.fading && !self.session.previewing();
         let occupied = self.streaming();
         if let Some(path) = self.capture.clone()
             && self.elapsed_frames > 30

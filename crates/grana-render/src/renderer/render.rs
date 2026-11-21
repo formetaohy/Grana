@@ -7,7 +7,7 @@ use super::timing::{self, Begin};
 use super::view::View;
 use super::*;
 use crate::jitter;
-use crate::taa;
+use crate::temporal;
 use glam::Mat4;
 
 #[derive(Clone, Copy)]
@@ -99,7 +99,7 @@ impl Renderer {
             Err(Halt::Fail(detail)) => return Err(detail),
         };
         self.record(device, queue, &mut encoder, target, &frame, &mut prepared);
-        self.resolve(device, queue, &mut encoder, target, &frame, &prepared);
+        self.resolve(device, queue, &mut encoder, target, &frame, &prepared)?;
         queue.submit([encoder.finish()]);
         self.register();
         Ok(self.info)
@@ -107,6 +107,7 @@ impl Renderer {
 
     fn register(&mut self) {
         self.residence.register();
+        self.convergence.register();
     }
 
     fn translucent(&mut self, frame: &Frame<'_, '_>) -> bool {
@@ -421,8 +422,8 @@ impl Renderer {
         ];
         data.lens = crate::frame::lens(
             frame.camera,
-            started.phase % taa::APERTURE_PHASE,
-            taa::APERTURE_PHASE,
+            started.phase % temporal::APERTURE_PHASE,
+            temporal::APERTURE_PHASE,
             view.aspect,
         );
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
@@ -526,11 +527,12 @@ impl Renderer {
         target: &mut FrameTarget,
         frame: &Frame<'_, '_>,
         prepared: &Prepared,
-    ) {
+    ) -> Result<(), String> {
         let Self {
             layouts,
             present,
-            taa,
+            temporal,
+            convergence,
             resources,
             transparent,
             fade,
@@ -552,16 +554,20 @@ impl Renderer {
                     prepared.pose,
                 );
             }
-            return;
+            return Ok(());
         };
         let view = prepared.shot.view;
+        if prepared.started.resets_age() {
+            convergence.invalidate();
+        }
         let intact = resolve::encode(resolve::Stage {
             device,
             queue,
             encoder,
             layouts,
             present,
-            taa,
+            temporal,
+            convergence,
             scene: resources.scene.group(),
             target,
             overlay,
@@ -580,6 +586,8 @@ impl Renderer {
             dummy_normal,
             dummy_volume,
         });
+        convergence.poll(device)?;
+        info.converged = convergence.converged() || target.age >= temporal::SAMPLE_CEILING as u32;
         info.history = intact;
         info.fading = fade.is_some();
         if let Some(slot) = prepared.reserved {
@@ -591,6 +599,7 @@ impl Renderer {
                 prepared.pose,
             );
         }
+        Ok(())
     }
 }
 

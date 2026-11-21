@@ -15,7 +15,7 @@ use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
 use grana_page::Format;
 
-const FRAMES: u32 = grana_render::SETTLE;
+const SAMPLES: u32 = 32;
 const ATTEMPTS: u32 = 4096;
 const READBACK_SLOTS: usize = 2;
 
@@ -153,7 +153,7 @@ impl Export {
             frame: 0,
             written: 0,
             attempts: 0,
-            frames: FRAMES,
+            frames: SAMPLES,
             drawn: 0,
             viewport,
             lens,

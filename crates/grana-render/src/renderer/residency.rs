@@ -140,7 +140,7 @@ impl TargetCache {
 
 pub(super) struct FrameTarget {
     pub(super) scene: SceneTarget,
-    pub(super) taa: crate::taa::History,
+    pub(super) temporal: crate::temporal::History,
     pub(super) present_group: BindGroup,
     pub(super) fade: Option<FadeTarget>,
     pub(super) oit: Option<Oit>,
@@ -183,11 +183,11 @@ impl FrameTarget {
         size: [u32; 2],
     ) -> Self {
         let scene = SceneTarget::new(device, &layouts.depth, size);
-        let taa = crate::taa::History::new(device, size);
-        let present_group = present.bind(device, taa.resolved(), taa.resolved());
+        let temporal = crate::temporal::History::new(device, size);
+        let present_group = present.bind(device, temporal.resolved(), temporal.resolved());
         Self {
             scene,
-            taa,
+            temporal,
             present_group,
             fade: None,
             oit: None,
@@ -297,7 +297,10 @@ impl FrameTarget {
 
     pub(super) fn fade_group(&mut self, device: &Device, present: &Present) -> &BindGroup {
         let Self {
-            taa, fade, size, ..
+            temporal,
+            fade,
+            size,
+            ..
         } = self;
         let size = *size;
         let held = fade.get_or_insert_with(|| {
@@ -309,7 +312,7 @@ impl FrameTarget {
                 TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             );
             let view = crate::target::view(&texture);
-            let group = present.bind(device, taa.resolved(), &view);
+            let group = present.bind(device, temporal.resolved(), &view);
             FadeTarget { texture, group }
         });
         &held.group
@@ -326,7 +329,7 @@ impl FrameTarget {
         };
         encoder.copy_texture_to_texture(
             TexelCopyTextureInfo {
-                texture: self.taa.resolved_texture(),
+                texture: self.temporal.resolved_texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d {
                     x: region[0],
@@ -350,6 +353,6 @@ impl FrameTarget {
     }
 
     pub(super) fn resolved(&self) -> &TextureView {
-        self.taa.resolved()
+        self.temporal.resolved()
     }
 }

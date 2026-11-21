@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::{Camera, CameraState};
-use grana_engine::{Engine, SETTLE};
+use grana_engine::Engine;
 use grana_object::{
     IntensityTable, MaskMode, MaskTool, ObjectAnchor, SampleStatistics, Spot, SpotParams, SpotSet,
     SurfaceFilter, SurfaceParams,
@@ -1621,7 +1621,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                     .expect("the viewport draws");
                 let waiting = match until {
                     Some(revision) => engine.image_revision() <= revision,
-                    None => engine.info().age < SETTLE,
+                    None => !engine.info().converged,
                 };
                 if !waiting {
                     break;

@@ -118,6 +118,13 @@ impl Image {
         }
     }
 
+    pub fn transfer(&self) -> Option<Arc<grana_zarr::Transfer>> {
+        match &self.inner {
+            Inner::Zarr(image) => image.transfer(),
+            Inner::Memory(_) | Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => None,
+        }
+    }
+
     pub fn pyramid(&self) -> &Pyramid {
         &self.pyramid
     }
