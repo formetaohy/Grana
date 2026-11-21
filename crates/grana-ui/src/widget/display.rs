@@ -25,6 +25,26 @@ pub fn card<'a, A>(
         .children(children)
 }
 
+pub fn group_surface(theme: &Theme, slot: (usize, usize), active: bool) -> Surface {
+    let corners = Corners::group_vertical(
+        slot.0,
+        slot.1,
+        theme.metrics.corner_lg,
+        theme.metrics.corner_xs,
+        active,
+    );
+    theme
+        .surface(
+            if active {
+                Role::CardElevated
+            } else {
+                Role::Card
+            },
+            State::Rest,
+        )
+        .with_corners(corners)
+}
+
 pub fn group_card<'a, A>(
     theme: &Theme,
     slot: (usize, usize),
@@ -33,19 +53,7 @@ pub fn group_card<'a, A>(
     gap: f32,
     children: impl IntoIterator<Item = Element<'a, A>>,
 ) -> Element<'a, A> {
-    let role = if active {
-        Role::CardElevated
-    } else {
-        Role::Card
-    };
-    let corners = Corners::group_vertical(
-        slot.0,
-        slot.1,
-        theme.metrics.corner_lg,
-        theme.metrics.corner_xs,
-        active,
-    );
-    let base = theme.surface(role, State::Rest).with_corners(corners);
+    let base = group_surface(theme, slot, active);
     let hover = Surface {
         fill: Fill::Solid(if active {
             theme.palette.surface_container_highest

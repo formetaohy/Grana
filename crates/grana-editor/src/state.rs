@@ -208,9 +208,35 @@ impl RelationMetric {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    About,
+}
+
+impl SettingsTab {
+    pub const ALL: [Self; 2] = [Self::General, Self::About];
+
+    pub fn name(self, language: grana_i18n::Language) -> &'static str {
+        match self {
+            Self::General => grana_i18n::settings::general(language),
+            Self::About => grana_i18n::settings::about(language),
+        }
+    }
+
+    pub fn symbol(self) -> grana_ui::Icon {
+        match self {
+            Self::General => grana_ui::Icon::Sliders,
+            Self::About => grana_ui::Icon::Info,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Settings {
     pub open: bool,
+    pub tab: SettingsTab,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

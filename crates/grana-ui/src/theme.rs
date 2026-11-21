@@ -5,6 +5,7 @@ use crate::style::{Border, Fill, State, Surface};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
     Sheet,
+    Dialog,
     FloatingToolbar,
     Menu,
     Card,
@@ -400,6 +401,12 @@ impl Theme {
             Role::Sheet => Surface {
                 fill: Fill::Solid(p.surface_container_low),
                 corners: Corners::all(m.corner_xl),
+                border: Border::NONE,
+                text: p.on_surface,
+            },
+            Role::Dialog => Surface {
+                fill: Fill::Solid(p.surface_container_high),
+                corners: Corners::all(m.corner_xxl),
                 border: Border::NONE,
                 text: p.on_surface,
             },

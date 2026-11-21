@@ -1,7 +1,7 @@
 use glam::Vec2;
 use grana_ui::{
-    Align, BuildContext, Corners, Element, Fill, Icon, IconStyle, Key, Layer, Length, Level,
-    Motion, Rect, Role, State, TextStyle, icon,
+    Align, BuildContext, Corners, Element, Icon, IconStyle, Key, Layer, Length, Level, Rect, Role,
+    TextStyle, icon,
 };
 
 use crate::message::{Message, UpdateAction};
@@ -26,28 +26,9 @@ pub fn view<'a>(
     workspace: &Workspace,
 ) -> Vec<Element<'a, Message>> {
     let open = workspace.update.open;
-    let target = if open { 1.0 } else { 0.0 };
-    let spatial = ctx.animate(
-        Key::new("update.spatial").id(),
-        target,
-        Motion::spatial_default(),
-    );
-    let effect = ctx.animate(
-        Key::new("update.effect").id(),
-        target,
-        Motion::effect_default(),
-    );
-    if !open && effect <= 0.005 && spatial <= 0.005 {
-        return Vec::new();
-    }
-    let theme = *ctx.theme();
-    let palette = theme.palette;
     let update = &workspace.update;
-    let alpha = effect.clamp(0.0, 1.0);
-    let scale = (0.9 + 0.1 * spatial).max(0.5);
-    let slide = (1.0 - spatial) * -14.0;
-    let width = (full.width() - 2.0 * GUTTER).clamp(MINIMUM_WIDTH, WIDTH);
     let status = status(update, ctx.language());
+    let width = (full.width() - 2.0 * GUTTER).clamp(MINIMUM_WIDTH, WIDTH);
     let mut height = PADDING * 2.0 + HEADER + GAP + VERSION + GAP + TOGGLE + GAP + ACTION;
     if status.is_some() {
         height += GAP + STATUS;
@@ -55,19 +36,11 @@ pub fn view<'a>(
     if update.progress.is_some() {
         height += GAP + PROGRESS;
     }
-    let rect = Rect::from_center_size(
-        full.center() + Vec2::new(0.0, slide),
-        Vec2::new(width * scale, height * scale),
-    );
-    let corners = Corners::all(40.0).lerp(
-        Corners::all(theme.metrics.corner_xxl),
-        spatial.clamp(0.0, 1.0),
-    );
-    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * alpha);
-    let mut surface = theme.surface(Role::Sheet, State::Rest);
-    surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
-    surface.corners = corners;
-    let inner = rect.shrink(PADDING * scale);
+    let size = Vec2::new(width, height);
+    let Some(sheet) = crate::dialog::sheet(ctx, full, Key::new("update.dialog"), open, size) else {
+        return Vec::new();
+    };
+    let inner = sheet.rect.shrink(PADDING);
     let inner_width = inner.width();
     let header_rect = Rect::from_min_size(inner.min, Vec2::new(inner_width, HEADER));
     let mut top = header_rect.max.y + GAP;
@@ -94,33 +67,29 @@ pub fn view<'a>(
         Vec2::new(inner_width, ACTION),
     );
 
-    let mut children = vec![header(ctx, header_rect, alpha, open)];
-    children.push(version_row(ctx, update, version_rect, alpha));
+    let mut children = vec![header(ctx, header_rect, open)];
+    children.push(version_row(ctx, update, version_rect));
     if let Some((status, rect)) = status_rect {
-        children.push(status_line(ctx, rect, alpha, &status));
+        children.push(status_line(ctx, rect, &status));
     }
     if let Some((done, total, rect)) = progress_rect {
-        children.push(progress_row(ctx, rect, done, total, alpha));
+        children.push(progress_row(ctx, rect, done, total));
     }
-    children.push(auto_row(ctx, update, toggle_rect, alpha, open));
+    children.push(auto_row(ctx, update, toggle_rect, open));
     children.push(actions(ctx, update, action_rect, open));
 
-    let backdrop = grana_ui::canvas(Length::Fill, full.height())
-        .view(alpha.to_bits(), move |_, painter, info| {
-            painter.rect(info.rect, Corners::ZERO, scrim);
-        })
-        .named("update.scrim")
-        .at(full)
-        .layer(Layer::Popup);
-    let backdrop = if open {
-        backdrop.press(Message::Update(UpdateAction::Close))
-    } else {
-        backdrop
-    };
+    let backdrop = crate::dialog::scrim(
+        ctx,
+        full,
+        "update.scrim",
+        open,
+        Layer::Popup,
+        Some(Message::Update(UpdateAction::Close)),
+    );
     let dialog = grana_ui::column()
-        .at(rect)
+        .at(sheet.rect)
         .named("update.dialog")
-        .background(surface)
+        .background(sheet.surface)
         .clipped()
         .layer(Layer::Popup)
         .blocks_pointer()
@@ -129,35 +98,24 @@ pub fn view<'a>(
     vec![backdrop, dialog]
 }
 
-fn header<'a>(
-    ctx: &mut BuildContext<'_, Message>,
-    rect: Rect,
-    alpha: f32,
-    open: bool,
-) -> Element<'a, Message> {
+fn header<'a>(ctx: &mut BuildContext<'_, Message>, rect: Rect, open: bool) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
     let label = grana_i18n::settings::update(language).to_string();
-    let style = TextStyle::new(
-        theme.font(Level::Headline),
-        palette.on_surface.with_alpha(alpha),
-    );
+    let style = TextStyle::new(theme.font(Level::Headline), palette.on_surface);
     let title = grana_ui::canvas(Length::Fill, HEADER)
-        .view(
-            (label, alpha.to_bits()),
-            move |(label, _): &(String, u32), painter, info| {
-                painter.text_in(
-                    Rect::from_min_max(
-                        info.rect.min,
-                        Vec2::new(info.rect.max.x - 38.0, info.rect.max.y),
-                    ),
-                    label,
-                    style,
-                    Align::Center,
-                );
-            },
-        )
+        .view(label, move |label: &String, painter, info| {
+            painter.text_in(
+                Rect::from_min_max(
+                    info.rect.min,
+                    Vec2::new(info.rect.max.x - 38.0, info.rect.max.y),
+                ),
+                label,
+                style,
+                Align::Center,
+            );
+        })
         .named("update.title")
         .at(Rect::from_min_size(
             rect.min,
@@ -168,7 +126,7 @@ fn header<'a>(
         Vec2::splat(32.0),
     );
     let close = grana_ui::canvas(Length::Fixed(32.0), 32.0)
-        .view(alpha.to_bits(), move |_, painter, info| {
+        .view_static(move |painter, info| {
             let corners = Corners::capsule()
                 .resolved(info.rect.size())
                 .lerp(Corners::all(theme.metrics.corner_sm), info.press);
@@ -178,8 +136,7 @@ fn header<'a>(
                 palette
                     .surface_container_high
                     .lerp(palette.surface_container_highest, info.hover)
-                    .lerp(palette.on_surface, 0.12 * info.press)
-                    .with_alpha(alpha),
+                    .lerp(palette.on_surface, 0.12 * info.press),
             );
             icon::paint(
                 Icon::Close,
@@ -188,8 +145,7 @@ fn header<'a>(
                 16.0,
                 palette
                     .on_surface_variant
-                    .lerp(palette.on_surface, info.hover)
-                    .with_alpha(alpha),
+                    .lerp(palette.on_surface, info.hover),
                 IconStyle::REGULAR,
             );
         })
@@ -213,7 +169,6 @@ fn version_row<'a>(
     ctx: &mut BuildContext<'_, Message>,
     update: &Update,
     rect: Rect,
-    alpha: f32,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -222,21 +177,17 @@ fn version_row<'a>(
     let next = update.version.clone();
     grana_ui::canvas(Length::Fill, VERSION)
         .view(
-            (current, next, alpha.to_bits()),
-            move |(current, next, _): &(String, Option<String>, u32), painter, info| {
+            (current, next),
+            move |(current, next): &(String, Option<String>), painter, info| {
                 let height = 22.0;
-                let held = TextStyle::new(mono, palette.on_secondary_container.with_alpha(alpha))
-                    .aligned(Align::Center);
+                let held =
+                    TextStyle::new(mono, palette.on_secondary_container).aligned(Align::Center);
                 let held_width = painter.measure(current, held).x + 18.0;
                 let held_rect = Rect::from_min_size(
                     Vec2::new(info.rect.min.x, info.rect.center().y - height * 0.5),
                     Vec2::new(held_width, height),
                 );
-                painter.rect(
-                    held_rect,
-                    Corners::capsule(),
-                    palette.secondary_container.with_alpha(alpha),
-                );
+                painter.rect(held_rect, Corners::capsule(), palette.secondary_container);
                 painter.text_in(held_rect, current, held, Align::Center);
                 let Some(next) = next else {
                     return;
@@ -247,11 +198,11 @@ fn version_row<'a>(
                     painter,
                     arrow,
                     SYMBOL,
-                    palette.on_surface_variant.with_alpha(alpha),
+                    palette.on_surface_variant,
                     IconStyle::REGULAR,
                 );
-                let style = TextStyle::new(mono, palette.on_primary_container.with_alpha(alpha))
-                    .aligned(Align::Center);
+                let style =
+                    TextStyle::new(mono, palette.on_primary_container).aligned(Align::Center);
                 let next_width = painter.measure(next, style).x + 18.0;
                 let next_rect = Rect::from_min_size(
                     Vec2::new(
@@ -260,11 +211,7 @@ fn version_row<'a>(
                     ),
                     Vec2::new(next_width, height),
                 );
-                painter.rect(
-                    next_rect,
-                    Corners::capsule(),
-                    palette.primary_container.with_alpha(alpha),
-                );
+                painter.rect(next_rect, Corners::capsule(), palette.primary_container);
                 painter.text_in(next_rect, next, style, Align::Center);
             },
         )
@@ -275,16 +222,11 @@ fn version_row<'a>(
 fn status_line<'a>(
     ctx: &mut BuildContext<'_, Message>,
     rect: Rect,
-    alpha: f32,
     status: &str,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
-    let palette = theme.palette;
-    let style = TextStyle::new(
-        theme.font(Level::Body),
-        palette.on_surface_variant.with_alpha(alpha),
-    )
-    .truncating();
+    let style =
+        TextStyle::new(theme.font(Level::Body), theme.palette.on_surface_variant).truncating();
     let text = status.to_string();
     grana_ui::canvas(Length::Fill, STATUS)
         .view(text, move |text: &String, painter, info| {
@@ -299,7 +241,6 @@ fn progress_row<'a>(
     rect: Rect,
     done: u64,
     total: u64,
-    alpha: f32,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -320,24 +261,20 @@ fn progress_row<'a>(
     };
     grana_ui::canvas(Length::Fill, PROGRESS)
         .view(
-            (fraction.to_bits(), label, alpha.to_bits()),
-            move |(fraction, label, _): &(u32, String, u32), painter, info| {
+            (fraction.to_bits(), label),
+            move |(fraction, label): &(u32, String), painter, info| {
                 let fraction = f32::from_bits(*fraction);
                 let track = Rect::from_min_size(
                     Vec2::new(info.rect.min.x, info.rect.max.y - 10.0),
                     Vec2::new(info.rect.width(), 10.0),
                 );
-                painter.rect(
-                    track,
-                    Corners::capsule(),
-                    palette.surface_container_highest.with_alpha(alpha),
-                );
+                painter.rect(track, Corners::capsule(), palette.surface_container_highest);
                 let filled = (track.width() * fraction).max(0.0);
                 if filled > 1.0 {
                     painter.rect(
                         Rect::from_min_size(track.min, Vec2::new(filled, track.height())),
                         Corners::capsule(),
-                        palette.primary.with_alpha(alpha),
+                        palette.primary,
                     );
                 }
                 painter.text_in(
@@ -346,7 +283,7 @@ fn progress_row<'a>(
                         Vec2::new(info.rect.max.x, info.rect.max.y - 14.0),
                     ),
                     label,
-                    TextStyle::new(mono, palette.on_surface_variant.with_alpha(alpha)),
+                    TextStyle::new(mono, palette.on_surface_variant),
                     Align::Center,
                 );
             },
@@ -359,7 +296,6 @@ fn auto_row<'a>(
     ctx: &mut BuildContext<'_, Message>,
     update: &Update,
     rect: Rect,
-    alpha: f32,
     open: bool,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
@@ -367,7 +303,7 @@ fn auto_row<'a>(
     let row = grana_ui::widget::toggle_row(&theme, label, update.automatic)
         .named("update.automatic")
         .at(rect)
-        .enabled(alpha > 0.5);
+        .enabled(open);
     if open {
         row.press(Message::Update(UpdateAction::ToggleCheck))
     } else {

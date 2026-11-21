@@ -1,9 +1,12 @@
 use grana_session::Command;
-use grana_ui::{BuildContext, Corners, Edges, Element, Icon, Key, Length, Motion, Role};
+use grana_ui::{Band, BuildContext, Corners, Edges, Element, Icon, Key, Length, Motion, Role};
 
 use crate::message::Message;
 
 pub type View<'a> = Element<'a, Message>;
+
+const CARD_PADDING: f32 = 12.0;
+const CARD_GAP: f32 = 8.0;
 
 pub fn card<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -49,12 +52,32 @@ pub fn disclosure_group_card<'a>(
     children: Vec<View<'a>>,
     open: bool,
 ) -> View<'a> {
-    let header = disclosure_header(ctx, key, head.0, head.1, head.2, open);
+    let filled = open && !children.is_empty();
+    let radius = ctx.theme().metrics.corner_lg;
+    let band = Band::new(
+        Edges {
+            left: CARD_PADDING,
+            top: CARD_PADDING,
+            right: CARD_PADDING,
+            bottom: if filled { CARD_GAP } else { CARD_PADDING },
+        },
+        if filled {
+            Corners::top(radius)
+        } else {
+            Corners::all(radius)
+        },
+    );
+    let header = disclosure_header(ctx, key, head.0, head.1, head.2, open, band);
     let mut items = vec![header];
-    if open && !children.is_empty() {
+    if filled {
         items.extend(children);
     }
-    ctx.group_card(slot, open, Edges::all(12.0), 8.0, items)
+    let surface = ctx.group_surface(slot, open);
+    grana_ui::column()
+        .padding(Edges::all(CARD_PADDING))
+        .gap(CARD_GAP)
+        .background(surface)
+        .children(items)
 }
 
 fn disclosure_header<'a>(
@@ -64,16 +87,17 @@ fn disclosure_header<'a>(
     title: &str,
     detail: Option<&str>,
     open: bool,
+    band: Band,
 ) -> View<'a> {
     let angle = ctx.animate(
         key.then("chevron").id(),
         if open { 1.0 } else { 0.0 },
         Motion::spatial_fast(),
     );
-    ctx.disclosure_row(symbol, title, detail.unwrap_or(""), open, angle)
+    ctx.disclosure_row(symbol, title, detail.unwrap_or(""), open, angle, band)
         .key(key)
         .press(Message::ToggleOpen(key))
-        .focus_ring(Corners::capsule())
+        .focus_ring(band.corners)
 }
 
 pub fn form_row<'a>(

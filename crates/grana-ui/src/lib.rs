@@ -38,7 +38,7 @@ pub use element::{
     Axis, CanvasInfo, CanvasPaint, Element, Flow, Key, Layer, Layout, Length, Phase, Pointer, Size,
     canvas, column, place, row, spacer, stack, text,
 };
-pub use geometry::{Corners, Edges, Rect};
+pub use geometry::{Band, Corners, Edges, Rect};
 pub use glam::Vec2;
 pub use grana_i18n::Language;
 pub use grana_raster::Bitmap;

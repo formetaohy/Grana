@@ -76,6 +76,7 @@ pub fn apply(
             Message::ToggleSettings(open) => {
                 workspace.settings.open = open;
             }
+            Message::SetSettingsTab(tab) => workspace.settings.tab = tab,
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {
                 let height = if workspace.dock_height > 0.0 {

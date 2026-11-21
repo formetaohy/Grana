@@ -1,8 +1,8 @@
 use glam::Vec2;
 use grana_figure::{self as overlay, Handle, Label, Legend, Viewport};
 use grana_ui::{
-    Align, BuildContext, Color, Corners, Edges, Element, Fill, Icon, IconStyle, Key, Layer, Length,
-    Level, Motion, Rect, Role, State, TextStyle, icon,
+    Align, BuildContext, Color, Corners, Edges, Element, Icon, IconStyle, Key, Layer, Length,
+    Level, Rect, Role, State, TextStyle, icon,
 };
 
 use crate::message::Message;
@@ -172,45 +172,28 @@ pub(crate) fn remote<'a>(
     stage: Rect,
     open: bool,
 ) -> Vec<Element<'a, Message>> {
-    let target = if open { 1.0 } else { 0.0 };
-    let spatial = ctx.animate(
-        Key::new("remote.spatial").id(),
-        target,
-        Motion::spatial_default(),
-    );
-    let effect = ctx.animate(
-        Key::new("remote.effect").id(),
-        target,
-        Motion::effect_default(),
-    );
-    if !open && effect <= 0.005 && spatial <= 0.005 {
-        return Vec::new();
-    }
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
-    let alpha = effect.clamp(0.0, 1.0);
-    let scale = (0.90 + 0.10 * spatial).max(0.5);
-    let slide = (1.0 - spatial) * -14.0;
     let width = (stage.width() - 32.0).clamp(260.0, 400.0);
-    let height = 104.0;
-    let rect = Rect::from_center_size(
-        stage.center() + Vec2::new(0.0, slide),
-        Vec2::new(width * scale, height * scale),
-    );
-    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * alpha);
-    let backdrop = grana_ui::canvas(Length::Fill, stage.height())
-        .view(alpha.to_bits(), move |_, painter, info| {
-            painter.rect(info.rect, Corners::ZERO, scrim);
-        })
-        .named("remote.scrim")
-        .at(stage)
-        .layer(Layer::Popup);
-    let backdrop = if open {
-        backdrop.press(Message::CancelRemote)
-    } else {
-        backdrop
+    let height = 96.0;
+    let Some(sheet) = crate::dialog::sheet(
+        ctx,
+        stage,
+        Key::new("remote.dialog"),
+        open,
+        Vec2::new(width, height),
+    ) else {
+        return Vec::new();
     };
+    let backdrop = crate::dialog::scrim(
+        ctx,
+        stage,
+        "remote.scrim",
+        open,
+        Layer::Popup,
+        Some(Message::CancelRemote),
+    );
     let head = grana_ui::row()
         .width(Length::Fill)
         .align(Align::Center)
@@ -235,27 +218,24 @@ pub(crate) fn remote<'a>(
     let field = grana_ui::widget::text_field(
         "",
         TextStyle::new(theme.font(Level::Body), palette.on_surface),
-        (rect.width() - 32.0).max(160.0),
+        (sheet.rect.width() - 32.0).max(160.0),
         false,
     )
     .named("remote.url")
     .editing(open)
     .on_submit(|text: &str| Message::OpenRemote(text.to_string()))
     .on_cancel(|| Message::CancelRemote);
-    let mut surface = theme.surface(Role::Sheet, State::Rest);
-    surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
-    surface.corners = Corners::all(theme.metrics.corner_xxl);
-    let sheet = grana_ui::column()
+    let sheet_element = grana_ui::column()
         .padding(Edges::all(16.0))
         .gap(10.0)
-        .background(surface)
+        .background(sheet.surface)
         .clipped()
         .children([head, field])
-        .at(rect)
+        .at(sheet.rect)
         .layer(Layer::Popup)
         .blocks_pointer()
         .modal();
-    vec![backdrop, sheet]
+    vec![backdrop, sheet_element]
 }
 
 pub(crate) fn calibration<'a>(
@@ -264,55 +244,41 @@ pub(crate) fn calibration<'a>(
     state: &'a View<'a>,
 ) -> Vec<Element<'a, Message>> {
     const AXES: [&str; 3] = ["X", "Y", "Z"];
-    let Some(sheet) = state.workspace.calibration.as_ref() else {
-        return Vec::new();
-    };
-    let target = if sheet.open { 1.0 } else { 0.0 };
-    let spatial = ctx.animate(
-        Key::new("calibration.spatial").id(),
-        target,
-        Motion::spatial_default(),
-    );
-    let effect = ctx.animate(
-        Key::new("calibration.effect").id(),
-        target,
-        Motion::effect_default(),
-    );
-    if !sheet.open && effect <= 0.005 && spatial <= 0.005 {
-        return Vec::new();
-    }
+    let sheet = state.workspace.calibration.as_ref();
+    let open = sheet.is_some_and(|sheet| sheet.open);
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
     let authoring = state.access.author();
+    let width = (stage.width() - 64.0).clamp(420.0, 560.0);
+    let height = 286.0;
+    let Some(frame) = crate::dialog::sheet(
+        ctx,
+        stage,
+        Key::new("calibration.dialog"),
+        open,
+        Vec2::new(width, height),
+    ) else {
+        return Vec::new();
+    };
+    let Some(sheet) = sheet else {
+        return Vec::new();
+    };
     let known = sheet.known();
     let values = sheet
         .fields
         .clone()
         .map(|text| crate::state::voxel_value(&text));
     let valid = values.iter().all(Option::is_some);
-    let alpha = effect.clamp(0.0, 1.0);
-    let scale = (0.90 + 0.10 * spatial).max(0.5);
-    let slide = (1.0 - spatial) * -14.0;
-    let width = (stage.width() - 64.0).clamp(420.0, 560.0);
-    let height = 286.0;
-    let rect = Rect::from_center_size(
-        stage.center() + Vec2::new(0.0, slide),
-        Vec2::new(width * scale, height * scale),
+    let rect = frame.rect;
+    let backdrop = crate::dialog::scrim(
+        ctx,
+        stage,
+        "calibration.scrim",
+        sheet.open,
+        Layer::Popup,
+        Some(Message::DismissCalibration),
     );
-    let scrim = palette.scrim.with_alpha(palette.scrim.alpha * alpha);
-    let backdrop = grana_ui::canvas(Length::Fill, stage.height())
-        .view(alpha.to_bits(), move |_, painter, info| {
-            painter.rect(info.rect, Corners::ZERO, scrim);
-        })
-        .named("calibration.scrim")
-        .at(stage)
-        .layer(Layer::Popup);
-    let backdrop = if sheet.open {
-        backdrop.press(Message::DismissCalibration)
-    } else {
-        backdrop
-    };
     let symbol = if known.iter().all(|known| *known) {
         Icon::Ruler
     } else {
@@ -444,13 +410,10 @@ pub(crate) fn calibration<'a>(
         .press(Message::ApplyCalibration)
         .enabled(valid && authoring),
     ]);
-    let mut surface = theme.surface(Role::Sheet, State::Rest);
-    surface.fill = Fill::Solid(palette.surface_container_low.with_alpha(alpha));
-    surface.corners = Corners::all(theme.metrics.corner_xxl);
     let sheet_element = grana_ui::column()
         .padding(Edges::all(20.0))
         .gap(14.0)
-        .background(surface)
+        .background(frame.surface)
         .clipped()
         .children([head, crate::view::caption(ctx, &detail), body, actions])
         .at(rect)

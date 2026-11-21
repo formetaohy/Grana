@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::content::{ActionRowContent, Content, MenuRowContent, Trailing};
 use crate::element::{Element, Layout, Length, Size};
-use crate::geometry::{Corners, Rect};
+use crate::geometry::{Band, Corners, Edges, Rect};
 use crate::icon::{self, Icon, IconStyle};
 use crate::node::Runtime;
 use crate::paint::Painter;
@@ -43,6 +43,7 @@ pub fn action_row<'a, A>(
         font: theme.font(Level::Label),
         trailing: None,
         highlight: true,
+        band: Band::new(Edges::ZERO, Corners::all(theme.metrics.corner_sm)),
     }))
 }
 
@@ -53,6 +54,7 @@ pub fn disclosure_row<'a, A>(
     detail: &str,
     open: bool,
     angle: f32,
+    band: Band,
 ) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(Length::Fill, Length::Fixed(MENU_ROW)),
@@ -70,6 +72,7 @@ pub fn disclosure_row<'a, A>(
             open,
         }),
         highlight: false,
+        band,
     }))
 }
 
@@ -131,18 +134,23 @@ pub(super) fn paint_action_row(
     info: &PaintInfo<'_>,
 ) {
     let palette = info.theme.palette;
-    if row.highlight && info.hover > 0.01 {
-        painter.rect(
-            info.rect.shrink2(Vec2::new(2.0, 0.0)),
-            Corners::capsule(),
-            palette.secondary_container.with_alpha(0.65 * info.hover),
-        );
-    } else if !row.highlight && info.press > 0.01 {
-        painter.rect(
-            info.rect.shrink2(Vec2::new(2.0, 0.0)),
-            Corners::all(info.theme.metrics.corner_sm),
-            palette.on_surface.with_alpha(0.08 * info.press),
-        );
+    if row.highlight {
+        if info.hover > 0.01 {
+            painter.rect(
+                info.rect.shrink2(Vec2::new(2.0, 0.0)),
+                Corners::capsule(),
+                palette.secondary_container.with_alpha(0.65 * info.hover),
+            );
+        }
+    } else {
+        let state = 0.08 * info.hover + 0.12 * info.press;
+        if state > 0.002 {
+            painter.rect(
+                row.band.expand(info.rect),
+                row.band.corners,
+                palette.on_surface.with_alpha(state),
+            );
+        }
     }
     let trailing = row.trailing.map_or(10.0, |_| 34.0);
     let detail_width = row.detail.as_ref().map_or(0.0, |text| {

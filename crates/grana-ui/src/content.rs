@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 
 use crate::color::Color;
-use crate::geometry::Corners;
+use crate::geometry::{Band, Corners};
 use crate::icon::{Icon, IconStyle};
 use crate::text::TextStyle;
 use crate::theme::{Role, TypeStyle};
@@ -298,6 +298,7 @@ pub struct ActionRowContent {
     pub font: TypeStyle,
     pub trailing: Option<Trailing>,
     pub highlight: bool,
+    pub band: Band,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

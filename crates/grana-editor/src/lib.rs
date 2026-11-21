@@ -6,6 +6,7 @@ mod chrome;
 mod coloc_panel;
 mod coloring;
 mod command;
+mod dialog;
 mod fitting;
 mod inspector;
 mod measure_panel;
@@ -40,7 +41,8 @@ pub use shell::STARTUP_SIZE;
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
     AnnotationTool, CalibrationSheet, Disclosures, MaskBrush, MaskBrushTool, Playback,
-    RelationMetric, Settings, Update, UpdateFailure, UpdatePhase, UpdateRequest, View, Workspace,
+    RelationMetric, Settings, SettingsTab, Update, UpdateFailure, UpdatePhase, UpdateRequest, View,
+    Workspace,
 };
 
 pub(crate) const RECENT_LIMIT: usize = 5;

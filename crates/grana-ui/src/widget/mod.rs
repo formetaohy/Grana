@@ -25,7 +25,9 @@ pub use button::{
     Split, action_button, button, button_enabled, button_width, icon_button, split_button,
 };
 pub use color::color_picker;
-pub use display::{card, card_title, combo, empty_state, form_row, group_card, section_header};
+pub use display::{
+    card, card_title, combo, empty_state, form_row, group_card, group_surface, section_header,
+};
 pub use field::text_field;
 pub use icon::icon;
 pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
@@ -283,6 +285,7 @@ fn value_target<A>(
 pub(crate) fn hit_rect<A>(node: &Node<A>, text: &mut Text, theme: &Theme) -> Rect {
     match &node.content {
         Content::Slider(slider) => slider::track(slider, node.rect, text, theme),
+        Content::ActionRow(row) => row.band.expand(node.rect),
         _ => node.rect,
     }
 }
@@ -296,12 +299,12 @@ pub(crate) fn focus_corners(content: &Content, theme: &Theme) -> Corners {
         | Content::Tabs(_)
         | Content::ColorSwatch(_) => Corners::capsule(),
         Content::Checkbox(_) => Corners::all(5.0),
+        Content::ActionRow(row) => row.band.corners,
         Content::Slider(_)
         | Content::RangeSlider(_)
         | Content::DragValue(_)
         | Content::Field(_)
         | Content::MenuRow(_)
-        | Content::ActionRow(_)
         | Content::ColorPicker(_) => Corners::all(theme.metrics.corner_sm),
         _ => Corners::ZERO,
     }

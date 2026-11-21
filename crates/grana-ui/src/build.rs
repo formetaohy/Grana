@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 
 use crate::color::Color;
 use crate::element::{Element, Length, text};
-use crate::geometry::Edges;
+use crate::geometry::{Band, Edges};
 use crate::icon::{Icon, IconStyle};
 use crate::style::Surface;
 use crate::text::TextStyle;
@@ -205,8 +205,9 @@ impl<'a, A> BuildContext<'a, A> {
         detail: &str,
         open: bool,
         angle: f32,
+        band: Band,
     ) -> Element<'e, A> {
-        widget::disclosure_row(&self.copy(), symbol, label, detail, open, angle)
+        widget::disclosure_row(&self.copy(), symbol, label, detail, open, angle, band)
     }
 
     pub fn menu_row<'e>(&self, label: &str, checked: bool) -> Element<'e, A> {
@@ -232,6 +233,10 @@ impl<'a, A> BuildContext<'a, A> {
         children: impl IntoIterator<Item = Element<'e, A>>,
     ) -> Element<'e, A> {
         widget::group_card(&self.copy(), slot, active, padding, gap, children)
+    }
+
+    pub fn group_surface(&self, slot: (usize, usize), active: bool) -> Surface {
+        widget::group_surface(&self.copy(), slot, active)
     }
 
     pub fn card_title<'e>(

@@ -183,6 +183,34 @@ impl Edges {
             max: rect.max - Vec2::new(self.right, self.bottom),
         }
     }
+
+    pub fn expand(self, rect: Rect) -> Rect {
+        Rect {
+            min: rect.min - Vec2::new(self.left, self.top),
+            max: rect.max + Vec2::new(self.right, self.bottom),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Band {
+    pub edges: Edges,
+    pub corners: Corners,
+}
+
+impl Band {
+    pub const NONE: Self = Self {
+        edges: Edges::ZERO,
+        corners: Corners::ZERO,
+    };
+
+    pub const fn new(edges: Edges, corners: Corners) -> Self {
+        Self { edges, corners }
+    }
+
+    pub fn expand(self, rect: Rect) -> Rect {
+        self.edges.expand(rect)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
