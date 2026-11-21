@@ -157,11 +157,20 @@ pub struct Server {
     url: String,
     stop: Arc<AtomicBool>,
     downloads: Arc<AtomicUsize>,
+    workers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Server {
     pub fn serve(root: &Path) -> Self {
+        Self::serving(root, 0)
+    }
+
+    pub fn truncating(root: &Path, count: usize) -> Self {
+        Self::serving(root, count)
+    }
+
+    fn serving(root: &Path, truncate: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("the fixture server binds");
         listener
             .set_nonblocking(true)
@@ -169,16 +178,31 @@ impl Server {
         let address = listener
             .local_addr()
             .expect("the fixture server names itself");
-        let root = root.to_path_buf();
+        let root = Arc::new(root.to_path_buf());
         let stop = Arc::new(AtomicBool::new(false));
         let downloads = Arc::new(AtomicUsize::new(0));
+        let truncated = Arc::new(AtomicUsize::new(truncate));
+        let workers = Arc::new(Mutex::new(Vec::<std::thread::JoinHandle<()>>::new()));
         let thread = {
             let stop = Arc::clone(&stop);
             let downloads = Arc::clone(&downloads);
+            let truncated = Arc::clone(&truncated);
+            let workers = Arc::clone(&workers);
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     match listener.accept() {
-                        Ok((stream, _)) => respond(stream, &root, &downloads),
+                        Ok((stream, _)) => {
+                            let root = Arc::clone(&root);
+                            let downloads = Arc::clone(&downloads);
+                            let truncated = Arc::clone(&truncated);
+                            let worker = std::thread::spawn(move || {
+                                respond(stream, &root, &downloads, &truncated)
+                            });
+                            let mut held =
+                                workers.lock().unwrap_or_else(|error| error.into_inner());
+                            held.retain(|worker| !worker.is_finished());
+                            held.push(worker);
+                        }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(Duration::from_millis(1));
                         }
@@ -191,6 +215,7 @@ impl Server {
             url: format!("http://{address}/"),
             stop,
             downloads,
+            workers,
             thread: Some(thread),
         }
     }
@@ -214,10 +239,23 @@ impl Drop for Server {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        let workers = std::mem::take(
+            &mut *self
+                .workers
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        for worker in workers {
+            let _ = worker.join();
+        }
     }
 }
 
-fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize) {
+fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize, truncated: &AtomicUsize) {
+    let bound = Duration::from_secs(10);
+    let _ = stream.set_read_timeout(Some(bound));
+    let _ = stream.set_write_timeout(Some(bound));
+    let _ = stream.set_nodelay(true);
     let mut request = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -253,15 +291,24 @@ fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize) {
     if method == "GET" && !relative.ends_with("zarr.json") {
         downloads.fetch_add(1, Ordering::Relaxed);
     }
-    let head = format!(
+    let mut response = format!(
         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"{:016x}\"\r\nConnection: close\r\n\r\n",
         body.len(),
         digest(&body)
-    );
-    let _ = stream.write_all(head.as_bytes());
+    )
+    .into_bytes();
     if method != "HEAD" {
-        let _ = stream.write_all(&body);
+        response.extend_from_slice(&body);
     }
+    let cut = truncated
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+            held.checked_sub(1)
+        })
+        .is_ok();
+    if cut {
+        response.truncate(response.len() / 2);
+    }
+    let _ = stream.write_all(&response);
     let _ = stream.flush();
 }
 

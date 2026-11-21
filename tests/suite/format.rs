@@ -1162,6 +1162,29 @@ fn refuses_a_range_that_the_server_answers_with_the_whole_object() {
 }
 
 #[test]
+fn retries_a_body_that_the_server_drops_midway() {
+    let temp = Temp::new("suite-truncated");
+    let payload = (0..8192u32).map(|value| value as u8).collect::<Vec<u8>>();
+    std::fs::write(temp.path().join("data.bin"), &payload).expect("the payload writes");
+    let server = support::Server::truncating(temp.path(), 2);
+    let url = format!("{}data.bin", server.url());
+    let client = grana_net::Client::new();
+    let whole = client
+        .get(&url, None)
+        .expect("a body that stops midway is fetched again")
+        .expect("the object is present");
+    assert_eq!(
+        whole, payload,
+        "the retried responses keep every byte of the object"
+    );
+    assert_eq!(
+        server.downloads(),
+        3,
+        "the client asks again until the object arrives whole"
+    );
+}
+
+#[test]
 fn caches_the_derived_levels_of_a_remote_ome_zarr() {
     let temp = Temp::new("suite-zarr-remote");
     let path = temp.path().join("remote.ome.zarr");
