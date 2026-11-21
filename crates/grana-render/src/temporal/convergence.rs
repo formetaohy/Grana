@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use grana_gpu::Pipelines;
 use grana_gpu::Readback;
 use grana_gpu::layout::{storage, texture, uniform};
@@ -10,24 +12,33 @@ use wgpu::{
 };
 
 use super::History;
-use crate::temporal::SAMPLE_CEILING;
 
-const SHADER: &str = include_str!("../shader/convergence.wgsl");
+const SHADER: &str = concat!(
+    include_str!("../shader/color.wgsl"),
+    "\n",
+    include_str!("../shader/convergence.wgsl")
+);
 
 const WORKGROUP: u32 = 8;
 
-const WORDS: u64 = 2 * size_of::<u32>() as u64;
+const BINS: usize = 64;
+
+const WORDS: u64 = (BINS * size_of::<u32>()) as u64;
 
 const SLOTS: usize = 2;
 
-const ERROR_LIMIT: f32 = 0.025;
+const CEILING: f32 = 0.05;
+
+const LIMIT: f32 = 0.25 / 255.0;
 
 pub(crate) struct Convergence {
     pipeline: ComputePipeline,
     layout: BindGroupLayout,
     limit: Buffer,
-    worst: Buffer,
+    bins: Buffer,
     readback: Readback,
+    staged: VecDeque<u64>,
+    generation: u64,
     settled: bool,
 }
 
@@ -70,12 +81,12 @@ impl Convergence {
         });
         let limit = device.create_buffer(&BufferDescriptor {
             label: Some("grana.temporal.convergence.limit"),
-            size: 4 * size_of::<u32>() as u64,
+            size: 4 * size_of::<u32>() as u64 + 4 * size_of::<f32>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let worst = device.create_buffer(&BufferDescriptor {
-            label: Some("grana.temporal.convergence.worst"),
+        let bins = device.create_buffer(&BufferDescriptor {
+            label: Some("grana.temporal.convergence.bins"),
             size: WORDS,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -85,8 +96,10 @@ impl Convergence {
             pipeline,
             layout,
             limit,
-            worst,
+            bins,
             readback,
+            staged: VecDeque::new(),
+            generation: 0,
             settled: false,
         }
     }
@@ -97,24 +110,19 @@ impl Convergence {
 
     pub(crate) fn invalidate(&mut self) {
         self.settled = false;
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub(crate) fn poll(&mut self, device: &Device) -> Result<(), String> {
-        let measured = self.readback.take_with(device, |_, bytes| {
-            let error = u32::from_ne_bytes(
-                bytes[..4]
-                    .try_into()
-                    .expect("a convergence readback holds a whole word"),
-            );
-            let count = u32::from_ne_bytes(
-                bytes[4..]
-                    .try_into()
-                    .expect("a convergence readback holds a whole word"),
-            );
-            (f32::from_bits(error), f32::from_bits(count))
-        })?;
-        if let Some((error, count)) = measured {
-            self.settled = error <= ERROR_LIMIT || count >= SAMPLE_CEILING;
+        let measured = self.readback.take_with(device, |_, bytes| counts(bytes))?;
+        if let Some(counts) = measured {
+            let staged = self
+                .staged
+                .pop_front()
+                .expect("every convergence readback is staged with its generation");
+            if staged == self.generation {
+                self.settled = settled(&counts);
+            }
         }
         Ok(())
     }
@@ -126,16 +134,26 @@ impl Convergence {
         encoder: &mut CommandEncoder,
         history: &History,
         region: [u32; 4],
+        exposure: f32,
     ) {
         assert!(
             region[2] > 0 && region[3] > 0,
             "a convergence reduction covers a positive surface"
         );
+        assert!(
+            exposure.is_finite() && exposure > 0.0,
+            "a convergence reduction weighs the presented radiance"
+        );
         let Some(slot) = self.readback.reserve() else {
             return;
         };
-        queue.write_buffer(&self.limit, 0, bytemuck::bytes_of(&region));
-        queue.write_buffer(&self.worst, 0, bytemuck::bytes_of(&[0u32, u32::MAX]));
+        self.staged.push_back(self.generation);
+        queue.write_buffer(
+            &self.limit,
+            0,
+            bytemuck::bytes_of(&Limit::new(region, exposure)),
+        );
+        queue.write_buffer(&self.bins, 0, bytemuck::cast_slice(&[0u32; BINS]));
         let group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.temporal.convergence.group"),
             layout: &self.layout,
@@ -146,15 +164,15 @@ impl Convergence {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(history.write_statistics()),
-                },
-                BindGroupEntry {
-                    binding: 2,
                     resource: BindingResource::TextureView(history.resolved()),
                 },
                 BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(history.read_color()),
+                },
+                BindGroupEntry {
                     binding: 3,
-                    resource: self.worst.as_entire_binding(),
+                    resource: self.bins.as_entire_binding(),
                 },
             ],
         });
@@ -171,10 +189,56 @@ impl Convergence {
                 1,
             );
         }
-        self.readback.stage(encoder, slot, 0, &self.worst, WORDS);
+        self.readback.stage(encoder, slot, 0, &self.bins, WORDS);
     }
 
     pub(crate) fn register(&mut self) {
         self.readback.register();
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Limit {
+    region: [u32; 4],
+    exposure: [f32; 4],
+}
+
+impl Limit {
+    fn new(region: [u32; 4], exposure: f32) -> Self {
+        Self {
+            region,
+            exposure: [exposure, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+fn counts(bytes: &[u8]) -> Vec<u32> {
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_ne_bytes(*word))
+        .collect()
+}
+
+fn settled(counts: &[u32]) -> bool {
+    assert_eq!(
+        counts.len(),
+        BINS,
+        "a convergence histogram holds every bin"
+    );
+    let total = counts.iter().map(|count| u64::from(*count)).sum::<u64>();
+    if total == 0 {
+        return true;
+    }
+    let mean = counts
+        .iter()
+        .enumerate()
+        .map(|(index, count)| {
+            f64::from(*count) * (index as f64 + 0.5) * f64::from(CEILING) / BINS as f64
+        })
+        .sum::<f64>()
+        / total as f64;
+    mean <= f64::from(LIMIT)
 }

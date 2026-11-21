@@ -7,7 +7,7 @@ struct TemporalData {
 @group(2) @binding(0) var<uniform> temporal: TemporalData;
 @group(2) @binding(1) var current: texture_2d<f32>;
 @group(2) @binding(2) var history_color: texture_2d<f32>;
-@group(2) @binding(3) var history_statistics: texture_2d<f32>;
+@group(2) @binding(3) var history_count: texture_2d<f32>;
 @group(2) @binding(4) var history_sampler: sampler;
 
 const SAMPLE_CEILING: f32 = 128.0;
@@ -31,7 +31,7 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 struct TemporalOutput {
     @location(0) retained: vec4<f32>,
     @location(1) resolved: vec4<f32>,
-    @location(2) statistics: vec2<f32>,
+    @location(2) count: f32,
 }
 
 struct Range {
@@ -42,10 +42,6 @@ struct Range {
 struct Reprojection {
     uv: vec2<f32>,
     valid: bool,
-}
-
-fn luminance(color: vec3<f32>) -> f32 {
-    return dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 fn to_ycocg(rgb: vec3<f32>) -> vec3<f32> {
@@ -113,28 +109,19 @@ fn fs_main(input: VertexOutput) -> TemporalOutput {
     let ndc = vec2<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0);
     let color = textureLoad(current, pixel, 0);
     if (temporal.flags.x <= 0.5) {
-        return TemporalOutput(color, color, vec2<f32>(1.0, 0.0));
+        return TemporalOutput(color, color, 1.0);
     }
     let projection = reproject(pixel, ndc - frame.jitter.xy, extent);
     if (!projection.valid) {
-        return TemporalOutput(color, color, vec2<f32>(1.0, 0.0));
+        return TemporalOutput(color, color, 1.0);
     }
     let stored = textureSampleLevel(history_color, history_sampler, projection.uv, 0.0);
     let at = clamp(vec2<i32>(projection.uv * extent), origin, last);
-    let carried = textureLoad(history_statistics, at, 0);
-    let count = clamp(carried.x, 1.0, SAMPLE_CEILING);
+    let count = clamp(textureLoad(history_count, at, 0).x, 1.0, SAMPLE_CEILING);
     var history = stored;
     if (temporal.flags.y > 0.5) {
         history = clamp_history(stored, neighbourhood(pixel, origin, last));
     }
-    let sample = luminance(color.rgb);
-    let alpha = 1.0 / (count + 1.0);
-    let resolved = mix(history, color, alpha);
-    let spread = sample - luminance(history.rgb);
-    let moment = max(carried.y, 0.0) + spread * (sample - luminance(resolved.rgb));
-    return TemporalOutput(
-        resolved,
-        resolved,
-        vec2<f32>(count + 1.0, max(moment, 0.0)),
-    );
+    let resolved = mix(history, color, 1.0 / (count + 1.0));
+    return TemporalOutput(resolved, resolved, count + 1.0);
 }

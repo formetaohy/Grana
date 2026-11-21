@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use glam::{Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 use grana_display::{Camera, Shading, Slice, TransferFunction, VolumeStyle};
 use grana_geometry::{Mesh, MeshVertex, PackedMesh};
 use grana_render::{
@@ -1843,6 +1843,90 @@ fn converges_the_brightness_of_overlapping_splats() {
     assert!(
         eight > single + 80.0,
         "overlapping splats keep the brightness of one: {eight} against {single}"
+    );
+}
+
+#[test]
+fn follows_a_dragged_camera_without_trailing_the_view_it_left() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let opening = camera.clone();
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading {
+            ambient: 0.15,
+            diffuse: 1.0,
+            shadows: 1.0,
+            ..Shading::default()
+        },
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let start = View {
+        target: &view_texture,
+        camera: &opening,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle_with(&gpu, &mut renderer, || capped(&start, CAP), &volume);
+    for _ in 0..192 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(&start, CAP))
+            .expect("the settled frame draws");
+    }
+    for _ in 0..12 {
+        camera.orbit(Vec2::new(20.0, 0.0));
+        let view = View {
+            target: &view_texture,
+            camera: &camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Immediate,
+        };
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(&view, CAP))
+            .expect("the dragged frame draws");
+    }
+    let dragged = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let end = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    for _ in 0..192 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(&end, CAP))
+            .expect("the resting frame draws");
+    }
+    let rest = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let trail = mean_difference(&dragged, &rest);
+    let peak = max_difference(&dragged, &rest);
+    assert!(
+        trail < 2.0,
+        "the dragged view trails the view it left: {trail:.3} levels over a peak of {peak}"
     );
 }
 

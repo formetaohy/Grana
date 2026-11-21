@@ -1046,12 +1046,14 @@ fn collection_series(
             ));
             continue;
         }
-        let image = grana_zarr::Image::open_root(root.clone(), entry.path())?;
-        let pyramid = image.pyramid();
+        let outline = match entry.outline() {
+            Some(outline) => outline,
+            None => grana_zarr::Image::outline(root, entry.path())?,
+        };
         listed.push(Series::new(
-            pyramid.level(0).extent(),
-            pyramid.channel_count(),
-            pyramid.frame_count(),
+            outline.extent(),
+            outline.channels() as usize,
+            outline.frames(),
             name,
         ));
     }

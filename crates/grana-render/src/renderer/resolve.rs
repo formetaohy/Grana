@@ -79,7 +79,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         &target.temporal,
         region,
     );
-    convergence.evaluate(device, queue, encoder, &target.temporal, region);
+    convergence.evaluate(device, queue, encoder, &target.temporal, region, exposure);
     target.temporal.advance();
     target.jitter = offset;
     overlay.prepare(device, queue, overlays, current);

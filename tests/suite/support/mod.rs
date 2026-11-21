@@ -175,6 +175,7 @@ pub struct Server {
     url: String,
     stop: Arc<AtomicBool>,
     downloads: Arc<AtomicUsize>,
+    requests: Arc<AtomicUsize>,
     workers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -203,11 +204,13 @@ impl Server {
         let root = Arc::new(root.to_path_buf());
         let stop = Arc::new(AtomicBool::new(false));
         let downloads = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(AtomicUsize::new(0));
         let truncated = Arc::new(AtomicUsize::new(truncate));
         let workers = Arc::new(Mutex::new(Vec::<std::thread::JoinHandle<()>>::new()));
         let thread = {
             let stop = Arc::clone(&stop);
             let downloads = Arc::clone(&downloads);
+            let requests = Arc::clone(&requests);
             let truncated = Arc::clone(&truncated);
             let workers = Arc::clone(&workers);
             std::thread::spawn(move || {
@@ -216,9 +219,10 @@ impl Server {
                         Ok((stream, _)) => {
                             let root = Arc::clone(&root);
                             let downloads = Arc::clone(&downloads);
+                            let requests = Arc::clone(&requests);
                             let truncated = Arc::clone(&truncated);
                             let worker = std::thread::spawn(move || {
-                                respond(stream, &root, &downloads, &truncated, blunt)
+                                respond(stream, &root, &downloads, &requests, &truncated, blunt)
                             });
                             let mut held =
                                 workers.lock().unwrap_or_else(|error| error.into_inner());
@@ -237,6 +241,7 @@ impl Server {
             url: format!("http://{address}/"),
             stop,
             downloads,
+            requests,
             workers,
             thread: Some(thread),
         }
@@ -250,8 +255,13 @@ impl Server {
         self.downloads.load(Ordering::Relaxed)
     }
 
+    pub fn requests(&self) -> usize {
+        self.requests.load(Ordering::Relaxed)
+    }
+
     pub fn reset(&self) {
         self.downloads.store(0, Ordering::Relaxed);
+        self.requests.store(0, Ordering::Relaxed);
     }
 }
 
@@ -277,6 +287,7 @@ fn respond(
     mut stream: TcpStream,
     root: &Path,
     downloads: &AtomicUsize,
+    requests: &AtomicUsize,
     truncated: &AtomicUsize,
     blunt: bool,
 ) {
@@ -316,6 +327,7 @@ fn respond(
         Ok(body) => body,
         Err(_) => return status(&mut stream, 404),
     };
+    requests.fetch_add(1, Ordering::Relaxed);
     if method == "GET" && !relative.ends_with("zarr.json") {
         downloads.fetch_add(1, Ordering::Relaxed);
     }

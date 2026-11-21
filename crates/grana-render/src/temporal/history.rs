@@ -2,13 +2,13 @@ use wgpu::{Device, Texture, TextureFormat, TextureUsages, TextureView};
 
 use crate::target::{SCENE_FORMAT, image, view};
 
-pub(crate) const STATISTICS_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
 
 const HELD: TextureUsages = TextureUsages::RENDER_ATTACHMENT.union(TextureUsages::TEXTURE_BINDING);
 
 pub(crate) struct History {
     color: [TextureView; 2],
-    statistics: [TextureView; 2],
+    counts: [TextureView; 2],
     resolved: Texture,
     resolved_view: TextureView,
     read: usize,
@@ -30,12 +30,12 @@ impl History {
                 HELD,
             ))
         });
-        let statistics = [0, 1].map(|_| {
+        let counts = [0, 1].map(|_| {
             view(&image(
                 device,
-                "grana.temporal.statistics",
+                "grana.temporal.count",
                 size,
-                STATISTICS_FORMAT,
+                COUNT_FORMAT,
                 HELD,
             ))
         });
@@ -49,7 +49,7 @@ impl History {
         let resolved_view = view(&resolved);
         Self {
             color,
-            statistics,
+            counts,
             resolved,
             resolved_view,
             read: 0,
@@ -73,12 +73,12 @@ impl History {
         &self.color[1 - self.read]
     }
 
-    pub(crate) fn read_statistics(&self) -> &TextureView {
-        &self.statistics[self.read]
+    pub(crate) fn read_count(&self) -> &TextureView {
+        &self.counts[self.read]
     }
 
-    pub(crate) fn write_statistics(&self) -> &TextureView {
-        &self.statistics[1 - self.read]
+    pub(crate) fn write_count(&self) -> &TextureView {
+        &self.counts[1 - self.read]
     }
 
     pub(crate) fn resolved(&self) -> &TextureView {

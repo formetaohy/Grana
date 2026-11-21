@@ -10,6 +10,7 @@ mod identity;
 mod image;
 mod label;
 mod metadata;
+mod outline;
 mod parallel;
 mod plan;
 mod root;
@@ -32,6 +33,7 @@ pub use label::{
     ChunkFill, Label, LabelSpec, Labels, Written, read_labels, write as write_labels,
     write_group_labels,
 };
+pub use outline::Outline;
 pub use root::Root;
 pub use space::{image_space, label_space};
 pub use write::write_image;

@@ -15,7 +15,7 @@ use wgpu::{
 use super::History;
 use crate::layout::Layouts;
 use crate::target::{SCENE_FORMAT, viewport};
-use crate::temporal::{SAMPLE_CEILING, STATISTICS_FORMAT};
+use crate::temporal::{COUNT_FORMAT, SAMPLE_CEILING};
 
 const SHADER: &str = concat!(
     include_str!("../shader/scene.wgsl"),
@@ -106,7 +106,7 @@ impl Resolve {
                         write_mask: ColorWrites::ALL,
                     }),
                     Some(ColorTargetState {
-                        format: STATISTICS_FORMAT,
+                        format: COUNT_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::ALL,
                     }),
@@ -161,7 +161,7 @@ impl Resolve {
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(history.read_statistics()),
+                    resource: BindingResource::TextureView(history.read_count()),
                 },
                 BindGroupEntry {
                     binding: 4,
@@ -204,7 +204,7 @@ impl Resolve {
             color_attachments: &[
                 Some(loaded(history.write_color())),
                 Some(loaded(history.resolved())),
-                Some(loaded(history.write_statistics())),
+                Some(loaded(history.write_count())),
             ],
             ..Default::default()
         });

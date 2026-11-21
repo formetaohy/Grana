@@ -1251,6 +1251,118 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
     );
 }
 
+const COLLECTION_SERIES: [(&str, [u32; 3]); 3] = [
+    ("first", [16, 12, 4]),
+    ("second", [24, 18, 6]),
+    ("third", [8, 6, 1]),
+];
+
+#[test]
+fn lists_a_collection_from_the_metadata_it_declares() {
+    let temp = Temp::new("suite-collection");
+    let path = temp.path().join("collection.zarr");
+    write_collection(&path);
+    let local = Image::open(&Source::file(path)).expect("the local collection opens");
+    assert_eq!(local.series().len(), COLLECTION_SERIES.len());
+    for (held, (name, extent)) in local.series().iter().zip(COLLECTION_SERIES) {
+        assert_eq!(
+            held.name(),
+            Some(name),
+            "the series keeps its declared name"
+        );
+        assert_eq!(
+            held.extent(),
+            Extent::new(extent[0], extent[1], extent[2]),
+            "the series keeps its declared extent"
+        );
+        assert_eq!(held.channels(), 1);
+        assert_eq!(held.frames(), 1);
+    }
+    assert_eq!(local.pyramid().level(0).extent(), Extent::new(16, 12, 4));
+
+    let cache = temp.path().join("cache");
+    let server = support::Server::serve(temp.path());
+    let remote = Image::open_with_cache(
+        &Source::remote(format!("{}collection.zarr", server.url())),
+        Some(cache),
+    )
+    .expect("the remote collection opens");
+    assert_eq!(remote.series().len(), COLLECTION_SERIES.len());
+    assert!(
+        server.requests() <= 6,
+        "listing a collection opened every series instead of reading the metadata it declares: {} downloads and {} requests",
+        server.downloads(),
+        server.requests()
+    );
+}
+
+fn write_collection(path: &std::path::Path) {
+    std::fs::create_dir_all(path).expect("the collection directory creates");
+    for (index, (name, extent)) in COLLECTION_SERIES.into_iter().enumerate() {
+        write_collection_series(&path.join(index.to_string()), name, extent);
+    }
+    let attributes = serde_json::json!({
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": {
+            "ome": { "version": "0.6", "bioformats2raw.layout": 3 }
+        }
+    });
+    std::fs::write(path.join("zarr.json"), attributes.to_string())
+        .expect("the collection group metadata writes");
+    let images = COLLECTION_SERIES
+        .into_iter()
+        .enumerate()
+        .map(|(index, (name, extent))| {
+            format!(
+                "<Image ID=\"Image:{index}\" Name=\"{name}\"><Pixels ID=\"Pixels:{index}\" DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"{}\" SizeY=\"{}\" SizeZ=\"{}\" SizeC=\"1\" SizeT=\"1\"><Channel ID=\"Channel:{index}:0\" SamplesPerPixel=\"1\" Name=\"signal\"/></Pixels></Image>",
+                extent[0], extent[1], extent[2]
+            )
+        })
+        .collect::<String>();
+    let metadata = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">{images}</OME>"
+    );
+    std::fs::create_dir_all(path.join("OME")).expect("the collection metadata directory creates");
+    std::fs::write(path.join("OME").join("METADATA.ome.xml"), metadata)
+        .expect("the collection metadata writes");
+}
+
+fn write_collection_series(path: &std::path::Path, name: &str, extent: [u32; 3]) {
+    let levels = [Level::new(
+        Extent::new(extent[0], extent[1], extent[2]),
+        Spacing::new(1.0, 1.0, 1.0),
+    )];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [1.0, 1.0, 1.0],
+        data: Intensity::new(0.0, 255.0),
+        window: Intensity::new(0.0, 255.0),
+    }];
+    let value = extent[0] as u8;
+    let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
+        Ok(VoxelData::U8(vec![value; block.voxels()]))
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        path,
+        &mut ImageSpec {
+            name,
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::U8,
+            calibration: Calibration::Recorded,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("a collection series writes");
+}
+
 fn assert_derived(image: &Image, ranges: &[std::ops::Range<u32>; 3], value: f32) {
     let read = derived_values(image, ranges);
     let width = ranges[0].end - ranges[0].start;

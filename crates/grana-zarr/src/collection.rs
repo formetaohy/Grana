@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
+use grana_volume::Extent;
 use serde_json::{Map, Value};
 use zarrs::storage::{Bytes, StoreKey, StorePrefix};
 
 use crate::Error;
 use crate::hcs;
+use crate::outline::Outline;
 use crate::root::Root;
 
 const LAYOUT: &str = "bioformats2raw.layout";
@@ -17,6 +19,7 @@ const MARKERS: [&str; 2] = ["zarr.json", ".zgroup"];
 pub struct Series {
     path: String,
     name: Option<String>,
+    outline: Option<Outline>,
 }
 
 impl Series {
@@ -26,6 +29,10 @@ impl Series {
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    pub fn outline(&self) -> Option<Outline> {
+        self.outline
     }
 }
 
@@ -85,12 +92,16 @@ pub fn collection(root: &Root) -> Result<Option<Collection>, Error> {
         .into_iter()
         .enumerate()
         .map(|(index, path)| {
-            let name = images
-                .as_ref()
-                .and_then(|images| images.get(index))
+            let image = images.as_ref().and_then(|images| images.get(index));
+            let name = image
                 .and_then(|image| image.name.clone())
                 .filter(|name| !name.is_empty());
-            Series { path, name }
+            let outline = image.and_then(outline_of);
+            Series {
+                path,
+                name,
+                outline,
+            }
         })
         .collect();
     Ok(Some(Collection {
@@ -209,6 +220,25 @@ fn images(root: &Root) -> Result<Option<Vec<grana_ome::Image>>, Error> {
         });
     }
     Ok(Some(images))
+}
+
+fn outline_of(image: &grana_ome::Image) -> Option<Outline> {
+    let extent = Extent::new(
+        positive(image.size_x?)?,
+        positive(image.size_y?)?,
+        image.size_z.and_then(positive).unwrap_or(1),
+    );
+    let channels = image
+        .size_c
+        .and_then(positive)
+        .unwrap_or_else(|| u32::try_from(image.channels.len()).unwrap_or(1))
+        .max(1);
+    let frames = image.size_t.and_then(positive).unwrap_or(1);
+    Some(Outline::new(extent, channels, frames))
+}
+
+fn positive(value: u32) -> Option<u32> {
+    (value > 0).then_some(value)
 }
 
 fn ome_attributes(root: &Root) -> Result<Option<Map<String, Value>>, Error> {

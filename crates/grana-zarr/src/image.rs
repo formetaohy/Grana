@@ -17,6 +17,7 @@ use crate::Error;
 use crate::axes::{self, Layout};
 use crate::cache::{self, Cache};
 use crate::metadata::{self, ChannelMetadata};
+use crate::outline::Outline;
 use crate::root::{Root, Witness};
 
 struct LevelArray {
@@ -45,6 +46,28 @@ impl Image {
 
     pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
         Self::open_root(Root::local(path)?, group)
+    }
+
+    pub fn outline(root: &Root, group: &str) -> Result<Outline, Error> {
+        let tag = root.tag(group);
+        let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
+            path: tag.clone(),
+            detail: error.to_string(),
+        })?;
+        let metadata = metadata::parse(&tag, opened.attributes())?;
+        let dataset = metadata
+            .datasets
+            .first()
+            .expect("a multiscale image lists a dataset");
+        let array_path = crate::hcs::join(group, &dataset.path);
+        let array = open_array(root.readable(), &array_path)?;
+        let layout = axes::layout(&metadata.axes, array.shape(), dataset)
+            .map_err(|detail| Error::Unsupported { path: tag, detail })?;
+        let channels = u32::try_from(layout.channel_count()).map_err(|_| Error::Unsupported {
+            path: array_path,
+            detail: "the channel axis is too long".to_string(),
+        })?;
+        Ok(Outline::new(layout.extent, channels, layout.frame_count()))
     }
 
     pub fn open_root(root: Root, group: &str) -> Result<Self, Error> {
