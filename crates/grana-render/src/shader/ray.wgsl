@@ -45,6 +45,11 @@ fn region_interval(origin: vec3<f32>, direction: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(entry, exit);
 }
 
+fn stratified(pixel: vec2<i32>, phase: f32) -> f32 {
+    let rotation = sample_noise(vec2<f32>(pixel), 0.0);
+    return fract(rotation + phase * 0.6180339887498949);
+}
+
 fn resolve(pixel: vec2<i32>, ndc: vec2<f32>) -> Resolution {
     let ray = camera_ray(ndc);
     let origin = ray.origin;
@@ -66,7 +71,7 @@ fn resolve(pixel: vec2<i32>, ndc: vec2<f32>) -> Resolution {
         min(min(object, clip.y), 1.0e19),
     );
     let start = max(max(entry, 0.0), clip.x);
-    let jitter = sample_noise(vec2<f32>(pixel), frame.jitter.z) * local_step(start);
+    let jitter = stratified(pixel, frame.jitter.z) * local_step(start);
     let dither = sample_noise(vec2<f32>(pixel), frame.jitter.z + 8.0);
     return Resolution(origin, direction, start, exit, jitter, dither);
 }

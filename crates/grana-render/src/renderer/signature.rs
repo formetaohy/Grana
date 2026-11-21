@@ -89,11 +89,9 @@ impl Signature<'_> {
     }
 }
 
-pub(super) fn view(data: &FrameData) -> u64 {
+pub(super) fn lens(data: &FrameData) -> u64 {
     let mut hasher = DefaultHasher::new();
-    for column in data.view_projection {
-        column.map(f32::to_bits).hash(&mut hasher);
-    }
+    data.projection[0].to_bits().hash(&mut hasher);
     data.lens[2].to_bits().hash(&mut hasher);
     data.lens[3].to_bits().hash(&mut hasher);
     hasher.finish()

@@ -1261,7 +1261,7 @@ const COLLECTION_SERIES: [(&str, [u32; 3]); 3] = [
 fn lists_a_collection_from_the_metadata_it_declares() {
     let temp = Temp::new("suite-collection");
     let path = temp.path().join("collection.zarr");
-    write_collection(&path);
+    write_collection(&path, true);
     let local = Image::open(&Source::file(path)).expect("the local collection opens");
     assert_eq!(local.series().len(), COLLECTION_SERIES.len());
     for (held, (name, extent)) in local.series().iter().zip(COLLECTION_SERIES) {
@@ -1294,9 +1294,29 @@ fn lists_a_collection_from_the_metadata_it_declares() {
         server.downloads(),
         server.requests()
     );
+
+    let undeclared = temp.path().join("undeclared.zarr");
+    write_collection(&undeclared, false);
+    let resolved = Image::open(&Source::file(undeclared))
+        .expect("a collection that declares no image size opens");
+    assert_eq!(resolved.series().len(), COLLECTION_SERIES.len());
+    for (held, (name, extent)) in resolved.series().iter().zip(COLLECTION_SERIES) {
+        assert_eq!(
+            held.name(),
+            Some(name),
+            "the series keeps its declared name"
+        );
+        assert_eq!(
+            held.extent(),
+            Extent::new(extent[0], extent[1], extent[2]),
+            "a series without a declared size resolves its extent from its stored array"
+        );
+        assert_eq!(held.channels(), 1);
+        assert_eq!(held.frames(), 1);
+    }
 }
 
-fn write_collection(path: &std::path::Path) {
+fn write_collection(path: &std::path::Path, declared: bool) {
     std::fs::create_dir_all(path).expect("the collection directory creates");
     for (index, (name, extent)) in COLLECTION_SERIES.into_iter().enumerate() {
         write_collection_series(&path.join(index.to_string()), name, extent);
@@ -1314,9 +1334,14 @@ fn write_collection(path: &std::path::Path) {
         .into_iter()
         .enumerate()
         .map(|(index, (name, extent))| {
+            let sizes = if declared {
+                format!("SizeX=\"{}\" SizeY=\"{}\" ", extent[0], extent[1])
+            } else {
+                String::new()
+            };
             format!(
-                "<Image ID=\"Image:{index}\" Name=\"{name}\"><Pixels ID=\"Pixels:{index}\" DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"{}\" SizeY=\"{}\" SizeZ=\"{}\" SizeC=\"1\" SizeT=\"1\"><Channel ID=\"Channel:{index}:0\" SamplesPerPixel=\"1\" Name=\"signal\"/></Pixels></Image>",
-                extent[0], extent[1], extent[2]
+                "<Image ID=\"Image:{index}\" Name=\"{name}\"><Pixels ID=\"Pixels:{index}\" DimensionOrder=\"XYZCT\" Type=\"uint8\" {sizes}SizeZ=\"{}\" SizeC=\"1\" SizeT=\"1\"><Channel ID=\"Channel:{index}:0\" SamplesPerPixel=\"1\" Name=\"signal\"/></Pixels></Image>",
+                extent[2]
             )
         })
         .collect::<String>();

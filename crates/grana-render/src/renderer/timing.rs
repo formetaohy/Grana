@@ -9,7 +9,7 @@ pub(super) struct Begin<'a> {
     pub(super) classification: u64,
     pub(super) appearance: u64,
     pub(super) detail: u64,
-    pub(super) view: u64,
+    pub(super) lens: u64,
     pub(super) camera: Mat4,
     pub(super) exporting: bool,
     pub(super) assured: bool,
@@ -26,7 +26,6 @@ pub(super) struct Started {
     pub(super) changed: bool,
     pub(super) snapshot: bool,
     pub(super) phase: u32,
-    pub(super) previous: Option<Mat4>,
 }
 
 impl Started {
@@ -52,15 +51,14 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         classification,
         appearance,
         detail,
-        view,
+        lens,
         camera,
         exporting,
         assured,
         fade,
     } = begin;
-    let previous = target.camera;
-    let moved = previous.is_some_and(|held| held != camera);
-    let changed = target.view != Some(view);
+    let moved = target.camera.is_some_and(|held| held != camera);
+    let changed = target.lens != Some(lens);
     if moved || changed {
         *fade = None;
     }
@@ -80,7 +78,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
     target.classification = Some(classification);
     target.appearance = Some(appearance);
     target.detail = Some(detail);
-    target.view = Some(view);
+    target.lens = Some(lens);
     target.camera = Some(camera);
     if refresh || changed {
         target.temporal.invalidate();
@@ -95,7 +93,6 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         changed,
         snapshot,
         phase: target.phase,
-        previous,
     }
 }
 

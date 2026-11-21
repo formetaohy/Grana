@@ -1944,3 +1944,75 @@ fn refuses_a_transparency_store_that_cannot_hold_the_layers_it_needs() {
         "the same view still fits a single transparent layer"
     );
 }
+
+#[test]
+fn keeps_the_accumulated_image_through_a_quiet_camera_move() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading {
+            ambient: 0.15,
+            diffuse: 1.0,
+            shadows: 1.0,
+            ..Shading::default()
+        },
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let start = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle_with(&gpu, &mut renderer, || capped(&start, CAP), &volume);
+    for _ in 0..64 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(&start, CAP))
+            .expect("the resting frame draws");
+    }
+    let settled = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let mut nudged = camera.clone();
+    nudged.pan(Vec2::new(0.05, 0.0), SIDE as f32);
+    let moved = View {
+        target: &view_texture,
+        camera: &nudged,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let info = renderer
+        .draw(gpu.device(), gpu.queue(), capped(&moved, CAP))
+        .expect("the nudged frame draws");
+    assert!(
+        info.history,
+        "a quiet camera move must keep accumulating the history it holds"
+    );
+    let image = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let drift = mean_difference(&settled, &image);
+    assert!(
+        drift < 0.15,
+        "the reused accumulation fell back to a fresh sample: {drift:.3} levels"
+    );
+}

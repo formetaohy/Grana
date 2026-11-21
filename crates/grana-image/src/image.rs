@@ -1033,6 +1033,14 @@ fn collection_series(
     selected: usize,
     opened: &grana_zarr::Image,
 ) -> Result<Vec<Series>, Error> {
+    let unresolved = collection
+        .series()
+        .iter()
+        .enumerate()
+        .filter(|(index, entry)| *index != selected && entry.outline().is_none())
+        .map(|(_, entry)| entry.path())
+        .collect::<Vec<_>>();
+    let mut resolved = grana_zarr::outlines(root, &unresolved)?.into_iter();
     let mut listed = Vec::with_capacity(collection.series().len());
     for (index, entry) in collection.series().iter().enumerate() {
         let name = entry.name().map(str::to_string);
@@ -1048,7 +1056,9 @@ fn collection_series(
         }
         let outline = match entry.outline() {
             Some(outline) => outline,
-            None => grana_zarr::Image::outline(root, entry.path())?,
+            None => resolved
+                .next()
+                .expect("every unresolved series yields its outline in one batch"),
         };
         listed.push(Series::new(
             outline.extent(),

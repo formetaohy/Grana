@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use grana_volume::{
     Calibration, Census, ChannelInfo, Intensity, Pyramid, Statistics, VoxelData, VoxelFormat,
@@ -370,6 +371,56 @@ impl Image {
         }
         Ok(data)
     }
+}
+
+pub fn outlines(root: &Root, groups: &[&str]) -> Result<Vec<Outline>, Error> {
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
+    let workers = crate::parallel::threads().min(groups.len());
+    let next = AtomicUsize::new(0);
+    let stopped = AtomicBool::new(false);
+    let resolved = Mutex::new(vec![None; groups.len()]);
+    let failure = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                while !stopped.load(Ordering::Relaxed) {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= groups.len() {
+                        break;
+                    }
+                    match Image::outline(root, groups[index]) {
+                        Ok(outline) => {
+                            resolved.lock().unwrap_or_else(|error| error.into_inner())[index] =
+                                Some(outline);
+                        }
+                        Err(error) => {
+                            let mut held =
+                                failure.lock().unwrap_or_else(|error| error.into_inner());
+                            if held.is_none() {
+                                *held = Some(error);
+                            }
+                            stopped.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    });
+    if let Some(error) = failure
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
+    {
+        return Err(error);
+    }
+    Ok(resolved
+        .into_inner()
+        .unwrap_or_else(|error| error.into_inner())
+        .into_iter()
+        .map(|outline| outline.expect("every asked outline resolves in its group order"))
+        .collect())
 }
 
 fn chunk_keys(

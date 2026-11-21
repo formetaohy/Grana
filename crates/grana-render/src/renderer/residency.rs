@@ -1,5 +1,5 @@
 use super::*;
-use glam::{Mat4, Vec2};
+use glam::Mat4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Levels {
@@ -156,9 +156,8 @@ pub(super) struct FrameTarget {
     pub(super) classification: Option<u64>,
     pub(super) appearance: Option<u64>,
     pub(super) detail: Option<u64>,
-    pub(super) view: Option<u64>,
+    pub(super) lens: Option<u64>,
     pub(super) camera: Option<Mat4>,
-    pub(super) jitter: Vec2,
     pub(super) levels: Option<LevelKey>,
     pub(super) age: u32,
     pub(super) phase: u32,
@@ -203,9 +202,8 @@ impl FrameTarget {
             classification: None,
             appearance: None,
             detail: None,
-            view: None,
+            lens: None,
             camera: None,
-            jitter: Vec2::ZERO,
             levels: None,
             age: 0,
             phase: 0,

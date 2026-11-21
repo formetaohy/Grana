@@ -1,6 +1,5 @@
 struct TemporalData {
     previous: mat4x4<f32>,
-    jitter: vec4<f32>,
     flags: vec4<f32>,
 }
 
@@ -10,7 +9,9 @@ struct TemporalData {
 @group(2) @binding(3) var history_count: texture_2d<f32>;
 @group(2) @binding(4) var history_sampler: sampler;
 
-const SAMPLE_CEILING: f32 = 128.0;
+const DRIFT: f32 = 2.0;
+
+const QUIET: f32 = 0.015625;
 
 struct VertexOutput {
     @builtin(position) clip: vec4<f32>,
@@ -41,6 +42,7 @@ struct Range {
 
 struct Reprojection {
     uv: vec2<f32>,
+    drift: f32,
     valid: bool,
 }
 
@@ -76,27 +78,32 @@ fn clamp_history(stored: vec4<f32>, range: Range) -> vec4<f32> {
 }
 
 fn reproject(pixel: vec2<i32>, ndc: vec2<f32>, extent: vec2<f32>) -> Reprojection {
+    let at = input_uv(pixel, extent);
     let surface = motion_surface(pixel, ndc);
     if (!surface.known) {
-        return Reprojection(input_uv(pixel, extent), true);
+        return Reprojection(at, 0.0, true);
     }
     let world = unproject(vec3<f32>(ndc, surface.depth));
     let clip = temporal.previous * vec4<f32>(world, 1.0);
     let previous = clip.xy / clip.w;
-    let uv = vec2<f32>(
-        (previous.x + temporal.jitter.z) * 0.5 + 0.5,
-        0.5 - (previous.y + temporal.jitter.w) * 0.5,
-    );
-    let at = uv * extent;
-    let valid = at.x >= frame.viewport.x
-        && at.y >= frame.viewport.y
-        && at.x <= frame.viewport.x + frame.viewport.z - 1.0
-        && at.y <= frame.viewport.y + frame.viewport.w - 1.0;
-    return Reprojection(uv, valid);
+    let local = vec2<f32>(previous.x * 0.5 + 0.5, 0.5 - previous.y * 0.5);
+    let uv = (frame.viewport.xy + local * frame.viewport.zw) / extent;
+    let drift = length((previous - ndc) * 0.5 * frame.viewport.zw);
+    let reach = frame.viewport.xy + local * frame.viewport.zw;
+    let valid = reach.x >= frame.viewport.x
+        && reach.y >= frame.viewport.y
+        && reach.x <= frame.viewport.x + frame.viewport.z - 1.0
+        && reach.y <= frame.viewport.y + frame.viewport.w - 1.0;
+    return Reprojection(uv, drift, valid);
 }
 
 fn input_uv(pixel: vec2<i32>, extent: vec2<f32>) -> vec2<f32> {
     return (vec2<f32>(pixel) + vec2<f32>(0.5)) / extent;
+}
+
+fn retained(count: f32, drift: f32) -> f32 {
+    let reach = clamp(DRIFT / max(drift, QUIET), 0.0, temporal.flags.z);
+    return min(count, reach);
 }
 
 @fragment
@@ -117,11 +124,14 @@ fn fs_main(input: VertexOutput) -> TemporalOutput {
     }
     let stored = textureSampleLevel(history_color, history_sampler, projection.uv, 0.0);
     let at = clamp(vec2<i32>(projection.uv * extent), origin, last);
-    let count = clamp(textureLoad(history_count, at, 0).x, 1.0, SAMPLE_CEILING);
+    let held = retained(
+        clamp(textureLoad(history_count, at, 0).x, 1.0, temporal.flags.z),
+        projection.drift,
+    );
     var history = stored;
     if (temporal.flags.y > 0.5) {
         history = clamp_history(stored, neighbourhood(pixel, origin, last));
     }
-    let resolved = mix(history, color, 1.0 / (count + 1.0));
-    return TemporalOutput(resolved, resolved, count + 1.0);
+    let resolved = mix(history, color, 1.0 / (held + 1.0));
+    return TemporalOutput(resolved, resolved, held + 1.0);
 }

@@ -1,5 +1,4 @@
 use super::*;
-use crate::jitter;
 use crate::schema::Overlay;
 use crate::temporal;
 use glam::Mat4;
@@ -23,10 +22,8 @@ pub(super) struct Stage<'a> {
     pub(super) exposure: f32,
     pub(super) transparent: bool,
     pub(super) volume: bool,
-    pub(super) phase: u32,
     pub(super) reset: bool,
     pub(super) clamp: bool,
-    pub(super) previous: Option<Mat4>,
     pub(super) dummy_normal: &'a TextureView,
     pub(super) dummy_volume: &'a crate::target::Unreached,
 }
@@ -51,23 +48,19 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         exposure,
         transparent,
         volume,
-        phase,
         reset,
         clamp,
-        previous,
         dummy_normal,
         dummy_volume,
     } = stage;
     let current = Mat4::from_cols_array_2d(&data.view_projection);
-    let offset = jitter::offset(phase, [region[2], region[3]]);
     let intact = target.temporal.intact() && !reset;
     if !intact {
         convergence.invalidate();
     }
     temporal_pass.write(
         queue,
-        previous.unwrap_or(current),
-        [offset, target.jitter],
+        target.temporal.camera().unwrap_or(current),
         intact,
         clamp,
     );
@@ -80,8 +73,7 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         region,
     );
     convergence.evaluate(device, queue, encoder, &target.temporal, region, exposure);
-    target.temporal.advance();
-    target.jitter = offset;
+    target.temporal.advance(current);
     overlay.prepare(device, queue, overlays, current);
     overlay.draw(encoder, target.resolved(), region);
     let blend = timing::fade(fade);

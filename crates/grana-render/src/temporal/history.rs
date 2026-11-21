@@ -1,3 +1,4 @@
+use glam::Mat4;
 use wgpu::{Device, Texture, TextureFormat, TextureUsages, TextureView};
 
 use crate::target::{SCENE_FORMAT, image, view};
@@ -13,6 +14,7 @@ pub(crate) struct History {
     resolved_view: TextureView,
     read: usize,
     intact: bool,
+    camera: Option<Mat4>,
 }
 
 impl History {
@@ -54,6 +56,7 @@ impl History {
             resolved_view,
             read: 0,
             intact: false,
+            camera: None,
         }
     }
 
@@ -63,6 +66,10 @@ impl History {
 
     pub(crate) fn invalidate(&mut self) {
         self.intact = false;
+    }
+
+    pub(crate) fn camera(&self) -> Option<Mat4> {
+        self.camera
     }
 
     pub(crate) fn read_color(&self) -> &TextureView {
@@ -89,8 +96,9 @@ impl History {
         &self.resolved
     }
 
-    pub(crate) fn advance(&mut self) {
+    pub(crate) fn advance(&mut self, camera: Mat4) {
         self.read = 1 - self.read;
         self.intact = true;
+        self.camera = Some(camera);
     }
 }

@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec2};
+use glam::Mat4;
 use grana_gpu::Pipelines;
 use grana_gpu::layout::{sampler, texture, uniform};
 use wgpu::{
@@ -37,7 +37,6 @@ const SHADER: &str = concat!(
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Uniforms {
     previous: [[f32; 4]; 4],
-    jitter: [f32; 4],
     flags: [f32; 4],
 }
 
@@ -171,17 +170,9 @@ impl Resolve {
         })
     }
 
-    pub(crate) fn write(
-        &self,
-        queue: &Queue,
-        previous: Mat4,
-        jitter: [Vec2; 2],
-        intact: bool,
-        clamp: bool,
-    ) {
+    pub(crate) fn write(&self, queue: &Queue, previous: Mat4, intact: bool, clamp: bool) {
         let uniforms = Uniforms {
             previous: previous.to_cols_array_2d(),
-            jitter: [jitter[0].x, jitter[0].y, jitter[1].x, jitter[1].y],
             flags: [
                 f32::from(u8::from(intact)),
                 f32::from(u8::from(clamp)),

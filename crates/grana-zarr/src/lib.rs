@@ -28,7 +28,7 @@ pub use grana_net::Transfer;
 pub use hcs::{
     Field, Kind as GroupKind, Plate, Well, group_path, kind as group_kind, open as open_plate,
 };
-pub use image::Image;
+pub use image::{Image, outlines};
 pub use label::{
     ChunkFill, Label, LabelSpec, Labels, Written, read_labels, write as write_labels,
     write_group_labels,
