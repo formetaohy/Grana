@@ -59,8 +59,13 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Test
-        run: cargo test -p grana --test suite --all-features --locked -- --test-threads=1
+        run: cargo nextest run -p grana --all-features --locked --no-fail-fast
 
   build:
     name: Release Build

@@ -3,7 +3,7 @@ use std::net::{TcpListener, TcpStream};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use grana_volume::{Channel, Extent, Spacing, Volume, VoxelData};
@@ -34,11 +34,31 @@ impl Drop for Temp {
     }
 }
 
+static EXCLUSIVE: AtomicBool = AtomicBool::new(false);
+
+struct Exclusive;
+
+impl Exclusive {
+    fn claim() -> Self {
+        assert!(
+            !EXCLUSIVE.swap(true, Ordering::SeqCst),
+            "two gpu tests shared one process: run the suite with cargo nextest"
+        );
+        Self
+    }
+}
+
+impl Drop for Exclusive {
+    fn drop(&mut self) {
+        EXCLUSIVE.store(false, Ordering::SeqCst);
+    }
+}
+
 pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipelines: grana_gpu::Pipelines,
-    _serial: MutexGuard<'static, ()>,
+    _exclusive: Exclusive,
 }
 
 impl Gpu {
@@ -73,8 +93,6 @@ pub fn splat(center: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) -> gran
 }
 
 pub fn gpu() -> Option<Gpu> {
-    static SERIAL: Mutex<()> = Mutex::new(());
-    let serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
     let headless = match grana_gpu::Headless::shared() {
         Ok(headless) => headless,
         Err(detail) => {
@@ -87,7 +105,7 @@ pub fn gpu() -> Option<Gpu> {
         device: headless.device,
         queue: headless.queue,
         pipelines,
-        _serial: serial,
+        _exclusive: Exclusive::claim(),
     })
 }
 
