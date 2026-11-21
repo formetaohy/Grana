@@ -1,26 +1,20 @@
 use super::*;
 use crate::schema::Overlay;
 use crate::temporal;
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 
-pub(super) struct Stage<'a> {
+pub(super) struct Accumulate<'a> {
     pub(super) device: &'a Device,
     pub(super) queue: &'a Queue,
     pub(super) encoder: &'a mut CommandEncoder,
     pub(super) layouts: &'a Layouts,
-    pub(super) present: &'a Present,
     pub(super) temporal: &'a temporal::Resolve,
     pub(super) convergence: &'a mut temporal::Convergence,
     pub(super) scene: &'a BindGroup,
     pub(super) target: &'a mut FrameTarget,
-    pub(super) overlay: &'a mut Overlays,
-    pub(super) overlays: &'a [Overlay<'a>],
     pub(super) data: &'a FrameData,
-    pub(super) surface: &'a TextureView,
-    pub(super) fade: &'a mut Option<Fade>,
     pub(super) region: [u32; 4],
     pub(super) exposure: f32,
-    pub(super) transparent: bool,
     pub(super) volume: bool,
     pub(super) reset: bool,
     pub(super) clamp: bool,
@@ -28,25 +22,34 @@ pub(super) struct Stage<'a> {
     pub(super) dummy_volume: &'a crate::target::Unreached,
 }
 
-pub(super) fn encode(stage: Stage<'_>) -> bool {
-    let Stage {
+pub(super) struct Present<'a> {
+    pub(super) device: &'a Device,
+    pub(super) queue: &'a Queue,
+    pub(super) encoder: &'a mut CommandEncoder,
+    pub(super) pass: &'a crate::present::Present,
+    pub(super) target: &'a mut FrameTarget,
+    pub(super) overlay: &'a mut Overlays,
+    pub(super) overlays: &'a [Overlay<'a>],
+    pub(super) surface: &'a TextureView,
+    pub(super) fade: Option<f32>,
+    pub(super) region: [u32; 4],
+    pub(super) exposure: f32,
+    pub(super) transparent: bool,
+}
+
+pub(super) fn accumulate(stage: Accumulate<'_>) -> bool {
+    let Accumulate {
         device,
         queue,
         encoder,
         layouts,
-        present,
         temporal: temporal_pass,
         convergence,
         scene,
         target,
-        overlay,
-        overlays,
         data,
-        surface,
-        fade,
         region,
         exposure,
-        transparent,
         volume,
         reset,
         clamp,
@@ -54,15 +57,21 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         dummy_volume,
     } = stage;
     let current = Mat4::from_cols_array_2d(&data.view_projection);
+    let eye = Vec3::new(data.eye[0], data.eye[1], data.eye[2]);
     let intact = target.temporal.intact() && !reset;
     if !intact {
         convergence.invalidate();
     }
     temporal_pass.write(
         queue,
-        target.temporal.camera().unwrap_or(current),
-        intact,
-        clamp,
+        temporal::State {
+            previous: target.temporal.camera().unwrap_or(current),
+            eye: target.temporal.eye().unwrap_or(eye),
+            intact,
+            clamp,
+            ceiling: temporal::SAMPLE_BUDGET as f32,
+            exposure,
+        },
     );
     let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume, volume);
     let group = temporal_pass.bind(device, target.scene.color(), &target.temporal);
@@ -72,28 +81,44 @@ pub(super) fn encode(stage: Stage<'_>) -> bool {
         &target.temporal,
         region,
     );
-    convergence.evaluate(device, queue, encoder, &target.temporal, region, exposure);
-    target.temporal.advance(current);
+    target.temporal.advance(current, eye);
+    intact
+}
+
+pub(super) fn present(stage: Present<'_>) {
+    let Present {
+        device,
+        queue,
+        encoder,
+        pass,
+        target,
+        overlay,
+        overlays,
+        surface,
+        fade,
+        region,
+        exposure,
+        transparent,
+    } = stage;
+    let current = target
+        .temporal
+        .camera()
+        .expect("the accumulation names the presented camera");
     overlay.prepare(device, queue, overlays, current);
     overlay.draw(encoder, target.resolved(), region);
-    let blend = timing::fade(fade);
-    present.write(
+    pass.write(
         queue,
         exposure,
         transparent,
-        blend,
+        fade,
         coverage(region, target.size),
     );
-    if blend.is_some() {
-        let group = target.fade_group(device, present);
-        present.present(encoder, surface, group, region);
-        if fade.as_ref().is_some_and(|active| active.weight >= 1.0) {
-            *fade = None;
-        }
+    if fade.is_some() {
+        let group = target.fade_group(device, pass);
+        pass.present(encoder, surface, group, region);
     } else {
-        present.present(encoder, surface, &target.present_group, region);
+        pass.present(encoder, surface, &target.present_group, region);
     }
-    intact
 }
 
 pub(super) fn coverage(region: [u32; 4], size: [u32; 2]) -> [f32; 4] {

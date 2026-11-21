@@ -1,20 +1,22 @@
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use wgpu::{Device, Texture, TextureFormat, TextureUsages, TextureView};
 
 use crate::target::{SCENE_FORMAT, image, view};
 
-pub(crate) const COUNT_FORMAT: TextureFormat = TextureFormat::R16Float;
+pub(crate) const STATISTICS_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
 
 const HELD: TextureUsages = TextureUsages::RENDER_ATTACHMENT.union(TextureUsages::TEXTURE_BINDING);
 
 pub(crate) struct History {
     color: [TextureView; 2],
-    counts: [TextureView; 2],
+    odd: [TextureView; 2],
+    statistics: [TextureView; 2],
     resolved: Texture,
     resolved_view: TextureView,
     read: usize,
     intact: bool,
     camera: Option<Mat4>,
+    eye: Option<Vec3>,
 }
 
 impl History {
@@ -32,12 +34,21 @@ impl History {
                 HELD,
             ))
         });
-        let counts = [0, 1].map(|_| {
+        let odd = [0, 1].map(|_| {
             view(&image(
                 device,
-                "grana.temporal.count",
+                "grana.temporal.odd",
                 size,
-                COUNT_FORMAT,
+                SCENE_FORMAT,
+                HELD,
+            ))
+        });
+        let statistics = [0, 1].map(|_| {
+            view(&image(
+                device,
+                "grana.temporal.statistics",
+                size,
+                STATISTICS_FORMAT,
                 HELD,
             ))
         });
@@ -51,12 +62,14 @@ impl History {
         let resolved_view = view(&resolved);
         Self {
             color,
-            counts,
+            odd,
+            statistics,
             resolved,
             resolved_view,
             read: 0,
             intact: false,
             camera: None,
+            eye: None,
         }
     }
 
@@ -72,6 +85,10 @@ impl History {
         self.camera
     }
 
+    pub(crate) fn eye(&self) -> Option<Vec3> {
+        self.eye
+    }
+
     pub(crate) fn read_color(&self) -> &TextureView {
         &self.color[self.read]
     }
@@ -80,12 +97,20 @@ impl History {
         &self.color[1 - self.read]
     }
 
-    pub(crate) fn read_count(&self) -> &TextureView {
-        &self.counts[self.read]
+    pub(crate) fn read_odd(&self) -> &TextureView {
+        &self.odd[self.read]
     }
 
-    pub(crate) fn write_count(&self) -> &TextureView {
-        &self.counts[1 - self.read]
+    pub(crate) fn write_odd(&self) -> &TextureView {
+        &self.odd[1 - self.read]
+    }
+
+    pub(crate) fn read_statistics(&self) -> &TextureView {
+        &self.statistics[self.read]
+    }
+
+    pub(crate) fn write_statistics(&self) -> &TextureView {
+        &self.statistics[1 - self.read]
     }
 
     pub(crate) fn resolved(&self) -> &TextureView {
@@ -96,9 +121,10 @@ impl History {
         &self.resolved
     }
 
-    pub(crate) fn advance(&mut self, camera: Mat4) {
+    pub(crate) fn advance(&mut self, camera: Mat4, eye: Vec3) {
         self.read = 1 - self.read;
         self.intact = true;
         self.camera = Some(camera);
+        self.eye = Some(eye);
     }
 }

@@ -200,7 +200,7 @@ impl App {
 
     pub(super) fn settling(&self) -> bool {
         let info = self.frame_info();
-        (info.drawn && !info.converged) || info.fading
+        (info.drawn && !info.refined()) || info.fading
     }
 
     pub(super) fn streaming(&self) -> bool {

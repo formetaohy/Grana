@@ -1,17 +1,21 @@
 struct TemporalData {
     previous: mat4x4<f32>,
+    eye: vec4<f32>,
     flags: vec4<f32>,
 }
 
 @group(2) @binding(0) var<uniform> temporal: TemporalData;
 @group(2) @binding(1) var current: texture_2d<f32>;
 @group(2) @binding(2) var history_color: texture_2d<f32>;
-@group(2) @binding(3) var history_count: texture_2d<f32>;
+@group(2) @binding(3) var history_statistics: texture_2d<f32>;
 @group(2) @binding(4) var history_sampler: sampler;
+@group(2) @binding(5) var history_odd: texture_2d<f32>;
 
-const DRIFT: f32 = 2.0;
+const UNREACHED: f32 = 1.0e19;
 
-const QUIET: f32 = 0.015625;
+const UNKNOWN: f32 = 1.0e18;
+
+const DEPTH_MARGIN: f32 = 6.0;
 
 struct VertexOutput {
     @builtin(position) clip: vec4<f32>,
@@ -32,7 +36,8 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 struct TemporalOutput {
     @location(0) retained: vec4<f32>,
     @location(1) resolved: vec4<f32>,
-    @location(2) count: f32,
+    @location(2) odd: vec4<f32>,
+    @location(3) statistics: vec4<f32>,
 }
 
 struct Range {
@@ -42,8 +47,13 @@ struct Range {
 
 struct Reprojection {
     uv: vec2<f32>,
-    drift: f32,
     valid: bool,
+}
+
+struct Specimen {
+    world: vec3<f32>,
+    known: bool,
+    reach: f32,
 }
 
 fn to_ycocg(rgb: vec3<f32>) -> vec3<f32> {
@@ -77,33 +87,43 @@ fn clamp_history(stored: vec4<f32>, range: Range) -> vec4<f32> {
     return vec4<f32>(from_ycocg(chroma), clamp(stored.a, range.low.a, range.high.a));
 }
 
-fn reproject(pixel: vec2<i32>, ndc: vec2<f32>, extent: vec2<f32>) -> Reprojection {
-    let at = input_uv(pixel, extent);
+fn specimen(pixel: vec2<i32>, ndc: vec2<f32>) -> Specimen {
     let surface = motion_surface(pixel, ndc);
-    if (!surface.known) {
-        return Reprojection(at, 0.0, true);
-    }
     let world = unproject(vec3<f32>(ndc, surface.depth));
+    let reach = select(UNREACHED, length(world - temporal.eye.xyz), surface.known);
+    return Specimen(world, surface.known, reach);
+}
+
+fn survives(held: f32, world: Specimen) -> bool {
+    if (!world.known) {
+        return held >= UNKNOWN;
+    }
+    if (held >= UNKNOWN) {
+        return false;
+    }
+    return abs(held - world.reach) <= DEPTH_MARGIN * pixel_world(world.reach);
+}
+
+fn reproject(world: vec3<f32>, extent: vec2<f32>) -> Reprojection {
     let clip = temporal.previous * vec4<f32>(world, 1.0);
     let previous = clip.xy / clip.w;
     let local = vec2<f32>(previous.x * 0.5 + 0.5, 0.5 - previous.y * 0.5);
     let uv = (frame.viewport.xy + local * frame.viewport.zw) / extent;
-    let drift = length((previous - ndc) * 0.5 * frame.viewport.zw);
     let reach = frame.viewport.xy + local * frame.viewport.zw;
-    let valid = reach.x >= frame.viewport.x
-        && reach.y >= frame.viewport.y
-        && reach.x <= frame.viewport.x + frame.viewport.z - 1.0
-        && reach.y <= frame.viewport.y + frame.viewport.w - 1.0;
-    return Reprojection(uv, drift, valid);
+    let valid = reach.x >= frame.viewport.x - 0.5
+        && reach.y >= frame.viewport.y - 0.5
+        && reach.x <= frame.viewport.x + frame.viewport.z - 0.5
+        && reach.y <= frame.viewport.y + frame.viewport.w - 0.5;
+    return Reprojection(uv, valid);
 }
 
-fn input_uv(pixel: vec2<i32>, extent: vec2<f32>) -> vec2<f32> {
-    return (vec2<f32>(pixel) + vec2<f32>(0.5)) / extent;
-}
-
-fn retained(count: f32, drift: f32) -> f32 {
-    let reach = clamp(DRIFT / max(drift, QUIET), 0.0, temporal.flags.z);
-    return min(count, reach);
+fn fresh(color: vec4<f32>, reach: f32) -> TemporalOutput {
+    return TemporalOutput(
+        color,
+        color,
+        color,
+        vec4<f32>(2.0, 1.0, 0.0, reach),
+    );
 }
 
 @fragment
@@ -114,24 +134,42 @@ fn fs_main(input: VertexOutput) -> TemporalOutput {
     let last = origin + vec2<i32>(frame.viewport.zw) - vec2<i32>(1);
     let local = (input.clip.xy - frame.viewport.xy) / frame.viewport.zw;
     let ndc = vec2<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0);
-    let color = textureLoad(current, pixel, 0);
+    let colour = textureLoad(current, pixel, 0);
+    let world = specimen(pixel, ndc);
     if (temporal.flags.x <= 0.5) {
-        return TemporalOutput(color, color, 1.0);
+        return fresh(colour, world.reach);
     }
-    let projection = reproject(pixel, ndc - frame.jitter.xy, extent);
+    let projection = reproject(world.world, extent);
     if (!projection.valid) {
-        return TemporalOutput(color, color, 1.0);
+        return fresh(colour, world.reach);
     }
-    let stored = textureSampleLevel(history_color, history_sampler, projection.uv, 0.0);
     let at = clamp(vec2<i32>(projection.uv * extent), origin, last);
-    let held = retained(
-        clamp(textureLoad(history_count, at, 0).x, 1.0, temporal.flags.z),
-        projection.drift,
-    );
-    var history = stored;
-    if (temporal.flags.y > 0.5) {
-        history = clamp_history(stored, neighbourhood(pixel, origin, last));
+    let stored = textureLoad(history_statistics, pixel, 0);
+    if (temporal.flags.y > 0.5 && !survives(textureLoad(history_statistics, at, 0).w, world)) {
+        return fresh(colour, world.reach);
     }
-    let resolved = mix(history, color, 1.0 / (held + 1.0));
-    return TemporalOutput(resolved, resolved, held + 1.0);
+    var held = textureSampleLevel(history_color, history_sampler, projection.uv, 0.0);
+    var odd = textureSampleLevel(history_odd, history_sampler, projection.uv, 0.0);
+    if (temporal.flags.y > 0.5) {
+        let range = neighbourhood(pixel, origin, last);
+        held = clamp_history(held, range);
+        odd = clamp_history(odd, range);
+    }
+    let carried = clamp(stored.x, 2.0, temporal.flags.z - 1.0);
+    let odd_carried = clamp(stored.y, 1.0, carried);
+    let index = carried + 1.0;
+    let sample_odd = sample_noise(vec2<f32>(pixel), index) < 0.5;
+    let resolved = mix(held, colour, 1.0 / index);
+    var next_odd = odd;
+    var odd_count = odd_carried;
+    if (sample_odd) {
+        next_odd = mix(odd, colour, 1.0 / (odd_carried + 1.0));
+        odd_count = odd_carried + 1.0;
+    }
+    return TemporalOutput(
+        resolved,
+        resolved,
+        next_odd,
+        vec4<f32>(index, odd_count, 0.0, world.reach),
+    );
 }

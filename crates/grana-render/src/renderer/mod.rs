@@ -90,6 +90,14 @@ pub struct FrameInfo {
     pub truncated: bool,
     pub fading: bool,
     pub converged: bool,
+    pub exhausted: bool,
+    pub error: f32,
+}
+
+impl FrameInfo {
+    pub fn refined(self) -> bool {
+        self.converged || self.exhausted
+    }
 }
 
 #[derive(Default)]

@@ -12,10 +12,5 @@ fn motion_surface(pixel: vec2<i32>, ndc: vec2<f32>) -> Surface {
     if (slice_active()) {
         return nearest_surface(object, slice_surface(ndc));
     }
-    var reach = volume_surface_at(pixel);
-    let anchor = volume_anchor_at(pixel);
-    if (anchor > 0.0) {
-        reach = Surface(anchor, vec3<f32>(0.0), true);
-    }
-    return nearest_surface(object, reach);
+    return nearest_surface(object, volume_surface_at(pixel));
 }

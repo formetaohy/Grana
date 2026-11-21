@@ -423,8 +423,8 @@ fn settled_pixels(
             .draw(gpu.device(), gpu.queue(), capped(view, cap))
             .expect("the converged frame draws");
     }
-    assert_eq!(
-        info.age, samples,
+    assert!(
+        info.age >= samples,
         "the accumulation stopped before it held the samples under test"
     );
     assert!(
@@ -2014,5 +2014,216 @@ fn keeps_the_accumulated_image_through_a_quiet_camera_move() {
     assert!(
         drift < 0.15,
         "the reused accumulation fell back to a fresh sample: {drift:.3} levels"
+    );
+}
+
+#[test]
+fn reports_a_converged_image_only_when_it_stops_changing() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = gradient_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers)
+        .into_iter()
+        .map(|row| grana_render::ChannelRow {
+            volume: VolumeStyle::new(grana_display::VolumeMode::Maximum, 0.5),
+            ..row
+        })
+        .collect::<Vec<_>>();
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle_with(&gpu, &mut renderer, || frame(&view), &volume);
+    let mut info = renderer
+        .draw(gpu.device(), gpu.queue(), frame(&view))
+        .expect("the measured frame draws");
+    let mut draws = 0;
+    while !info.converged && draws < 512 {
+        info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("the measured frame draws");
+        draws += 1;
+    }
+    assert!(
+        info.converged,
+        "a projection of a smooth volume never converged: {} levels at {} samples",
+        info.error, info.age
+    );
+    assert!(
+        info.error <= 2.0,
+        "the reported error {} exceeds the target at convergence",
+        info.error
+    );
+    let converged = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    for _ in 0..256 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("the deeper frame draws");
+    }
+    let deeper = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let drift = mean_difference(&converged, &deeper);
+    assert!(
+        drift < 1.0,
+        "the converged image still moved by {drift:.3} levels with more samples"
+    );
+}
+
+fn depth_quads(quads: &[([f32; 2], f32, f32)]) -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (object, (center, depth, half)) in quads.iter().enumerate() {
+        let base = vertices.len() as u32;
+        for (across, down) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            vertices.push(MeshVertex::new(
+                [center[0] + across * half, center[1] + down * half, *depth],
+                [0.0, 0.0, 1.0],
+                object as u32,
+            ));
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::new(vertices, indices)
+}
+
+#[test]
+fn reveals_the_surface_behind_a_moving_occluder() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = Volume::new(
+        EMPTY,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "empty",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(vec![0; EMPTY.voxel_count() as usize]),
+        )],
+    );
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.3, 0.6, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let stamp = revision();
+    let mesh = Arc::new(PackedMesh::new(depth_quads(&[
+        ([0.0, 0.0], 10.0, 2.4),
+        ([0.0, 0.0], 0.0, 4.0),
+    ])));
+    let styles = Arc::from([
+        Style::new([1.0, 0.1, 0.1], true, false, 1.0),
+        Style::new([0.1, 0.3, 1.0], true, false, 1.0),
+    ]);
+    let layers = [Layer::new(
+        LayerKey::new(1, 0, 0),
+        stamp,
+        stamp,
+        Arc::clone(&mesh),
+        Arc::clone(&styles),
+        0,
+    )];
+    let scene = SceneFrame {
+        versions: grana_render::Versions::new(stamp, stamp, stamp),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        layers: &layers,
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut moved = camera.clone();
+    moved.pan(Vec2::new(26.0, 0.0), SIDE as f32);
+    let near = project(&camera, [2.4, 0.0, 10.0]);
+    let near_moved = project(&moved, [2.4, 0.0, 10.0]);
+    assert!(
+        near_moved[0] > near[0] + 4,
+        "the occluder must cover {near:?} and slide to {near_moved:?}"
+    );
+    let strip = [near[0] + 2, 24, near_moved[0] - 2, SIDE - 24];
+    let settled = |camera: &Camera, draws: usize| {
+        let mut renderer = build_renderer(&gpu, &pyramid);
+        let target = texture(&gpu, SIDE);
+        let view_texture = target.create_view(&Default::default());
+        let view = View {
+            target: &view_texture,
+            camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Immediate,
+        };
+        settle_with(&gpu, &mut renderer, || frame(&view), &volume);
+        for _ in 0..draws {
+            renderer
+                .draw(gpu.device(), gpu.queue(), frame(&view))
+                .expect("the probed frame draws");
+        }
+        read_pixels(&gpu, &target, [SIDE, SIDE])
+    };
+    let fresh = settled(&moved, 16);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let settled_view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let moved_view = View {
+        target: &view_texture,
+        camera: &moved,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle_with(&gpu, &mut renderer, || frame(&settled_view), &volume);
+    for _ in 0..16 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), frame(&settled_view))
+            .expect("the settled frame draws");
+    }
+    for _ in 0..3 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), frame(&moved_view))
+            .expect("the revealed frame draws");
+    }
+    let revealed = read_pixels(&gpu, &target, [SIDE, SIDE]);
+    let error = rect_difference(&revealed, &fresh, strip);
+    let red = revealed
+        .iter()
+        .enumerate()
+        .filter(|(index, pixel)| {
+            let x = (index % SIDE as usize) as u32;
+            let y = (index / SIDE as usize) as u32;
+            x >= strip[0] && x < strip[2] && y >= strip[1] && y < strip[3] && pixel[0] > pixel[2]
+        })
+        .count();
+    assert!(
+        error < 6.0,
+        "the revealed strip trails the occluder by {error:.3} levels ({red} red pixels)"
     );
 }

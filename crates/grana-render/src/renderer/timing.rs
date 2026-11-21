@@ -25,7 +25,6 @@ pub(super) struct Started {
     pub(super) moved: bool,
     pub(super) changed: bool,
     pub(super) snapshot: bool,
-    pub(super) phase: u32,
 }
 
 impl Started {
@@ -92,7 +91,6 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         moved,
         changed,
         snapshot,
-        phase: target.phase,
     }
 }
 

@@ -1621,7 +1621,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                     .expect("the viewport draws");
                 let waiting = match until {
                     Some(revision) => engine.image_revision() <= revision,
-                    None => !engine.info().converged,
+                    None => !engine.info().refined(),
                 };
                 if !waiting {
                     break;

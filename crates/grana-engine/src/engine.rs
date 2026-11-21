@@ -362,7 +362,7 @@ impl Engine {
         if delivery.awaits() {
             return info.drawn && !info.fading;
         }
-        info.converged && !info.fading && info.view.resident >= info.view.demand
+        info.refined() && !info.fading && info.view.resident >= info.view.demand
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {

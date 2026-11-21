@@ -63,6 +63,7 @@ struct Prepared {
     replan: bool,
     rebuilt: bool,
     ready: bool,
+    stride: u32,
 }
 
 enum Halt {
@@ -98,8 +99,21 @@ impl Renderer {
             }
             Err(Halt::Fail(detail)) => return Err(detail),
         };
-        self.record(device, queue, &mut encoder, target, &frame, &mut prepared);
-        self.resolve(device, queue, &mut encoder, target, &frame, &prepared)?;
+        let stride = prepared.stride;
+        queue.submit([encoder.finish()]);
+        for _ in 0..stride {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("grana.sample"),
+            });
+            self.record(device, queue, &mut encoder, target, &frame, &mut prepared);
+            self.accumulate(device, queue, &mut encoder, target, &frame, &prepared);
+            queue.submit([encoder.finish()]);
+        }
+        self.judge(device, queue, target, &frame, &prepared)?;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.present"),
+        });
+        self.show(device, queue, &mut encoder, target, &frame, prepared.ready);
         queue.submit([encoder.finish()]);
         self.register();
         Ok(self.info)
@@ -149,6 +163,7 @@ impl Renderer {
         self.present_region = Some(view.region);
         self.sequence = self.sequence.wrapping_add(1);
         self.motion = Some(view.motion);
+        let stride = self.convergence.stride(target.age);
         let Self {
             layouts,
             present,
@@ -377,6 +392,7 @@ impl Renderer {
             replan: outlook.replan,
             rebuilt: stale,
             ready: outlook.ready,
+            stride,
         })
     }
 
@@ -413,22 +429,26 @@ impl Renderer {
         let started = prepared.started;
         let ladder = prepared.ladder;
         let data = &mut prepared.data;
-        let offset = jitter::offset(started.phase, [view.region[2], view.region[3]]);
+        let phase = target.phase;
+        let offset = jitter::offset(phase, [view.region[2], view.region[3]]);
         data.jitter = [
             offset.x,
             offset.y,
-            started.phase as f32,
+            phase as f32,
             frame.scene.step_scale.max(1.0e-3),
         ];
         data.lens = crate::frame::lens(
             frame.camera,
-            started.phase % temporal::APERTURE_PHASE,
+            phase % temporal::APERTURE_PHASE,
             temporal::APERTURE_PHASE,
             view.aspect,
         );
+        if let Some(oit) = target.oit.as_ref().filter(|_| shot.translucent) {
+            data.oit[2] = oit.next_epoch();
+        }
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
         resources.scene.write_frame(queue, *data);
-        if prepared.replan {
+        if std::mem::take(&mut prepared.replan) {
             let tables = plan::tables(&resources.bricks, prepared.levels);
             plan::schedule(
                 &mut resources.planner,
@@ -503,7 +523,7 @@ impl Renderer {
                 volume: shot.volume,
                 surfaces: shot.surfaces,
             },
-            sample: started.phase,
+            sample: phase,
             dummy_ao,
             dummy_oit,
             dummy_normal,
@@ -519,7 +539,40 @@ impl Renderer {
         info.age = target.age;
     }
 
-    fn resolve(
+    fn judge(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        target: &mut FrameTarget,
+        frame: &Frame<'_, '_>,
+        prepared: &Prepared,
+    ) -> Result<(), String> {
+        let Self {
+            convergence, info, ..
+        } = self;
+        if !prepared.ready || !info.drawn {
+            return Ok(());
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.judge"),
+        });
+        convergence.evaluate(
+            device,
+            queue,
+            &mut encoder,
+            &target.temporal,
+            prepared.shot.view.region,
+            frame.exposure,
+        );
+        queue.submit([encoder.finish()]);
+        convergence.poll(device)?;
+        info.error = convergence.error();
+        info.converged = convergence.converged();
+        info.exhausted = target.age >= temporal::SAMPLE_BUDGET;
+        Ok(())
+    }
+
+    fn accumulate(
         &mut self,
         device: &Device,
         queue: &Queue,
@@ -527,18 +580,14 @@ impl Renderer {
         target: &mut FrameTarget,
         frame: &Frame<'_, '_>,
         prepared: &Prepared,
-    ) -> Result<(), String> {
+    ) {
         let Self {
             layouts,
-            present,
             temporal,
             convergence,
             resources,
-            transparent,
-            fade,
             info,
             residence,
-            overlay,
             dummy_normal,
             dummy_volume,
             ..
@@ -554,40 +603,32 @@ impl Renderer {
                     prepared.pose,
                 );
             }
-            return Ok(());
+            return;
         };
         let view = prepared.shot.view;
         if prepared.started.resets_age() {
             convergence.invalidate();
         }
-        let intact = resolve::encode(resolve::Stage {
+        let intact = resolve::accumulate(resolve::Accumulate {
             device,
             queue,
             encoder,
             layouts,
-            present,
             temporal,
             convergence,
             scene: resources.scene.group(),
             target,
-            overlay,
-            overlays: frame.scene.overlays,
             data: &prepared.data,
-            surface: frame.target,
-            fade,
             region: view.region,
             exposure: frame.exposure,
-            transparent: *transparent,
             volume: prepared.shot.volume,
             reset: prepared.started.refresh,
             clamp: prepared.started.clamps_history(),
             dummy_normal,
             dummy_volume,
         });
-        convergence.poll(device)?;
-        info.converged = convergence.converged() || target.age >= temporal::SAMPLE_CEILING as u32;
         info.history = intact;
-        info.fading = fade.is_some();
+        info.age = target.age;
         if let Some(slot) = prepared.reserved {
             residence.stage(
                 encoder,
@@ -597,7 +638,51 @@ impl Renderer {
                 prepared.pose,
             );
         }
-        Ok(())
+    }
+
+    fn show(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        target: &mut FrameTarget,
+        frame: &Frame<'_, '_>,
+        ready: bool,
+    ) {
+        if !ready || !self.info.drawn {
+            return;
+        }
+        let Self {
+            present,
+            fade,
+            info,
+            overlay,
+            transparent,
+            ..
+        } = self;
+        let view = View::new(
+            frame.viewport,
+            frame.size,
+            frame.camera,
+            frame.region,
+            frame.time,
+        );
+        let blend = timing::fade(fade);
+        resolve::present(resolve::Present {
+            device,
+            queue,
+            encoder,
+            pass: present,
+            target,
+            overlay,
+            overlays: frame.scene.overlays,
+            surface: frame.target,
+            fade: blend,
+            region: view.region,
+            exposure: frame.exposure,
+            transparent: *transparent,
+        });
+        info.fading = fade.is_some();
     }
 }
 

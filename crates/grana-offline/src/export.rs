@@ -241,7 +241,7 @@ impl Export {
             return self.fail(truncation(&info));
         }
         if info.drawn {
-            self.drawn += 1;
+            self.drawn = info.age;
         }
         if self.drawn < self.frames {
             if self.attempts > ATTEMPTS {

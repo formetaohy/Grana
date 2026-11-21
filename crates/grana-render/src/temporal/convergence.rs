@@ -11,7 +11,7 @@ use wgpu::{
     TextureViewDimension,
 };
 
-use super::History;
+use super::{DRAW_TARGET, ERROR_LIMIT, History, SAMPLE_FLOOR, SAMPLE_STRIDE};
 
 const SHADER: &str = concat!(
     include_str!("../shader/color.wgsl"),
@@ -27,9 +27,9 @@ const WORDS: u64 = (BINS * size_of::<u32>()) as u64;
 
 const SLOTS: usize = 2;
 
-const CEILING: f32 = 0.05;
+const CEILING: f32 = 64.0;
 
-const LIMIT: f32 = 0.25 / 255.0;
+const CONFIDENCE: f32 = 1.96;
 
 pub(crate) struct Convergence {
     pipeline: ComputePipeline,
@@ -40,6 +40,8 @@ pub(crate) struct Convergence {
     staged: VecDeque<u64>,
     generation: u64,
     settled: bool,
+    error: f32,
+    measured: bool,
 }
 
 impl Convergence {
@@ -48,8 +50,9 @@ impl Convergence {
             label: Some("grana.temporal.convergence.layout"),
             entries: &[
                 uniform(0, ShaderStages::COMPUTE),
+                texture(1, ShaderStages::COMPUTE),
                 BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: 2,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: false },
@@ -58,8 +61,8 @@ impl Convergence {
                     },
                     count: None,
                 },
-                texture(2, ShaderStages::COMPUTE),
                 storage(3, ShaderStages::COMPUTE, false),
+                texture(4, ShaderStages::COMPUTE),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -81,7 +84,7 @@ impl Convergence {
         });
         let limit = device.create_buffer(&BufferDescriptor {
             label: Some("grana.temporal.convergence.limit"),
-            size: 4 * size_of::<u32>() as u64 + 4 * size_of::<f32>() as u64,
+            size: 8 * size_of::<u32>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -101,6 +104,8 @@ impl Convergence {
             staged: VecDeque::new(),
             generation: 0,
             settled: false,
+            error: f32::INFINITY,
+            measured: false,
         }
     }
 
@@ -108,8 +113,29 @@ impl Convergence {
         self.settled
     }
 
+    pub(crate) fn error(&self) -> f32 {
+        self.error
+    }
+
+    pub(crate) fn stride(&self, age: u32) -> u32 {
+        if !self.measured || age < SAMPLE_FLOOR || self.error.is_nan() {
+            return 1;
+        }
+        let ratio = (self.error / ERROR_LIMIT).powi(2);
+        let needed = (age as f32) * ratio;
+        let remaining = (needed - age as f32).max(0.0);
+        let stride = (remaining / DRAW_TARGET).ceil();
+        if stride <= 1.0 {
+            1
+        } else {
+            stride.min(SAMPLE_STRIDE as f32) as u32
+        }
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.settled = false;
+        self.error = f32::INFINITY;
+        self.measured = false;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -121,7 +147,10 @@ impl Convergence {
                 .pop_front()
                 .expect("every convergence readback is staged with its generation");
             if staged == self.generation {
-                self.settled = settled(&counts);
+                let error = bound(&counts);
+                self.settled = error <= ERROR_LIMIT;
+                self.error = error;
+                self.measured = true;
             }
         }
         Ok(())
@@ -139,10 +168,6 @@ impl Convergence {
         assert!(
             region[2] > 0 && region[3] > 0,
             "a convergence reduction covers a positive surface"
-        );
-        assert!(
-            exposure.is_finite() && exposure > 0.0,
-            "a convergence reduction weighs the presented radiance"
         );
         let Some(slot) = self.readback.reserve() else {
             return;
@@ -168,11 +193,15 @@ impl Convergence {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(history.read_color()),
+                    resource: BindingResource::TextureView(history.read_statistics()),
                 },
                 BindGroupEntry {
                     binding: 3,
                     resource: self.bins.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(history.read_odd()),
                 },
             ],
         });
@@ -201,14 +230,14 @@ impl Convergence {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Limit {
     region: [u32; 4],
-    exposure: [f32; 4],
+    scale: [f32; 4],
 }
 
 impl Limit {
     fn new(region: [u32; 4], exposure: f32) -> Self {
         Self {
             region,
-            exposure: [exposure, 0.0, 0.0, 0.0],
+            scale: [CEILING, CONFIDENCE, SAMPLE_FLOOR as f32, exposure],
         }
     }
 }
@@ -222,7 +251,7 @@ fn counts(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-fn settled(counts: &[u32]) -> bool {
+fn bound(counts: &[u32]) -> f32 {
     assert_eq!(
         counts.len(),
         BINS,
@@ -230,15 +259,15 @@ fn settled(counts: &[u32]) -> bool {
     );
     let total = counts.iter().map(|count| u64::from(*count)).sum::<u64>();
     if total == 0 {
-        return true;
+        return 0.0;
     }
-    let mean = counts
+    let squared = counts
         .iter()
         .enumerate()
         .map(|(index, count)| {
-            f64::from(*count) * (index as f64 + 0.5) * f64::from(CEILING) / BINS as f64
+            let error = f64::from(CEILING) * ((index as f64 + 0.5) / BINS as f64).powi(2);
+            f64::from(*count) * error * error
         })
-        .sum::<f64>()
-        / total as f64;
-    mean <= f64::from(LIMIT)
+        .sum::<f64>();
+    (squared / total as f64).sqrt() as f32
 }

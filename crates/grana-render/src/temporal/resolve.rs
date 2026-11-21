@@ -1,5 +1,5 @@
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use grana_gpu::Pipelines;
 use grana_gpu::layout::{sampler, texture, uniform};
 use wgpu::{
@@ -12,12 +12,13 @@ use wgpu::{
     TextureViewDimension, VertexState,
 };
 
-use super::History;
+use super::{History, STATISTICS_FORMAT};
 use crate::layout::Layouts;
 use crate::target::{SCENE_FORMAT, viewport};
-use crate::temporal::{COUNT_FORMAT, SAMPLE_CEILING};
 
 const SHADER: &str = concat!(
+    include_str!("../shader/color.wgsl"),
+    "\n",
     include_str!("../shader/scene.wgsl"),
     "\n",
     include_str!("../shader/octahedral.wgsl"),
@@ -33,10 +34,21 @@ const SHADER: &str = concat!(
     include_str!("../shader/temporal.wgsl")
 );
 
+#[derive(Clone, Copy)]
+pub(crate) struct State {
+    pub(crate) previous: Mat4,
+    pub(crate) eye: Vec3,
+    pub(crate) intact: bool,
+    pub(crate) clamp: bool,
+    pub(crate) ceiling: f32,
+    pub(crate) exposure: f32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct Uniforms {
     previous: [[f32; 4]; 4],
+    eye: [f32; 4],
     flags: [f32; 4],
 }
 
@@ -66,6 +78,7 @@ impl Resolve {
                     count: None,
                 },
                 sampler(4, ShaderStages::FRAGMENT),
+                texture(5, ShaderStages::FRAGMENT),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -105,7 +118,12 @@ impl Resolve {
                         write_mask: ColorWrites::ALL,
                     }),
                     Some(ColorTargetState {
-                        format: COUNT_FORMAT,
+                        format: SCENE_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: STATISTICS_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::ALL,
                     }),
@@ -160,24 +178,29 @@ impl Resolve {
                 },
                 BindGroupEntry {
                     binding: 3,
-                    resource: BindingResource::TextureView(history.read_count()),
+                    resource: BindingResource::TextureView(history.read_statistics()),
                 },
                 BindGroupEntry {
                     binding: 4,
                     resource: BindingResource::Sampler(&self.sampler),
                 },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::TextureView(history.read_odd()),
+                },
             ],
         })
     }
 
-    pub(crate) fn write(&self, queue: &Queue, previous: Mat4, intact: bool, clamp: bool) {
+    pub(crate) fn write(&self, queue: &Queue, state: State) {
         let uniforms = Uniforms {
-            previous: previous.to_cols_array_2d(),
+            previous: state.previous.to_cols_array_2d(),
+            eye: state.eye.extend(0.0).to_array(),
             flags: [
-                f32::from(u8::from(intact)),
-                f32::from(u8::from(clamp)),
-                SAMPLE_CEILING,
-                0.0,
+                f32::from(u8::from(state.intact)),
+                f32::from(u8::from(state.clamp)),
+                state.ceiling,
+                state.exposure,
             ],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
@@ -195,7 +218,8 @@ impl Resolve {
             color_attachments: &[
                 Some(loaded(history.write_color())),
                 Some(loaded(history.resolved())),
-                Some(loaded(history.write_count())),
+                Some(loaded(history.write_odd())),
+                Some(loaded(history.write_statistics())),
             ],
             ..Default::default()
         });
