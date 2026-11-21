@@ -3,6 +3,7 @@ pub enum Calibration {
     Recorded,
     Inferred,
     Assumed,
+    Declared,
     Uncalibrated,
 }
 
@@ -12,7 +13,14 @@ impl Calibration {
     }
 
     pub fn measured(self) -> bool {
-        matches!(self, Self::Recorded | Self::Inferred | Self::Assumed)
+        matches!(
+            self,
+            Self::Recorded | Self::Inferred | Self::Assumed | Self::Declared
+        )
+    }
+
+    pub fn asserted(self) -> bool {
+        self == Self::Declared
     }
 
     pub fn index(self) -> u8 {
@@ -20,7 +28,8 @@ impl Calibration {
             Self::Recorded => 0,
             Self::Inferred => 1,
             Self::Assumed => 2,
-            Self::Uncalibrated => 3,
+            Self::Declared => 3,
+            Self::Uncalibrated => 4,
         }
     }
 
@@ -29,7 +38,8 @@ impl Calibration {
             0 => Some(Self::Recorded),
             1 => Some(Self::Inferred),
             2 => Some(Self::Assumed),
-            3 => Some(Self::Uncalibrated),
+            3 => Some(Self::Declared),
+            4 => Some(Self::Uncalibrated),
             _ => None,
         }
     }

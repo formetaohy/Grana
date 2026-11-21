@@ -16,8 +16,8 @@ use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene
 use grana_session::{Command, Session};
 use grana_store::SpillStore;
 use grana_volume::{
-    BrickCoord, BrickRequest, Channel, Extent, Fingerprint, Region, Spacing, Volume, VolumeSeries,
-    VoxelData,
+    BrickCoord, BrickRequest, Calibration, Channel, Extent, Fingerprint, Region, Spacing, Volume,
+    VolumeSeries, VoxelData,
 };
 
 use crate::support::{self, Temp};
@@ -1147,6 +1147,7 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
         Spacing::new(0.42, 0.42, 1.2),
         "the calibration reaches the dataset"
     );
+    let recorded = calibration.measured();
     assert_eq!(
         session
             .scene()
@@ -1154,8 +1155,12 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
             .dataset
             .pyramid()
             .calibration(),
-        calibration,
-        "editing the voxel size keeps the provenance of the calibration"
+        if recorded {
+            calibration
+        } else {
+            Calibration::Declared
+        },
+        "editing the voxel size keeps a measured provenance and declares an unmeasured one"
     );
     session.execute(Command::Undo);
     assert_eq!(
@@ -1184,7 +1189,11 @@ fn marks_edits_unsaved_and_recovers_an_autosaved_analysis() {
             .dataset
             .pyramid()
             .calibration(),
-        calibration,
+        if recorded {
+            calibration
+        } else {
+            Calibration::Declared
+        },
         "redoing the voxel size keeps the provenance of the calibration"
     );
     session.execute(Command::SetChannelOpacity {

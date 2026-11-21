@@ -431,6 +431,12 @@ fn sidebar<'a>(
             grana_i18n::panel::depth_assumed(language)
         ),
         Calibration::Uncalibrated => grana_i18n::panel::uncalibrated(language).to_string(),
+        Calibration::Declared => format!(
+            "{:.2}×{:.2} µm ({})",
+            voxel.x,
+            voxel.z,
+            grana_i18n::panel::depth_declared(language)
+        ),
     };
     let mono = theme.font(Level::Monospace);
     let authoring = state.access.author();

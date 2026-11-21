@@ -2,6 +2,8 @@ use glam::Vec3;
 
 use crate::{Basis, Calibration, ChannelInfo, Level, Region, Spacing};
 
+const CALIBRATION_TOLERANCE: f32 = 1.0e-5;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pyramid {
     levels: Vec<Level>,
@@ -57,6 +59,16 @@ impl Pyramid {
             placement.iter().all(|value| value.is_finite()),
             "a pyramid placement is finite"
         );
+        if !calibration.measured() {
+            let basis = levels[0].basis();
+            let steps = [basis.step(0), basis.step(1), basis.step(2)];
+            assert!(
+                steps
+                    .iter()
+                    .all(|step| (step - 1.0).abs() <= CALIBRATION_TOLERANCE),
+                "an uncalibrated pyramid measures in voxels, so its finest voxel is one unit wide"
+            );
+        }
         for pair in levels.windows(2) {
             let (fine, coarse) = (pair[0], pair[1]);
             let fine_extent = fine.extent();
@@ -111,12 +123,27 @@ impl Pyramid {
         self.calibration
     }
 
+    pub fn voxel_is_unit(&self) -> bool {
+        let basis = self.levels[0].basis();
+        [basis.step(0), basis.step(1), basis.step(2)]
+            .iter()
+            .all(|step| (step - 1.0).abs() <= CALIBRATION_TOLERANCE)
+    }
+
     pub fn with_calibration(mut self, calibration: Calibration) -> Pyramid {
+        assert!(
+            calibration.measured() || self.voxel_is_unit(),
+            "an uncalibrated pyramid measures in voxels, so its voxels stay one unit wide"
+        );
         self.calibration = calibration;
         self
     }
 
     pub fn rescaled(&self, spacing: Spacing, calibration: Calibration) -> Pyramid {
+        assert!(
+            calibration.measured() || spacing == Spacing::new(1.0, 1.0, 1.0),
+            "an uncalibrated pyramid measures in voxels, so it keeps unit voxels"
+        );
         let base = self.levels[0].spacing();
         if base == spacing {
             return self.clone().with_calibration(calibration);

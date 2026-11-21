@@ -188,6 +188,20 @@ fn assemble(
             })
         })
         .collect::<Result<_, Error>>()?;
+    let lateral = metadata.spacing[0].is_some() || metadata.spacing[1].is_some();
+    if !lateral {
+        let context = Context {
+            path,
+            low,
+            logical_extent: [extent.x(), extent.y()],
+            frames,
+            channels,
+            base_depth: depth,
+            spacing: Spacing::new(1.0, 1.0, 1.0),
+            pixels: &pixels,
+        };
+        return levels(&context, &base, groups, Calibration::Uncalibrated, image);
+    }
     let fallback = metadata
         .spacing
         .iter()
@@ -196,10 +210,7 @@ fn assemble(
         .copied()
         .unwrap_or(1.0);
     let spacing = metadata.spacing.map(|value| value.unwrap_or(fallback));
-    let lateral = metadata.spacing[0].is_some() || metadata.spacing[1].is_some();
-    let calibration = if !lateral {
-        Calibration::Uncalibrated
-    } else if metadata.spacing[2].is_some() || depth <= 1 {
+    let calibration = if metadata.spacing[2].is_some() || depth <= 1 {
         Calibration::Recorded
     } else {
         Calibration::Assumed
@@ -214,9 +225,20 @@ fn assemble(
         spacing: Spacing::new(spacing[0], spacing[1], spacing[2]),
         pixels: &pixels,
     };
-    let mut levels = vec![assemble_level(&context, &base, 1)?];
+    levels(&context, &base, groups, calibration, image)
+}
+
+fn levels(
+    context: &Context<'_>,
+    base: &[Entry],
+    groups: &BTreeMap<u32, Vec<Entry>>,
+    calibration: Calibration,
+    image: Option<&ImageMetadata>,
+) -> Result<SceneLayout, Error> {
+    let path = context.path;
+    let mut levels = vec![assemble_level(context, base, 1)?];
     for (scale, entries) in groups.iter() {
-        let level = assemble_level(&context, entries, *scale)?;
+        let level = assemble_level(context, entries, *scale)?;
         let previous = levels.last().expect("the base level is present");
         if level.extent.x() > previous.extent.x()
             || level.extent.y() > previous.extent.y()
@@ -234,8 +256,8 @@ fn assemble(
     }
     Ok(SceneLayout {
         name: image.and_then(|image| image.name.clone()),
-        pixels,
-        frames,
+        pixels: context.pixels.to_vec(),
+        frames: context.frames,
         levels,
         calibration,
     })

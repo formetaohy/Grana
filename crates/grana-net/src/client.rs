@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::sync::{Arc, OnceLock};
 use std::thread::sleep;
 use std::time::Duration;
@@ -13,6 +14,7 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 const BODY_TIMEOUT: Duration = Duration::from_secs(120);
 const BODY_LIMIT: u64 = 1 << 30;
 const AGENT: &str = concat!("grana/", env!("CARGO_PKG_VERSION"));
+const CHUNK: usize = 1 << 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Span {
@@ -40,6 +42,13 @@ impl Span {
             Self::Between(start, end) => Some(end - start + 1),
         }
     }
+
+    fn advance(self, bytes: u64) -> Self {
+        match self {
+            Self::From(start) => Self::From(start + bytes),
+            Self::Between(start, end) => Self::Between((start + bytes).min(end), end),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,27 +61,26 @@ pub enum Presence {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fetch {
+    pub bytes: Vec<u8>,
+    pub resumed: u64,
+}
+
 pub struct Client {
     agent: Agent,
 }
 
 enum Outcome<T> {
     Ready(T),
-    Retry(Error),
+    Retry(Error, Vec<u8>),
     Refuse(Error),
 }
 
-impl<T> Outcome<T> {
-    fn of_read(error: Error) -> Self {
-        match error {
-            Error::Transport { .. } => Self::Retry(error),
-            Error::Scheme { .. }
-            | Error::Url { .. }
-            | Error::Status { .. }
-            | Error::Size { .. }
-            | Error::Range { .. } => Self::Refuse(error),
-        }
-    }
+enum Body {
+    Complete,
+    Truncated(Error),
+    Refused(Error),
 }
 
 impl Client {
@@ -94,15 +102,30 @@ impl Client {
         Arc::clone(SHARED.get_or_init(|| Arc::new(Self::new())))
     }
 
-    pub fn get(&self, url: &str, span: Option<Span>) -> Result<Option<Vec<u8>>, Error> {
-        attempt(|| self.fetch(url, span))
+    pub fn get(&self, url: &str, span: Option<Span>) -> Result<Option<Fetch>, Error> {
+        attempt(|held| self.drain(url, span, held))
     }
 
     pub fn probe(&self, url: &str) -> Result<Presence, Error> {
-        attempt(|| self.head(url))
+        attempt(|_| self.head(url))
     }
 
-    fn fetch(&self, url: &str, span: Option<Span>) -> Outcome<Option<Vec<u8>>> {
+    fn drain(&self, url: &str, wanted: Option<Span>, held: Vec<u8>) -> Outcome<Option<Fetch>> {
+        let base = held.len() as u64;
+        if let Some(length) = wanted.and_then(Span::length)
+            && base >= length
+        {
+            return Outcome::Ready(Some(Fetch {
+                bytes: held,
+                resumed: base,
+            }));
+        }
+        let resume = wanted.is_none() && base > 0;
+        let span = match wanted {
+            Some(span) => Some(span.advance(base)),
+            None if resume => Some(Span::From(base)),
+            None => None,
+        };
         let request = match span {
             Some(span) => self
                 .agent
@@ -113,39 +136,61 @@ impl Client {
         };
         let mut response = match request.call() {
             Ok(response) => response,
-            Err(error) => return classify(url, error),
+            Err(error) => return classify(url, error, held),
         };
         let status = response.status().as_u16();
         if matches!(status, 404 | 410) {
             return Outcome::Ready(None);
         }
         if retryable(status) {
-            return Outcome::Retry(status_error(url, status));
+            return Outcome::Retry(status_error(url, status), held);
         }
         if !(200..300).contains(&status) {
             return Outcome::Refuse(status_error(url, status));
         }
-        let read = match span {
-            None => read_full(&mut response, url),
-            Some(span) => read_span(&mut response, url, span),
+        let (span, mut held, base) = match (span, status) {
+            (Some(_), 206) => (span, held, base),
+            (Some(_), _) if wanted.is_some() => {
+                return Outcome::Refuse(Error::Range {
+                    url: url.to_string(),
+                    detail: "the server answered the byte range with a whole response".to_string(),
+                });
+            }
+            (Some(_), _) => (None, Vec::new(), 0),
+            (None, _) => (None, held, base),
         };
-        match read {
-            Ok(bytes) => Outcome::Ready(Some(bytes)),
-            Err(error) => Outcome::of_read(error),
+        let want = match span {
+            Some(span) => match expected(url, &response, span) {
+                Ok(_) => span.length().or_else(|| {
+                    range_of(&response)
+                        .and_then(|range| range.total)
+                        .map(|total| total.saturating_sub(span.start()))
+                }),
+                Err(error) => return Outcome::Refuse(error),
+            },
+            None => header(&response, "content-length").and_then(|value| value.parse().ok()),
+        };
+        match read(&mut response, url, want, &mut held) {
+            Body::Complete => Outcome::Ready(Some(Fetch {
+                bytes: held,
+                resumed: base,
+            })),
+            Body::Truncated(error) => Outcome::Retry(error, held),
+            Body::Refused(error) => Outcome::Refuse(error),
         }
     }
 
     fn head(&self, url: &str) -> Outcome<Presence> {
         let response = match self.agent.head(url).call() {
             Ok(response) => response,
-            Err(error) => return classify(url, error),
+            Err(error) => return classify(url, error, Vec::new()),
         };
         let status = response.status().as_u16();
         if matches!(status, 404 | 410) {
             return Outcome::Ready(Presence::Missing);
         }
         if retryable(status) {
-            return Outcome::Retry(status_error(url, status));
+            return Outcome::Retry(status_error(url, status), Vec::new());
         }
         if matches!(status, 403 | 405 | 501) {
             return self.head_ranged(url);
@@ -166,14 +211,14 @@ impl Client {
             .call()
         {
             Ok(response) => response,
-            Err(error) => return classify(url, error),
+            Err(error) => return classify(url, error, Vec::new()),
         };
         let status = response.status().as_u16();
         if matches!(status, 404 | 410) {
             return Outcome::Ready(Presence::Missing);
         }
         if retryable(status) {
-            return Outcome::Retry(status_error(url, status));
+            return Outcome::Retry(status_error(url, status), Vec::new());
         }
         if !(200..300).contains(&status) {
             return Outcome::Refuse(status_error(url, status));
@@ -201,15 +246,17 @@ impl Presence {
     }
 }
 
-fn attempt<T>(mut call: impl FnMut() -> Outcome<T>) -> Result<T, Error> {
+fn attempt<T>(mut call: impl FnMut(Vec<u8>) -> Outcome<T>) -> Result<T, Error> {
+    let mut held = Vec::new();
     for round in 0..ATTEMPTS {
-        match call() {
+        match call(held) {
             Outcome::Ready(value) => return Ok(value),
             Outcome::Refuse(error) => return Err(error),
-            Outcome::Retry(error) => {
+            Outcome::Retry(error, retained) => {
                 if round + 1 == ATTEMPTS {
                     return Err(error);
                 }
+                held = retained;
                 sleep(BACKOFF * (1u32 << round));
             }
         }
@@ -217,17 +264,20 @@ fn attempt<T>(mut call: impl FnMut() -> Outcome<T>) -> Result<T, Error> {
     unreachable!("the retry loop returns on its final round")
 }
 
-fn classify<T>(url: &str, error: ureq::Error) -> Outcome<T> {
+fn classify<T>(url: &str, error: ureq::Error, held: Vec<u8>) -> Outcome<T> {
     if matches!(error, ureq::Error::StatusCode(_)) {
         return Outcome::Refuse(Error::Transport {
             url: url.to_string(),
             detail: error.to_string(),
         });
     }
-    Outcome::Retry(Error::Transport {
-        url: url.to_string(),
-        detail: error.to_string(),
-    })
+    Outcome::Retry(
+        Error::Transport {
+            url: url.to_string(),
+            detail: error.to_string(),
+        },
+        held,
+    )
 }
 
 fn status_error(url: &str, status: u16) -> Error {
@@ -245,33 +295,11 @@ fn presence(response: &ureq::http::Response<ureq::Body>, size: Option<u64>) -> P
     }
 }
 
-fn read_full(response: &mut ureq::http::Response<ureq::Body>, url: &str) -> Result<Vec<u8>, Error> {
-    response
-        .body_mut()
-        .with_config()
-        .limit(BODY_LIMIT)
-        .read_to_vec()
-        .map_err(|error| transport(url, error))
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Range {
-    start: u64,
-    end: u64,
-    total: Option<u64>,
-}
-
-fn read_span(
-    response: &mut ureq::http::Response<ureq::Body>,
+fn expected(
     url: &str,
+    response: &ureq::http::Response<ureq::Body>,
     span: Span,
-) -> Result<Vec<u8>, Error> {
-    if response.status().as_u16() != 206 {
-        return Err(Error::Range {
-            url: url.to_string(),
-            detail: "the server answered the byte range with a whole response".to_string(),
-        });
-    }
+) -> Result<Option<u64>, Error> {
     let range = range_of(response).ok_or_else(|| Error::Range {
         url: url.to_string(),
         detail: "the partial response carries no usable content-range".to_string(),
@@ -300,24 +328,50 @@ fn read_span(
             detail: format!("the server answered {sent} of the requested {expected} bytes"),
         });
     }
-    let bytes = response
-        .body_mut()
-        .with_config()
-        .limit(expected.unwrap_or(BODY_LIMIT))
-        .read_to_vec()
-        .map_err(|error| transport(url, error))?;
-    if let Some(expected) = expected
-        && bytes.len() as u64 != expected
-    {
-        return Err(Error::Range {
+    Ok(expected)
+}
+
+fn read(
+    response: &mut ureq::http::Response<ureq::Body>,
+    url: &str,
+    want: Option<u64>,
+    held: &mut Vec<u8>,
+) -> Body {
+    let already = held.len() as u64;
+    if already > BODY_LIMIT || want.is_some_and(|want| already + want > BODY_LIMIT) {
+        return Body::Refused(Error::Size {
             url: url.to_string(),
-            detail: format!(
-                "the server sent {} of the {expected} bytes the range names",
-                bytes.len()
-            ),
         });
     }
-    Ok(bytes)
+    let guard = want.map_or(BODY_LIMIT, |want| want + 1);
+    let mut reader = response.body_mut().with_config().limit(guard).reader();
+    let mut buffer = [0u8; CHUNK];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => held.extend_from_slice(&buffer[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Body::Truncated(transport(url, error.into())),
+        }
+    }
+    let gained = held.len() as u64 - already;
+    match want {
+        Some(want) if gained != want => Body::Truncated(Error::Range {
+            url: url.to_string(),
+            detail: format!("the server sent {gained} of the {want} bytes still awaited"),
+        }),
+        _ if held.len() as u64 > BODY_LIMIT => Body::Refused(Error::Size {
+            url: url.to_string(),
+        }),
+        _ => Body::Complete,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Range {
+    start: u64,
+    end: u64,
+    total: Option<u64>,
 }
 
 fn range_of(response: &ureq::http::Response<ureq::Body>) -> Option<Range> {

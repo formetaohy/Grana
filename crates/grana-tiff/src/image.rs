@@ -779,13 +779,13 @@ fn spacing(
     let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
     let x_tag = scale(volume, TAG_X_RESOLUTION, path)?;
     let y_tag = scale(volume, TAG_Y_RESOLUTION, path)?;
+    let lateral = physical[0].is_some() || x_tag.is_some();
+    if !lateral {
+        return Ok((Spacing::new(1.0, 1.0, 1.0), Calibration::Uncalibrated));
+    }
     let x = physical[0].or(x_tag).unwrap_or(1.0);
     let y = physical[1].or(y_tag).unwrap_or(x);
-    let lateral = physical[0].is_some() || x_tag.is_some();
     let Some(z) = physical[2] else {
-        if !lateral {
-            return Ok((Spacing::new(x, y, x), Calibration::Uncalibrated));
-        }
         if depth <= 1 {
             return Ok((Spacing::new(x, y, x), Calibration::Recorded));
         }
@@ -794,12 +794,7 @@ fn spacing(
             None => (Spacing::new(x, y, x), Calibration::Assumed),
         });
     };
-    let calibration = if lateral {
-        Calibration::Recorded
-    } else {
-        Calibration::Uncalibrated
-    };
-    Ok((Spacing::new(x, y, z), calibration))
+    Ok((Spacing::new(x, y, z), Calibration::Recorded))
 }
 
 fn axial_step(ome: &OmeImage) -> Option<f32> {

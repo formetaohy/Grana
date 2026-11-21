@@ -5,7 +5,13 @@ pub const ANNOTATION: &str = "grana";
 
 const MARKER: &str = "1";
 
-const LABELS: [&str; 4] = ["recorded", "inferred", "assumed", "uncalibrated"];
+const LABELS: [&str; 5] = [
+    "recorded",
+    "inferred",
+    "assumed",
+    "declared",
+    "uncalibrated",
+];
 const BASIS_LENGTH: usize = 9;
 const ALIGNMENT_TOLERANCE: f32 = 1.0e-6;
 

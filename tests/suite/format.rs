@@ -1144,7 +1144,7 @@ fn refuses_a_range_that_the_server_answers_with_the_whole_object() {
     let temp = Temp::new("suite-range");
     let payload = vec![7u8; 4096];
     std::fs::write(temp.path().join("data.bin"), &payload).expect("the payload writes");
-    let server = support::Server::serve(temp.path());
+    let server = support::Server::whole_objects(temp.path());
     let url = format!("{}data.bin", server.url());
     let client = grana_net::Client::new();
     let error = client
@@ -1158,7 +1158,8 @@ fn refuses_a_range_that_the_server_answers_with_the_whole_object() {
         .get(&url, None)
         .expect("the whole object reads")
         .expect("the object is present");
-    assert_eq!(whole, payload, "the whole read keeps every byte");
+    assert_eq!(whole.bytes, payload, "the whole read keeps every byte");
+    assert_eq!(whole.resumed, 0, "a whole read resumes nothing");
 }
 
 #[test]
@@ -1174,8 +1175,13 @@ fn retries_a_body_that_the_server_drops_midway() {
         .expect("a body that stops midway is fetched again")
         .expect("the object is present");
     assert_eq!(
-        whole, payload,
+        whole.bytes, payload,
         "the retried responses keep every byte of the object"
+    );
+    assert!(
+        whole.resumed > 0,
+        "a dropped body continues from the bytes it already held, and it held {}",
+        whole.resumed
     );
     assert_eq!(
         server.downloads(),

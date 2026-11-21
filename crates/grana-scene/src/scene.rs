@@ -1176,6 +1176,10 @@ impl Scene {
 
     pub fn recalibrate(&mut self, spacing: Spacing) {
         let calibration = self.dataset.pyramid().calibration();
+        let calibration = match calibration.measured() {
+            true => calibration,
+            false => Calibration::Declared,
+        };
         self.place_spacing(spacing, calibration);
     }
 

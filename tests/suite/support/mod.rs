@@ -163,14 +163,18 @@ pub struct Server {
 
 impl Server {
     pub fn serve(root: &Path) -> Self {
-        Self::serving(root, 0)
+        Self::serving(root, 0, false)
     }
 
     pub fn truncating(root: &Path, count: usize) -> Self {
-        Self::serving(root, count)
+        Self::serving(root, count, false)
     }
 
-    fn serving(root: &Path, truncate: usize) -> Self {
+    pub fn whole_objects(root: &Path) -> Self {
+        Self::serving(root, 0, true)
+    }
+
+    fn serving(root: &Path, truncate: usize, blunt: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("the fixture server binds");
         listener
             .set_nonblocking(true)
@@ -196,7 +200,7 @@ impl Server {
                             let downloads = Arc::clone(&downloads);
                             let truncated = Arc::clone(&truncated);
                             let worker = std::thread::spawn(move || {
-                                respond(stream, &root, &downloads, &truncated)
+                                respond(stream, &root, &downloads, &truncated, blunt)
                             });
                             let mut held =
                                 workers.lock().unwrap_or_else(|error| error.into_inner());
@@ -251,7 +255,13 @@ impl Drop for Server {
     }
 }
 
-fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize, truncated: &AtomicUsize) {
+fn respond(
+    mut stream: TcpStream,
+    root: &Path,
+    downloads: &AtomicUsize,
+    truncated: &AtomicUsize,
+    blunt: bool,
+) {
     let bound = Duration::from_secs(10);
     let _ = stream.set_read_timeout(Some(bound));
     let _ = stream.set_write_timeout(Some(bound));
@@ -284,19 +294,38 @@ fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize, truncate
     if relative.split('/').any(|part| part == "..") {
         return status(&mut stream, 400);
     }
-    let body = match std::fs::read(root.join(relative)) {
+    let whole = match std::fs::read(root.join(relative)) {
         Ok(body) => body,
         Err(_) => return status(&mut stream, 404),
     };
     if method == "GET" && !relative.ends_with("zarr.json") {
         downloads.fetch_add(1, Ordering::Relaxed);
     }
-    let mut response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"{:016x}\"\r\nConnection: close\r\n\r\n",
-        body.len(),
-        digest(&body)
-    )
-    .into_bytes();
+    let asked = text
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("range").then_some(value)
+        })
+        .and_then(|value| span(value, whole.len()))
+        .filter(|_| !blunt);
+    let etag = digest(&whole);
+    let (head, body) = match asked {
+        Some((start, end)) => (
+            format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\n",
+                end - start + 1,
+                whole.len()
+            ),
+            whole[start as usize..=end as usize].to_vec(),
+        ),
+        None => (
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n", whole.len()),
+            whole,
+        ),
+    };
+    let mut response =
+        format!("{head}ETag: \"{etag:016x}\"\r\nConnection: close\r\n\r\n").into_bytes();
     if method != "HEAD" {
         response.extend_from_slice(&body);
     }
@@ -310,6 +339,17 @@ fn respond(mut stream: TcpStream, root: &Path, downloads: &AtomicUsize, truncate
     }
     let _ = stream.write_all(&response);
     let _ = stream.flush();
+}
+
+fn span(value: &str, size: usize) -> Option<(u64, u64)> {
+    let rest = value.trim().strip_prefix("bytes=")?;
+    let (start, end) = rest.split_once('-')?;
+    let start = start.trim().parse::<u64>().ok()?;
+    let end = match end.trim() {
+        "" => size as u64 - 1,
+        end => end.parse::<u64>().ok()?.min(size as u64 - 1),
+    };
+    (start <= end && start < size as u64).then_some((start, end))
 }
 
 fn status(stream: &mut TcpStream, code: u16) {

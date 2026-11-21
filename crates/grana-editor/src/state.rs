@@ -249,7 +249,7 @@ impl CalibrationSheet {
 
     pub fn known(&self) -> [bool; 3] {
         match self.reason {
-            Calibration::Recorded | Calibration::Inferred => [true; 3],
+            Calibration::Recorded | Calibration::Inferred | Calibration::Declared => [true; 3],
             Calibration::Assumed => [true, true, false],
             Calibration::Uncalibrated => [false; 3],
         }

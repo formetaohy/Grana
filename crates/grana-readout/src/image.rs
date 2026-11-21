@@ -361,24 +361,20 @@ fn format_of(pixel: PixelType) -> Option<VoxelFormat> {
 
 fn spacing(image: &ImageInfo) -> (Spacing, Calibration) {
     let lateral = positive(image.physical_size.x);
+    if lateral.is_none() {
+        return (Spacing::new(1.0, 1.0, 1.0), Calibration::Uncalibrated);
+    }
     let x = lateral.unwrap_or(1.0);
     let y = positive(image.physical_size.y).unwrap_or(x);
     let Some(z) = positive(image.physical_size.z) else {
-        let calibration = if lateral.is_none() {
-            Calibration::Uncalibrated
-        } else if image.size_z > 1 {
+        let calibration = if image.size_z > 1 {
             Calibration::Assumed
         } else {
             Calibration::Recorded
         };
         return (Spacing::new(x, y, x), calibration);
     };
-    let calibration = if lateral.is_some() {
-        Calibration::Recorded
-    } else {
-        Calibration::Uncalibrated
-    };
-    (Spacing::new(x, y, z), calibration)
+    (Spacing::new(x, y, z), Calibration::Recorded)
 }
 
 fn positive(value: Option<f64>) -> Option<f32> {

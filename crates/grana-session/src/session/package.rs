@@ -466,6 +466,7 @@ fn facts(
             match dataset.pyramid().calibration() {
                 Calibration::Inferred => "inferred from the plane positions".to_string(),
                 Calibration::Assumed => "assumed to equal the lateral spacing".to_string(),
+                Calibration::Declared => "declared for uncalibrated data".to_string(),
                 Calibration::Uncalibrated => {
                     "not recorded; a 1 µm placeholder is in use".to_string()
                 }

@@ -230,11 +230,18 @@ enum Block {
     Ranged,
 }
 
+#[derive(Default)]
+struct Transfer {
+    fetched: u64,
+    resumed: u64,
+}
+
 pub(crate) struct RemoteStore {
     target: Target,
     client: Arc<Client>,
     blocks: Mutex<Blocks>,
     probes: Mutex<HashMap<String, Presence>>,
+    transferred: Mutex<Transfer>,
 }
 
 fn shared(target: &Target) -> Arc<RemoteStore> {
@@ -252,6 +259,7 @@ fn shared(target: &Target) -> Arc<RemoteStore> {
         client: Client::shared(),
         blocks: Mutex::new(Blocks::default()),
         probes: Mutex::new(HashMap::new()),
+        transferred: Mutex::new(Transfer::default()),
     });
     stores.insert(target.display().to_string(), Arc::downgrade(&store));
     store
@@ -265,6 +273,7 @@ impl RemoteStore {
     fn fetch(&self, key: &StoreKey, span: Option<Span>) -> Result<Option<Vec<u8>>, StorageError> {
         self.client
             .get(&self.url(key.as_str()), span)
+            .map(|fetched| fetched.map(|fetch| fetch.bytes))
             .map_err(|error| StorageError::Other(error.to_string()))
     }
 
@@ -327,7 +336,25 @@ impl RemoteStore {
             Presence::Object { size, .. } => size,
         };
         let span = span(range, size)?;
-        Ok(self.fetch(key, Some(span))?.map(Bytes::from))
+        let target = self.url(key.as_str());
+        let Some(fetched) = self
+            .client
+            .get(&target, Some(span))
+            .map_err(|error| StorageError::Other(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        self.count(fetched.resumed, fetched.bytes.len() as u64);
+        Ok(Some(Bytes::from(fetched.bytes)))
+    }
+
+    fn count(&self, resumed: u64, arrived: u64) {
+        let mut counted = self
+            .transferred
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        counted.fetched = counted.fetched.saturating_add(arrived);
+        counted.resumed = counted.resumed.saturating_add(resumed);
     }
 }
 
