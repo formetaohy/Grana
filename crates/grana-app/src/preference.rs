@@ -24,8 +24,8 @@ impl From<Language> for StoredLanguage {
 impl From<StoredLanguage> for Language {
     fn from(language: StoredLanguage) -> Self {
         match language {
-            StoredLanguage::English => Self::English,
-            StoredLanguage::Chinese => Self::Chinese,
+            StoredLanguage::English => Language::English,
+            StoredLanguage::Chinese => Language::Chinese,
         }
     }
 }
@@ -35,6 +35,8 @@ impl From<StoredLanguage> for Language {
 struct Stored {
     #[serde(default)]
     language: Option<StoredLanguage>,
+    #[serde(default)]
+    autosave: Option<bool>,
     #[serde(default)]
     update: Option<StoredUpdate>,
 }
@@ -51,6 +53,7 @@ struct StoredUpdate {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Preference {
     pub language: Language,
+    pub autosave: bool,
     pub check: bool,
     pub last: Option<u64>,
 }
@@ -59,6 +62,7 @@ impl Default for Preference {
     fn default() -> Self {
         Self {
             language: Language::system(),
+            autosave: true,
             check: true,
             last: None,
         }
@@ -83,6 +87,7 @@ impl Preference {
         });
         Self {
             language: stored.language.map_or_else(Language::system, Into::into),
+            autosave: stored.autosave.unwrap_or(true),
             check: update.check.unwrap_or(true),
             last: update.last,
         }
@@ -98,6 +103,7 @@ impl Preference {
         }
         let stored = Stored {
             language: Some(self.language.into()),
+            autosave: Some(self.autosave),
             update: Some(StoredUpdate {
                 check: Some(self.check),
                 last: self.last,

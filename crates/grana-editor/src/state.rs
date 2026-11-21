@@ -212,15 +212,17 @@ impl RelationMetric {
 pub enum SettingsTab {
     #[default]
     General,
+    Update,
     About,
 }
 
 impl SettingsTab {
-    pub const ALL: [Self; 2] = [Self::General, Self::About];
+    pub const ALL: [Self; 3] = [Self::General, Self::Update, Self::About];
 
     pub fn name(self, language: grana_i18n::Language) -> &'static str {
         match self {
             Self::General => grana_i18n::settings::general(language),
+            Self::Update => grana_i18n::settings::updates(language),
             Self::About => grana_i18n::settings::about(language),
         }
     }
@@ -228,15 +230,49 @@ impl SettingsTab {
     pub fn symbol(self) -> grana_ui::Icon {
         match self {
             Self::General => grana_ui::Icon::Sliders,
+            Self::Update => grana_ui::Icon::Sparkles,
             Self::About => grana_ui::Icon::Info,
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsRequest {
+    RevealData,
+    ClearCache,
+    OpenRepository,
+}
+
 pub struct Settings {
     pub open: bool,
     pub tab: SettingsTab,
+    pub autosave: bool,
+    pub request: Option<SettingsRequest>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            open: false,
+            tab: SettingsTab::default(),
+            autosave: true,
+            request: None,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct StorageView {
+    pub data: Option<String>,
+    pub cache: Option<u64>,
+    pub freed: Option<u64>,
+    pub clearing: bool,
+    pub measuring: bool,
+}
+
+#[derive(Default)]
+pub struct SystemView {
+    pub adapter: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -409,6 +445,8 @@ pub struct Workspace {
     pub comparison_open: Option<(String, String)>,
     pub(crate) batch_chart: crate::batch_panel::Chart,
     pub settings: Settings,
+    pub storage: StorageView,
+    pub system: SystemView,
     pub update: Update,
     pub prompt: Option<Prompt>,
     pub(crate) prompt_last: Option<Prompt>,
@@ -460,6 +498,8 @@ impl Default for Workspace {
             comparison_open: None,
             batch_chart: crate::batch_panel::Chart::default(),
             settings: Settings::default(),
+            storage: StorageView::default(),
+            system: SystemView::default(),
             update: Update::default(),
             prompt: None,
             prompt_last: None,

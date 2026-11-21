@@ -29,6 +29,8 @@ mod frame;
 mod input;
 mod placement;
 mod release;
+mod settings;
+mod storage;
 mod surface;
 mod sync;
 mod time;
@@ -39,6 +41,7 @@ use self::dialog::{Awaiting, Service};
 use self::export::Export;
 use self::placement::{Fit, Placement};
 use self::release::{Deferred, Release};
+use self::storage::Storage;
 use self::surface::Surface;
 use self::update::Update;
 use self::viewport::AnnotationKey;
@@ -140,6 +143,7 @@ pub struct App {
     annotation_placement: Option<(AnnotationKey, Vec<grana_figure::PlacedAnnotation>)>,
     preference: Preference,
     update: Update,
+    storage: Storage,
 }
 
 impl App {
@@ -162,6 +166,13 @@ impl App {
         let language = Language::from_environment().unwrap_or(preference.language);
         let mut workspace = Workspace::default();
         workspace.language = language;
+        workspace.settings.autosave = preference.autosave;
+        let storage = Storage::new(wake.clone());
+        workspace.storage.data = storage.data().map(|path| path.display().to_string());
+        workspace.storage.cache = storage.cache();
+        workspace.storage.freed = storage.freed();
+        workspace.storage.clearing = storage.clearing();
+        workspace.storage.measuring = storage.measuring();
         let update = Update::new(&preference, wake.clone());
         let fit = if startup.is_some() {
             Fit::Editor
@@ -219,6 +230,7 @@ impl App {
             annotation_placement: None,
             preference,
             update,
+            storage,
         }
     }
 
@@ -258,6 +270,7 @@ impl App {
             }
         }
         let gpu = Gpu::new(window.clone(), [size.width, size.height]);
+        self.workspace.system.adapter = Some(gpu.adapter.clone());
         let wake = self.wake.clone();
         gpu.lost_handle().wake_with(move || {
             let _ = wake.send_event(Wake::Redraw);
@@ -331,6 +344,7 @@ impl App {
             return;
         }
         self.poll_update();
+        self.poll_storage();
         self.begin_update_check();
         self.sync_update();
         self.track_changes();
@@ -345,6 +359,7 @@ impl App {
             self.workspace.seed = None;
         }
         let (frame, wait) = self.run_ui(size);
+        self.consume_settings();
         if let Some(choice) = frame.prompt {
             self.resolve_prompt(choice);
             if self.exiting {
@@ -454,7 +469,8 @@ impl App {
             Some(EXPORT_POLL)
         } else if let Some(wait) = self.update_wait() {
             Some(wait)
-        } else if self.capture.is_none()
+        } else if self.workspace.settings.autosave
+            && self.capture.is_none()
             && self.deferred.is_none()
             && self.workspace.prompt.is_none()
             && self.session.access().author()

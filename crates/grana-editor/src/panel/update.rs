@@ -58,6 +58,8 @@ pub fn apply(
             }
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
             Message::SetLanguage(language) => workspace.language = language,
+            Message::SetAutosave(autosave) => workspace.settings.autosave = autosave,
+            Message::SettingsAction(request) => workspace.settings.request = Some(request),
             Message::Update(action) => match action {
                 UpdateAction::Check => workspace.update.request = Some(UpdateRequest::Check),
                 UpdateAction::Download => workspace.update.request = Some(UpdateRequest::Download),

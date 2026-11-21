@@ -9,6 +9,7 @@ impl App {
     pub(super) fn sync_preference(&mut self) {
         let preference = Preference {
             language: self.workspace.language,
+            autosave: self.workspace.settings.autosave,
             check: self.update.automatic(),
             last: self.update.last(),
         };
@@ -67,7 +68,8 @@ impl App {
     }
 
     pub(super) fn autosave(&mut self) {
-        if self.capture.is_some()
+        if !self.workspace.settings.autosave
+            || self.capture.is_some()
             || self.deferred.is_some()
             || self.workspace.prompt.is_some()
             || self.session.access().viewer()

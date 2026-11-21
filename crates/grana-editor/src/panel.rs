@@ -170,11 +170,15 @@ pub fn build(
             elements
         };
         ui.present(grana_ui::place(full, elements));
-        let size = ui
-            .bounds("shell.panel")
-            .map_or(crate::shell::STARTUP_SIZE, |panel| {
-                crate::shell::window_size(panel.size())
-            });
+        let settings_visible = workspace.settings.open || ui.bounds("settings.sheet").is_some();
+        let size = if settings_visible {
+            crate::settings_panel::WINDOW_SIZE
+        } else {
+            ui.bounds("shell.panel")
+                .map_or(crate::shell::STARTUP_SIZE, |panel| {
+                    crate::shell::window_size(panel.size())
+                })
+        };
         frame.startup = Some(size);
         return frame;
     };

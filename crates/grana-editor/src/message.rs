@@ -51,6 +51,8 @@ pub enum Message {
     },
     SetPlaying(bool),
     SetLanguage(grana_i18n::Language),
+    SetAutosave(bool),
+    SettingsAction(crate::state::SettingsRequest),
     SetSettings(Option<crate::state::SettingsTab>),
     SetPreviewing(bool),
     SetPlaybackPosition(f32),

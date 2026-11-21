@@ -40,8 +40,8 @@ pub use shell::STARTUP_SIZE;
 pub use stage::{GrabDrag, Intent, Interaction, PaintDrag, Stage, ToolDrag};
 pub use state::{
     AnnotationTool, CalibrationSheet, Disclosures, MaskBrush, MaskBrushTool, Playback,
-    RelationMetric, Settings, SettingsTab, Update, UpdateFailure, UpdatePhase, UpdateRequest, View,
-    Workspace,
+    RelationMetric, Settings, SettingsRequest, SettingsTab, StorageView, SystemView, Update,
+    UpdateFailure, UpdatePhase, UpdateRequest, View, Workspace,
 };
 
 pub(crate) const RECENT_LIMIT: usize = 5;
