@@ -16,8 +16,6 @@ pub struct PlotEvent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdateAction {
-    Open,
-    Close,
     Check,
     Download,
     Cancel,
@@ -53,8 +51,7 @@ pub enum Message {
     },
     SetPlaying(bool),
     SetLanguage(grana_i18n::Language),
-    ToggleSettings(bool),
-    SetSettingsTab(crate::state::SettingsTab),
+    SetSettings(Option<crate::state::SettingsTab>),
     SetPreviewing(bool),
     SetPlaybackPosition(f32),
     SetPlaybackSelected(Option<usize>),

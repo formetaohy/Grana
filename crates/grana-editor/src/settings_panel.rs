@@ -4,10 +4,10 @@ use grana_ui::{
 };
 
 use crate::message::{Message, UpdateAction};
-use crate::state::{SettingsTab, Workspace};
+use crate::state::{SettingsTab, Update, UpdateFailure, UpdatePhase, Workspace};
 
 const WIDTH: f32 = 680.0;
-const HEIGHT: f32 = 320.0;
+const HEIGHT: f32 = 384.0;
 const GUTTER: f32 = 24.0;
 const PADDING: f32 = 24.0;
 const HEADER_GAP: f32 = 16.0;
@@ -24,10 +24,11 @@ const ROW: f32 = 56.0;
 const ROW_INSET: f32 = 12.0;
 const ROW_GAP: f32 = 12.0;
 const ROW_ICON: f32 = 20.0;
+const BAR_ROW: f32 = 20.0;
 const LOGO: f32 = 40.0;
 const DIVIDER: f32 = 1.0;
 
-pub(crate) fn view<'a>(
+pub fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
     full: Rect,
     workspace: &Workspace,
@@ -48,7 +49,7 @@ pub(crate) fn view<'a>(
         "settings.scrim",
         open,
         Layer::Popup,
-        Some(Message::ToggleSettings(false)),
+        Some(Message::SetSettings(None)),
     );
     let title = ctx
         .text(
@@ -65,7 +66,7 @@ pub(crate) fn view<'a>(
         )
         .named("settings.close");
     let close = if open {
-        close.press(Message::ToggleSettings(false))
+        close.press(Message::SetSettings(None))
     } else {
         close
     };
@@ -160,7 +161,7 @@ fn nav_item<'a>(
             ),
         ]);
     if open {
-        item.press(Message::SetSettingsTab(tab))
+        item.press(Message::SetSettings(Some(tab)))
     } else {
         item
     }
@@ -171,10 +172,16 @@ fn content<'a>(
     workspace: &Workspace,
     open: bool,
 ) -> Element<'a, Message> {
-    match workspace.settings.tab {
+    let pane = match workspace.settings.tab {
         SettingsTab::General => general(ctx, workspace.language, open),
         SettingsTab::About => about(ctx, workspace, open),
-    }
+    };
+    grana_ui::column()
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .clipped()
+        .scroll(grana_ui::Axis::Column, Length::Fill, None)
+        .children([pane])
 }
 
 fn section<'a>(
@@ -226,6 +233,24 @@ fn row<'a>(children: Vec<Element<'a, Message>>) -> Element<'a, Message> {
         .padding(Edges::symmetric(ROW_INSET, 0.0))
         .gap(ROW_GAP)
         .align(Align::Center)
+        .children(children)
+}
+
+fn action_row<'a>(
+    ctx: &BuildContext<'_, Message>,
+    children: Vec<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let palette = ctx.theme().palette;
+    let corners = Corners::capsule();
+    grana_ui::row()
+        .width(Length::Fill)
+        .height(Length::Fixed(ROW))
+        .padding(Edges::symmetric(ROW_INSET, 0.0))
+        .gap(ROW_GAP)
+        .align(Align::Center)
+        .hover_highlight(Surface::fill(palette.surface_container_highest).with_corners(corners))
+        .cursor(Cursor::Pointing)
+        .focus_ring(corners)
         .children(children)
 }
 
@@ -286,48 +311,116 @@ fn about<'a>(
             .gap(2.0)
             .children([name, version]),
     ]);
-    let label = if workspace.update.phase.noticed() {
-        grana_i18n::settings::open(language)
-    } else {
-        grana_i18n::settings::check(language)
-    };
-    let action = update_row(ctx, label, open);
+    let mut update = vec![update_action(ctx, workspace, open)];
+    if workspace.update.notes.is_some() {
+        update.push(note_row(ctx, open));
+    }
+    update.push(automatic_row(ctx, workspace, open));
     grana_ui::column()
         .width(Length::Fill)
-        .height(Length::Fill)
         .gap(SECTION_TAIL)
         .children([
             section(ctx, grana_i18n::settings::about(language), vec![identity]),
-            section(ctx, grana_i18n::settings::update(language), vec![action]),
+            section(ctx, grana_i18n::settings::update(language), update),
         ])
 }
 
-fn update_row<'a>(
+fn update_action<'a>(
     ctx: &mut BuildContext<'_, Message>,
-    label: &str,
+    workspace: &Workspace,
     open: bool,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
-    let corners = Corners::capsule();
-    let item = grana_ui::row()
-        .width(Length::Fill)
-        .height(Length::Fixed(ROW))
-        .padding(Edges::symmetric(ROW_INSET, 0.0))
-        .gap(ROW_GAP)
-        .align(Align::Center)
-        .hover_highlight(Surface::fill(palette.surface_container_highest).with_corners(corners))
-        .cursor(Cursor::Pointing)
-        .focus_ring(corners)
-        .children([
+    let language = ctx.language();
+    let update = &workspace.update;
+    let (label, action) = match update.phase {
+        UpdatePhase::Idle | UpdatePhase::Current | UpdatePhase::Failed(_) => {
+            (grana_i18n::settings::check(language), UpdateAction::Check)
+        }
+        UpdatePhase::Checking | UpdatePhase::Downloading => {
+            (grana_i18n::common::cancel(language), UpdateAction::Cancel)
+        }
+        UpdatePhase::Available => (
+            grana_i18n::settings::download(language),
+            UpdateAction::Download,
+        ),
+        UpdatePhase::Ready => (grana_i18n::settings::restart(language), UpdateAction::Apply),
+    };
+    let status_color = if matches!(update.phase, UpdatePhase::Failed(_)) {
+        palette.error
+    } else {
+        palette.on_surface_variant
+    };
+    let mut lines = vec![
+        ctx.text(
+            label,
+            TextStyle::new(theme.font(Level::Title), palette.on_surface),
+        )
+        .width(Length::Fill),
+    ];
+    if let Some(status) = status_text(update, language) {
+        lines.push(ctx.text(
+            status,
+            TextStyle::new(theme.font(Level::Caption), status_color),
+        ));
+    }
+    let item = action_row(
+        ctx,
+        vec![
             ctx.icon(
                 Icon::Sparkles,
                 ROW_ICON,
                 palette.on_surface_variant,
                 IconStyle::REGULAR,
             ),
+            grana_ui::column()
+                .width(Length::Fill)
+                .gap(2.0)
+                .children(lines),
+        ],
+    )
+    .named("settings.update");
+    let item = if open {
+        item.press(Message::Update(action))
+    } else {
+        item
+    };
+    let mut body = vec![item];
+    if let Some((done, total)) = update.progress {
+        body.push(bar_row(ctx, done, total));
+    }
+    grana_ui::column().width(Length::Fill).children(body)
+}
+
+fn bar_row<'a>(ctx: &mut BuildContext<'_, Message>, done: u64, total: u64) -> Element<'a, Message> {
+    let fraction = if total == 0 {
+        0.0
+    } else {
+        done as f32 / total as f32
+    };
+    let width = WIDTH - 2.0 * PADDING - RAIL_WIDTH - PANE_GAP - 2.0 * ROW_INSET;
+    grana_ui::row()
+        .width(Length::Fill)
+        .height(Length::Fixed(BAR_ROW))
+        .padding(Edges::symmetric(ROW_INSET, 0.0))
+        .children([ctx.progress(fraction.clamp(0.0, 1.0), width)])
+}
+
+fn note_row<'a>(ctx: &mut BuildContext<'_, Message>, open: bool) -> Element<'a, Message> {
+    let theme = *ctx.theme();
+    let palette = theme.palette;
+    let item = action_row(
+        ctx,
+        vec![
+            ctx.icon(
+                Icon::Globe,
+                ROW_ICON,
+                palette.on_surface_variant,
+                IconStyle::REGULAR,
+            ),
             ctx.text(
-                label,
+                grana_i18n::settings::notes(ctx.language()),
                 TextStyle::new(theme.font(Level::Title), palette.on_surface),
             )
             .width(Length::Fill),
@@ -337,11 +430,80 @@ fn update_row<'a>(
                 palette.on_surface_variant,
                 IconStyle::REGULAR,
             ),
-        ])
-        .named("settings.update");
+        ],
+    )
+    .named("settings.notes");
     if open {
-        item.press(Message::Update(UpdateAction::Open))
+        item.press(Message::Update(UpdateAction::Notes))
     } else {
         item
+    }
+}
+
+fn automatic_row<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    workspace: &Workspace,
+    open: bool,
+) -> Element<'a, Message> {
+    let language = ctx.language();
+    let toggle = ctx
+        .toggle_row(
+            grana_i18n::settings::automatic(language),
+            workspace.update.automatic,
+        )
+        .named("settings.automatic")
+        .enabled(open)
+        .on_toggle(|_| Message::Update(UpdateAction::ToggleCheck));
+    grana_ui::row()
+        .width(Length::Fill)
+        .padding(Edges::symmetric(ROW_INSET, 0.0))
+        .children([toggle])
+}
+
+fn status_text(update: &Update, language: grana_i18n::Language) -> Option<String> {
+    match update.phase {
+        UpdatePhase::Idle => None,
+        UpdatePhase::Checking => Some(grana_i18n::settings::checking(language).to_string()),
+        UpdatePhase::Current => Some(grana_i18n::settings::up_to_date(language).to_string()),
+        UpdatePhase::Available => update.version.clone().map(|version| match update.size {
+            Some(size) => format!("{version} · {}", size_text(size)),
+            None => version,
+        }),
+        UpdatePhase::Downloading => update
+            .progress
+            .map(|(done, total)| download_text(done, total, language)),
+        UpdatePhase::Ready => Some(grana_i18n::settings::ready(language).to_string()),
+        UpdatePhase::Failed(failure) => Some(failure_text(failure, language).to_string()),
+    }
+}
+
+fn download_text(done: u64, total: u64, language: grana_i18n::Language) -> String {
+    if total == 0 {
+        grana_i18n::settings::downloading(language).to_string()
+    } else {
+        format!(
+            "{:.0}% · {:.1} MB",
+            done as f32 / total as f32 * 100.0,
+            total as f64 / (1024.0 * 1024.0)
+        )
+    }
+}
+
+fn failure_text(failure: UpdateFailure, language: grana_i18n::Language) -> &'static str {
+    match failure {
+        UpdateFailure::Offline => grana_i18n::settings::offline(language),
+        UpdateFailure::Corrupt => grana_i18n::settings::corrupt(language),
+        UpdateFailure::Signature => grana_i18n::settings::signature(language),
+        UpdateFailure::Storage => grana_i18n::settings::storage(language),
+        UpdateFailure::Installer => grana_i18n::settings::installer(language),
+        UpdateFailure::Other => grana_i18n::settings::failure(language),
+    }
+}
+
+fn size_text(size: u64) -> String {
+    if size >= 1 << 20 {
+        format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.0} KB", size as f64 / 1024.0)
     }
 }

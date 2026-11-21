@@ -134,7 +134,7 @@ fn hero_header<'a>(
                 grana_i18n::settings::open(ctx.language()),
             )
             .named("shell.update")
-            .press(Message::Update(crate::message::UpdateAction::Open)),
+            .press(Message::SetSettings(Some(crate::state::SettingsTab::About))),
         );
     }
     if close {

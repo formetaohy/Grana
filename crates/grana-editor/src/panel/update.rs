@@ -59,11 +59,6 @@ pub fn apply(
             Message::SetSidebarTab(index) => workspace.sidebar_tab = index,
             Message::SetLanguage(language) => workspace.language = language,
             Message::Update(action) => match action {
-                UpdateAction::Open => {
-                    workspace.settings.open = false;
-                    workspace.update.open = true;
-                }
-                UpdateAction::Close => workspace.update.open = false,
                 UpdateAction::Check => workspace.update.request = Some(UpdateRequest::Check),
                 UpdateAction::Download => workspace.update.request = Some(UpdateRequest::Download),
                 UpdateAction::Cancel => workspace.update.request = Some(UpdateRequest::Cancel),
@@ -73,10 +68,13 @@ pub fn apply(
                     workspace.update.request = Some(UpdateRequest::ToggleCheck);
                 }
             },
-            Message::ToggleSettings(open) => {
-                workspace.settings.open = open;
-            }
-            Message::SetSettingsTab(tab) => workspace.settings.tab = tab,
+            Message::SetSettings(tab) => match tab {
+                Some(tab) => {
+                    workspace.settings.open = true;
+                    workspace.settings.tab = tab;
+                }
+                None => workspace.settings.open = false,
+            },
             Message::ToggleSidebar => workspace.sidebar_hidden = !workspace.sidebar_hidden,
             Message::SetDockHeight(value) => {
                 let height = if workspace.dock_height > 0.0 {

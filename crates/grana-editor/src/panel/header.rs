@@ -99,7 +99,11 @@ fn navigation<'a>(
             Role::SurfaceHigh
         },
         grana_i18n::header::settings(language),
-        Message::ToggleSettings(!settings_open),
+        Message::SetSettings(if settings_open {
+            None
+        } else {
+            Some(state.workspace.settings.tab)
+        }),
     )
     .shaped(Corners::capsule());
     let surface = theme.surface(Role::FloatingToolbar, State::Rest);

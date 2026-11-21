@@ -69,7 +69,7 @@ impl App {
         }
         if self.workspace.settings.open {
             if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
-                self.dispatch(grana_editor::Message::ToggleSettings(false));
+                self.dispatch(grana_editor::Message::SetSettings(None));
             }
             self.request_redraw();
             return;

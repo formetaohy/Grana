@@ -18,14 +18,13 @@ mod plate_panel;
 mod plot;
 pub mod prompt;
 mod relation_panel;
-mod settings_panel;
+pub mod settings_panel;
 mod shell;
 mod stage;
 mod state;
 mod text;
 mod track_panel;
 mod transfer;
-pub mod update_sheet;
 mod view;
 pub use grana_ui::widget;
 

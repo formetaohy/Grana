@@ -1,4 +1,6 @@
-use grana_editor::{Message, Prompt, PromptChoice, UpdateAction, UpdatePhase, Workspace};
+﻿use grana_editor::{
+    Message, Prompt, PromptChoice, SettingsTab, UpdateAction, UpdatePhase, Workspace,
+};
 use grana_ui::{
     Band, Button, Corners, Edges, Element, Event, Icon, InputKey, Layout, Length, Rect, Size,
     Surface, TextStyle, Ui, Vec2,
@@ -8,6 +10,7 @@ use crate::support::gpu;
 
 const SIZE: Vec2 = Vec2::new(320.0, 180.0);
 const PROMPT_SIZE: Vec2 = Vec2::new(640.0, 360.0);
+const SETTINGS_SIZE: Vec2 = Vec2::new(900.0, 720.0);
 
 #[test]
 fn a_press_keeps_the_control_it_went_down_on() {
@@ -254,7 +257,7 @@ fn the_unsaved_prompt_covers_the_editor_and_resolves_its_choice() {
 }
 
 #[test]
-fn the_update_sheet_offers_the_release_it_found() {
+fn the_settings_sheet_offers_the_release_it_found() {
     let Some(gpu) = gpu() else {
         return;
     };
@@ -264,59 +267,76 @@ fn the_update_sheet_offers_the_release_it_found() {
         wgpu::TextureFormat::Rgba8Unorm,
         gpu.pipelines(),
     );
-    ui.update(PROMPT_SIZE, 1.0, 0.0);
-    ui.resize([PROMPT_SIZE.x as u32, PROMPT_SIZE.y as u32]);
+    ui.update(SETTINGS_SIZE, 1.0, 0.0);
+    ui.resize([SETTINGS_SIZE.x as u32, SETTINGS_SIZE.y as u32]);
     let mut workspace = Workspace::default();
-    workspace.update.open = true;
+    workspace.settings.open = true;
+    workspace.settings.tab = SettingsTab::About;
     workspace.update.phase = UpdatePhase::Available;
     workspace.update.version = Some("9.9.9".to_string());
     workspace.update.size = Some(28 << 20);
     workspace.update.notes =
         Some("https://github.com/formetaohy/Grana/releases/tag/v9.9.9".to_string());
-    let element = update_screen(&mut ui, &workspace);
+    let element = settings_screen(&mut ui, &workspace);
     ui.present(element);
+    let sheet = ui
+        .bounds("settings.sheet")
+        .expect("the settings sheet is laid out");
     for name in [
-        "update.title",
-        "update.version",
-        "update.status",
-        "update.automatic",
-        "update.notes",
-        "update.download",
+        "settings.brand",
+        "settings.update",
+        "settings.notes",
+        "settings.automatic",
     ] {
+        let row = ui
+            .bounds(name)
+            .unwrap_or_else(|| panic!("the settings sheet lays out {name}"));
         assert!(
-            ui.bounds(name).is_some(),
-            "the update sheet lays out {name}"
+            sheet.contains(row.center()),
+            "the settings sheet shows {name} on its surface"
         );
     }
     let download = ui
-        .bounds("update.download")
-        .expect("the update sheet offers the download")
+        .bounds("settings.update")
+        .expect("the settings sheet offers the download")
         .center();
     for event in [Event::Moved(download), Event::Down(Button::Primary)] {
         ui.input_mut().push(event);
     }
     assert!(
         ui.update(PROMPT_SIZE, 1.0, 0.1).is_empty(),
-        "pressing the download activates nothing yet"
+        "pressing the update row activates nothing yet"
     );
-    let element = update_screen(&mut ui, &workspace);
+    let element = settings_screen(&mut ui, &workspace);
     ui.present(element);
     ui.input_mut().push(Event::Up(Button::Primary));
-    let pressed = ui.update(PROMPT_SIZE, 1.0, 0.2);
+    let pressed = ui.update(SETTINGS_SIZE, 1.0, 0.2);
     assert!(
         matches!(
             pressed.as_slice(),
             [Message::Update(UpdateAction::Download)]
         ),
-        "the update sheet asks for the download it offers"
+        "the update row asks for the download it offers"
     );
     workspace.update.phase = UpdatePhase::Ready;
     workspace.update.progress = None;
-    let element = update_screen(&mut ui, &workspace);
+    let element = settings_screen(&mut ui, &workspace);
     ui.present(element);
+    let restart = ui
+        .bounds("settings.update")
+        .expect("a staged update offers the restart")
+        .center();
+    for event in [Event::Moved(restart), Event::Down(Button::Primary)] {
+        ui.input_mut().push(event);
+    }
+    assert!(ui.update(SETTINGS_SIZE, 1.0, 0.3).is_empty());
+    let element = settings_screen(&mut ui, &workspace);
+    ui.present(element);
+    ui.input_mut().push(Event::Up(Button::Primary));
+    let pressed = ui.update(SETTINGS_SIZE, 1.0, 0.4);
     assert!(
-        ui.bounds("update.restart").is_some(),
-        "a staged update offers the restart"
+        matches!(pressed.as_slice(), [Message::Update(UpdateAction::Apply)]),
+        "the staged update asks for the restart it offers"
     );
 }
 
@@ -370,13 +390,13 @@ fn a_popup_panel_rises_from_below_into_the_centre() {
     ui.update(PROMPT_SIZE, 1.0, 0.1);
     ui.resize([PROMPT_SIZE.x as u32, PROMPT_SIZE.y as u32]);
     let mut workspace = Workspace::default();
-    let element = update_screen(&mut ui, &workspace);
+    let element = settings_screen(&mut ui, &workspace);
     ui.present(element);
-    workspace.update.open = true;
-    let element = update_screen(&mut ui, &workspace);
+    workspace.settings.open = true;
+    let element = settings_screen(&mut ui, &workspace);
     ui.present(element);
     let opening = ui
-        .bounds("update.dialog")
+        .bounds("settings.sheet")
         .expect("the opening panel is laid out");
     assert!(
         opening.min.y >= PROMPT_SIZE.y,
@@ -387,10 +407,10 @@ fn a_popup_panel_rises_from_below_into_the_centre() {
     for _ in 0..40 {
         time += 0.05;
         ui.update(PROMPT_SIZE, 1.0, time);
-        let element = update_screen(&mut ui, &workspace);
+        let element = settings_screen(&mut ui, &workspace);
         ui.present(element);
         settled = ui
-            .bounds("update.dialog")
+            .bounds("settings.sheet")
             .expect("the open panel is laid out");
     }
     assert!(
@@ -441,12 +461,14 @@ fn prompt_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static
     grana_ui::place(full, elements)
 }
 
-fn update_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
+fn settings_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
     let mut elements = Vec::new();
     {
         let mut ctx = ui.build();
-        elements.extend(grana_editor::update_sheet::view(&mut ctx, full, workspace));
+        elements.extend(grana_editor::settings_panel::view(
+            &mut ctx, full, workspace,
+        ));
     }
     grana_ui::place(full, elements)
 }

@@ -114,7 +114,7 @@ impl App {
             surface.ui.close_popups();
         }
         if self.workspace.settings.open {
-            self.dispatch(grana_editor::Message::ToggleSettings(false));
+            self.dispatch(grana_editor::Message::SetSettings(None));
         }
         if self.workspace.remote_open {
             self.dispatch(grana_editor::Message::CancelRemote);

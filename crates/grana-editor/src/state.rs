@@ -287,7 +287,6 @@ pub struct Update {
     pub notes: Option<String>,
     pub progress: Option<(u64, u64)>,
     pub automatic: bool,
-    pub open: bool,
     pub request: Option<UpdateRequest>,
 }
 
@@ -300,7 +299,6 @@ impl Default for Update {
             notes: None,
             progress: None,
             automatic: true,
-            open: false,
             request: None,
         }
     }
