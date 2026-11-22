@@ -26,6 +26,23 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn cache_stamps(root: &std::path::Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut stamps = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return stamps;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            stamps.extend(cache_stamps(&path));
+        } else if let Ok(modified) = std::fs::metadata(&path).and_then(|held| held.modified()) {
+            stamps.push((path, modified));
+        }
+    }
+    stamps.sort();
+    stamps
+}
+
 #[test]
 fn reads_a_tiled_slide_with_shared_jpeg_tables() {
     let image = grana_tiff::Image::open(&fixture("slide.tif"), 0).expect("the slide opens");
@@ -1217,6 +1234,7 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
         "the first read downloads the stored shards"
     );
     drop(first);
+    let stamped = cache_stamps(&cache);
     server.reset();
     let cached =
         Image::open_with_cache(&source, Some(cache.clone())).expect("the remote image reopens");
@@ -1225,6 +1243,11 @@ fn caches_the_derived_levels_of_a_remote_ome_zarr() {
         server.downloads(),
         0,
         "a reopened image reads its derived level from the disk cache"
+    );
+    assert_eq!(
+        cache_stamps(&cache),
+        stamped,
+        "a cache hit leaves the tiles it serves untouched on disk"
     );
     drop(cached);
     write_derived_zarr(&path, 200.0);

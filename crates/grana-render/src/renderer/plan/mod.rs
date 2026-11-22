@@ -16,14 +16,16 @@ pub(super) struct Input<'a> {
     pub(super) current: Option<usize>,
     pub(super) measured: bool,
     pub(super) pose: u64,
-    pub(super) rejected: Option<usize>,
+    pub(super) rejection: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Planned {
     pub(super) ladder: Ladder,
+    pub(super) desired: Ladder,
     pub(super) levels: Levels,
     pub(super) overflowed: Option<usize>,
+    pub(super) truncated: bool,
 }
 
 pub(super) fn levels(
@@ -42,7 +44,7 @@ pub(super) fn levels(
         current,
         measured,
         pose,
-        rejected,
+        rejection,
     } = input;
     let level_count = pyramid.level_count();
     let first = arena.first();
@@ -53,6 +55,16 @@ pub(super) fn levels(
     let limits = Limits { first, ceiling };
     let allowed = limits.count(pyramid);
     let share = slots.max(1);
+    let desired = volume_ladder(LadderView {
+        pyramid,
+        camera,
+        height: view.height as f32,
+        current,
+        limits,
+    });
+    let floor = rejection
+        .filter(|(regime, _)| *regime == desired.base)
+        .map(|(_, level)| level);
     let fit_view = FitView {
         pyramid,
         camera,
@@ -61,7 +73,6 @@ pub(super) fn levels(
         height: view.height,
         limits: Limits { first, ceiling },
         capacity: share,
-        current,
     };
     let key = digest(&[
         view.motion,
@@ -71,16 +82,25 @@ pub(super) fn levels(
         first as u64,
         u64::from(u32::from(measured)),
         level_key(current),
-        level_key(rejected),
+        level_key(floor),
+        level_key(Some(desired.base)),
     ]);
     let (fit, overflowed) = if measured {
-        fit_measured(fit_view, measure, pose, rejected)
+        let fitted = fit_measured(fit_view, desired, measure, pose, floor);
+        (fitted.fit, fitted.overflowed)
     } else if let Some((held, value)) = *cache
         && held == key
     {
         (value, None)
     } else {
-        let computed = fit_volume(fit_view);
+        let mut computed = fit_volume(fit_view, desired);
+        if let Some(floor) = floor.filter(|floor| *floor > computed.ladder.base) {
+            let count = ladder_count(camera.projection(), allowed, floor);
+            computed = VolumeFit {
+                ladder: Ladder { base: floor, count },
+                capacity: capacities(share, &computed.capacity, count),
+            };
+        }
         *cache = Some((key, computed));
         (computed, None)
     };
@@ -92,10 +112,13 @@ pub(super) fn levels(
     } else {
         capacities(share, &fit.capacity, count)
     };
+    let levels = Levels { ladder, capacity };
     Planned {
         ladder,
-        levels: Levels { ladder, capacity },
+        desired,
+        levels,
         overflowed,
+        truncated: truncated(measure, pose, ladder, capacity),
     }
 }
 

@@ -65,7 +65,20 @@ pub fn fit(
     limits: &Limits,
     required: u64,
 ) -> Result<Fragment, String> {
-    plan(size, allowance, limits, required)
+    plan(size, allowance, limits, required, LAYER_LIMIT)
+}
+
+pub(crate) fn degrade(
+    size: [u32; 2],
+    allowance: u64,
+    limits: &Limits,
+    preferred: u64,
+) -> Result<Fragment, String> {
+    assert!(
+        (1..=LAYER_LIMIT).contains(&preferred),
+        "a fragment store prefers one to {LAYER_LIMIT} layers"
+    );
+    plan(size, allowance, limits, 1, preferred)
 }
 
 fn plan(
@@ -73,6 +86,7 @@ fn plan(
     allowance: u64,
     limits: &Limits,
     required: u64,
+    preferred: u64,
 ) -> Result<Fragment, String> {
     assert!(
         (1..=LAYER_LIMIT).contains(&required),
@@ -98,7 +112,7 @@ fn plan(
         .max_buffer_size
         .min(limits.max_storage_buffer_binding_size)
         / (capacity * COLOR_BYTES);
-    let layers = budgeted.min(addressable).min(LAYER_LIMIT);
+    let layers = budgeted.min(addressable).min(preferred).min(LAYER_LIMIT);
     if layers >= required {
         return Ok(Fragment {
             size,

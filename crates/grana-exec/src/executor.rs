@@ -97,7 +97,10 @@ impl Queue {
     }
 
     fn pop(&mut self) -> Option<Task> {
-        self.lanes.iter_mut().rev().find_map(|lane| lane.pop_back())
+        self.lanes
+            .iter_mut()
+            .rev()
+            .find_map(|lane| lane.pop_front())
     }
 
     fn vacant(&self) -> bool {

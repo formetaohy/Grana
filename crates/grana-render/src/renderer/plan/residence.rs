@@ -51,6 +51,9 @@ pub(crate) struct Residence {
     prefetch_stable: bool,
     batches: Vec<Batch>,
     refreshes: HashSet<BrickRequest>,
+    issued: HashSet<BrickRequest>,
+    denials: usize,
+    denied_frames: u32,
     prefetch_rate: f32,
     prefetch_sent: u64,
     prefetch_hit: u64,
@@ -63,8 +66,9 @@ pub(crate) struct Residence {
     cap: Option<usize>,
     level: Option<usize>,
     measure: Vec<Option<Measured>>,
-    rejection: Option<(u64, usize)>,
+    rejection: Option<(usize, usize)>,
     cache: Option<(u64, VolumeFit)>,
+    grids: Vec<BrickGrid>,
     view: ViewInfo,
 }
 
@@ -173,6 +177,10 @@ impl Missing {
                 stamp.epoch == self.epoch && stamp.bits & (1 << (index % u64::BITS)) != 0
             })
         })
+    }
+
+    fn wants(&self, time: u32, level: usize, index: u32) -> bool {
+        self.time == Some(time) && self.demanded(level, index)
     }
 
     fn want(&mut self, band: usize, bucket: u32, level: usize, index: u32, request: BrickRequest) {
@@ -298,6 +306,9 @@ impl Residence {
             prefetch_stable: false,
             batches: Vec::new(),
             refreshes: HashSet::new(),
+            issued: HashSet::new(),
+            denials: 0,
+            denied_frames: 0,
             prefetch_rate: 1.0,
             prefetch_sent: 0,
             prefetch_hit: 0,
@@ -312,11 +323,12 @@ impl Residence {
             measure: Vec::new(),
             rejection: None,
             cache: None,
+            grids: Vec::new(),
             view: ViewInfo::default(),
         }
     }
 
-    pub(crate) fn setup(&mut self, device: &Device, slots: usize, levels: usize) {
+    pub(crate) fn setup(&mut self, device: &Device, slots: usize, pyramid: &Pyramid) {
         self.words = planner::plan_words(slots);
         self.bytes = (self.words * size_of::<u32>()) as u64;
         self.feedback = Some(Readback::new(
@@ -326,7 +338,12 @@ impl Residence {
             FEEDBACK_SLOTS,
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
-        self.measure = vec![None; levels];
+        self.measure = vec![None; pyramid.level_count()];
+        self.grids = pyramid
+            .levels()
+            .iter()
+            .map(|level| BrickGrid::new(level.extent()))
+            .collect();
         self.epoch += 1;
         self.forget();
     }
@@ -341,6 +358,9 @@ impl Residence {
         self.prefetch_stable = false;
         self.batches.clear();
         self.refreshes.clear();
+        self.issued.clear();
+        self.denials = 0;
+        self.denied_frames = 0;
         self.prefetch_rate = 1.0;
         self.prefetch_sent = 0;
         self.prefetch_hit = 0;
@@ -372,6 +392,9 @@ impl Residence {
         self.prefetch_stable = false;
         self.batches.clear();
         self.refreshes.clear();
+        self.issued.clear();
+        self.denials = 0;
+        self.denied_frames = 0;
         self.measure.fill(None);
         self.rejection = None;
         self.cache = None;
@@ -401,6 +424,9 @@ impl Residence {
         self.prefetch_stable = false;
         self.batches.clear();
         self.refreshes.clear();
+        self.issued.clear();
+        self.denials = 0;
+        self.denied_frames = 0;
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
         self.measure.fill(None);
@@ -452,7 +478,12 @@ impl Residence {
     pub(crate) fn discard(&mut self, requests: &[BrickRequest]) {
         for request in requests {
             self.prefetched.remove(request);
+            self.issued.remove(request);
         }
+    }
+
+    pub(crate) fn denied(&mut self, count: usize) {
+        self.denials = self.denials.saturating_add(count);
     }
 
     pub(crate) fn style_outdated(&self, style: u64) -> bool {
@@ -512,12 +543,12 @@ impl Residence {
                     .flatten()
                     .is_some_and(|held| held.pose == pose)
             });
-        let rejected = if assured {
-            None
+        let rejected = if assured { None } else { self.rejection };
+        let denied = std::mem::take(&mut self.denials);
+        self.denied_frames = if denied > 0 {
+            self.denied_frames + 1
         } else {
-            self.rejection
-                .filter(|(captured, _)| *captured == view.motion)
-                .map(|(_, level)| level)
+            0
         };
         let planned = levels(
             Input {
@@ -531,17 +562,23 @@ impl Residence {
                 current,
                 measured,
                 pose,
-                rejected,
+                rejection: rejected,
             },
             &self.measure,
             &mut self.cache,
         );
         if !assured {
-            self.rejection = planned
-                .overflowed
-                .or_else(|| current.filter(|_| overflow))
-                .map(|level| (view.motion, level));
+            self.rejection = match planned.overflowed {
+                Some(level) => Some((planned.desired.base, level)),
+                None if planned.truncated || self.denied_frames >= 2 => {
+                    Some((planned.desired.base, planned.ladder.base))
+                }
+                None if planned.ladder.base <= planned.desired.base => None,
+                None => self.rejection,
+            };
         }
+        let truncated =
+            planned.truncated || overflow && planned.ladder.base <= planned.desired.base;
         self.level = Some(planned.ladder.base);
         let key = ViewKey::of(
             self.epoch,
@@ -558,8 +595,6 @@ impl Residence {
         );
         let replan = self.planned.as_ref() != Some(&key);
         let settled = self.settled == Some(key);
-        let truncated =
-            self.view.level == planned.ladder.base && self.view.visible > self.view.demand;
         let ready_at_time = settled && (!assured || !truncated);
         let ready = if awaits || assured {
             ready_at_time
@@ -688,6 +723,23 @@ impl Residence {
             .then_some(key);
         let demand = ResidencyDemand { key, bands };
         self.missing.apply(&demand, atlas);
+        {
+            let Self {
+                missing,
+                issued,
+                grids,
+                ..
+            } = self;
+            issued.retain(|request| {
+                grids.get(request.level).is_some_and(|grid| {
+                    missing.wants(
+                        request.time,
+                        request.level,
+                        grid.index(request.coord) as u32,
+                    )
+                })
+            });
+        }
         self.demand = Some(demand);
         self.measure_prefetch(pyramid, key.time);
         let preview = key.prefetch_digest();
@@ -745,6 +797,7 @@ impl Residence {
 
     fn observe(&mut self, time: u32) {
         self.prefetched.retain(|request| request.time > time);
+        self.issued.retain(|request| request.time >= time);
         self.batches.retain(|batch| batch.time >= time);
         let Some(demand) = self.demand.as_ref() else {
             return;
@@ -802,10 +855,30 @@ impl Residence {
             let index = grid.index(request.coord);
             atlas.slot(request.time, request.level, index).is_some()
         });
-        requests.volume.extend(self.refreshes.iter().copied());
-        requests
-            .volume
-            .extend(self.missing.requests().iter().copied());
+        let mut room = atlas
+            .available()
+            .saturating_sub(self.issued.len())
+            .saturating_sub(self.prefetched.len());
+        for request in self.refreshes.iter().copied() {
+            if room == 0 {
+                break;
+            }
+            if self.issued.insert(request) {
+                requests.volume.push(request);
+                room -= 1;
+            }
+        }
+        for request in self.missing.requests() {
+            if room == 0 {
+                break;
+            }
+            if self.issued.contains(request) {
+                continue;
+            }
+            self.issued.insert(*request);
+            requests.volume.push(*request);
+            room -= 1;
+        }
         if requests.volume.is_empty()
             && prefetch
             && self.prefetch_stable
@@ -842,11 +915,16 @@ impl Residence {
         Some(requests)
     }
 
-    pub(crate) fn supply(&mut self, time: u32, level: usize, index: usize) {
-        if self.missing.time != Some(time) {
+    pub(crate) fn supply(&mut self, request: BrickRequest) {
+        self.issued.remove(&request);
+        if self.missing.time != Some(request.time) {
             return;
         }
-        self.missing.supply(level, index as u32);
+        let Some(grid) = self.grids.get(request.level) else {
+            return;
+        };
+        self.missing
+            .supply(request.level, grid.index(request.coord) as u32);
     }
 
     pub(crate) fn release(&mut self, pyramid: &Pyramid, time: u32, level: usize, index: usize) {

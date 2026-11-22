@@ -1337,6 +1337,10 @@ fn restarts_accumulation_when_the_band_ladder_changes() {
         .draw(gpu.device(), gpu.queue(), capped(&view, 0))
         .expect("the narrowed ladder draws");
     assert!(narrowed.drawn, "the single band frame never drew");
+    assert!(
+        narrowed.fading,
+        "a different band ladder did not fade the frame it replaced"
+    );
     assert_eq!(
         narrowed.age, 1,
         "a different band ladder kept the convergence age of the old one"
@@ -1352,6 +1356,20 @@ fn restarts_accumulation_when_the_band_ladder_changes() {
         held.history,
         "an unchanged band ladder dropped its temporal history"
     );
+    let mut blended = 2;
+    loop {
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), capped(&view, 0))
+            .expect("the faded frame draws");
+        blended += 1;
+        if !info.fading {
+            break;
+        }
+        assert!(
+            blended <= 16,
+            "the fade over a replaced band ladder never finished"
+        );
+    }
 }
 
 fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {

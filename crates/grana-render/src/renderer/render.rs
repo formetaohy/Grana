@@ -691,7 +691,10 @@ impl Renderer {
             exposure: frame.exposure,
             transparent: *transparent,
         });
-        info.fading = fade.is_some();
+        if blend.is_none() {
+            target.drop_fade();
+        }
+        info.fading = blend.is_some();
     }
 }
 

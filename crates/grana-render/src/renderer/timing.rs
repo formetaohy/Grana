@@ -95,8 +95,11 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
 }
 
 pub(super) fn fade(fade: &mut Option<Fade>) -> Option<f32> {
-    fade.as_mut().map(|active| {
-        active.weight = (active.weight + 1.0 / FADE_DRAWS).min(1.0);
-        active.weight
-    })
+    let active = fade.as_mut()?;
+    active.weight += 1.0 / FADE_DRAWS;
+    if active.weight >= 1.0 {
+        *fade = None;
+        return None;
+    }
+    Some(active.weight)
 }

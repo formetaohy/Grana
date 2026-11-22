@@ -500,30 +500,21 @@ pub(crate) struct FitView<'a> {
     pub(crate) height: u32,
     pub(crate) limits: Limits,
     pub(crate) capacity: usize,
-    pub(crate) current: Option<usize>,
 }
 
-pub(crate) fn fit_volume(view: FitView<'_>) -> VolumeFit {
+pub(crate) fn fit_volume(view: FitView<'_>, desired: Ladder) -> VolumeFit {
     let FitView {
         pyramid,
         camera,
         region: _,
         aspect,
-        height,
+        height: _,
         limits,
         capacity,
-        current,
     } = view;
     assert!(capacity > 0, "a volume fit reserves at least one brick");
     assert!(aspect > 0.0, "a view has a positive aspect");
     let levels = limits.count(pyramid);
-    let desired = volume_ladder(LadderView {
-        pyramid,
-        camera,
-        height: height as f32,
-        current,
-        limits,
-    });
     let mut counts = Counts::new(view, desired.base);
     for base in desired.base..levels {
         let count = ladder_count(camera.projection(), levels, base);
@@ -600,7 +591,7 @@ impl<'a> Counts<'a> {
     }
 }
 
-fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usize {
+pub(crate) fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usize {
     match projection {
         CameraProjection::Perspective => BAND.min(levels - base),
         CameraProjection::Orthographic => 1,
@@ -613,38 +604,38 @@ pub(crate) struct Measured {
     pub(crate) visible: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Fitted {
+    pub(crate) fit: VolumeFit,
+    pub(crate) overflowed: Option<usize>,
+}
+
 pub(crate) fn fit_measured(
     view: FitView<'_>,
+    desired: Ladder,
     measure: &[Option<Measured>],
     pose: u64,
-    rejected: Option<usize>,
-) -> (VolumeFit, Option<usize>) {
+    floor: Option<usize>,
+) -> Fitted {
     let FitView {
         pyramid,
         camera,
         region: _,
         aspect: _,
-        height,
+        height: _,
         limits,
         capacity,
-        current,
     } = view;
     assert!(capacity > 0, "a volume fit reserves at least one brick");
     let levels = limits.count(pyramid);
-    let desired = volume_ladder(LadderView {
-        pyramid,
-        camera,
-        height: height as f32,
-        current,
-        limits,
-    });
-    let mut base = current
-        .unwrap_or(desired.base)
-        .clamp(desired.base, levels - 1);
+    let mut base = desired.base.min(levels - 1);
+    if let Some(floor) = floor {
+        base = base.max(floor.min(levels - 1));
+    }
     let mut overflowed = None;
     while base + 1 < levels {
         let count = ladder_count(camera.projection(), levels, base);
-        let Some(total) = measured_demand(measure, pose, base, count) else {
+        let Some(total) = measured_total(measure, pose, base, count) else {
             break;
         };
         if total <= capacity {
@@ -653,49 +644,34 @@ pub(crate) fn fit_measured(
         overflowed = Some(base);
         base += 1;
     }
-    if base > desired.base {
-        let target = base - 1;
-        let count = ladder_count(camera.projection(), levels, base);
-        if let Some(room) = room_for_one(measure, pose, base, count, capacity) {
-            let fits = match fresh(measure, target, pose) {
-                Some(visible) => visible <= room,
-                None => {
-                    rejected != Some(target)
-                        && estimate(measure, pose, pyramid, base, target) <= room
-                }
-            };
-            if fits {
-                base = target;
-            }
-        }
-    }
     let count = ladder_count(camera.projection(), levels, base);
     let wanted: [usize; BAND] = std::array::from_fn(|band| {
         if band >= count {
             return 1;
         }
-        let level = base + band;
-        fresh(measure, level, pose).unwrap_or_else(|| estimate(measure, pose, pyramid, base, level))
+        fresh(measure, base + band, pose).unwrap_or(1)
     });
-    (
-        VolumeFit {
+    Fitted {
+        fit: VolumeFit {
             ladder: Ladder { base, count },
             capacity: capacities(capacity, &wanted, count),
         },
         overflowed,
-    )
+    }
 }
 
-fn fresh(measure: &[Option<Measured>], level: usize, pose: u64) -> Option<usize> {
-    measure
-        .get(level)
-        .copied()
-        .flatten()
-        .filter(|held| held.pose == pose)
-        .map(|held| held.visible)
+pub(crate) fn truncated(
+    measure: &[Option<Measured>],
+    pose: u64,
+    ladder: Ladder,
+    capacity: [usize; BAND],
+) -> bool {
+    (0..ladder.count).any(|band| {
+        fresh(measure, ladder.base + band, pose).is_some_and(|visible| visible > capacity[band])
+    })
 }
 
-fn measured_demand(
+fn measured_total(
     measure: &[Option<Measured>],
     pose: u64,
     base: usize,
@@ -708,36 +684,13 @@ fn measured_demand(
     Some(total)
 }
 
-fn room_for_one(
-    measure: &[Option<Measured>],
-    pose: u64,
-    base: usize,
-    count: usize,
-    capacity: usize,
-) -> Option<usize> {
-    let mut held = 0usize;
-    for level in base..base + count - 1 {
-        held = held.checked_add(fresh(measure, level, pose)?)?;
-    }
-    Some(capacity.saturating_sub(held))
-}
-
-fn estimate(
-    measure: &[Option<Measured>],
-    pose: u64,
-    pyramid: &Pyramid,
-    from: usize,
-    to: usize,
-) -> usize {
-    let Some(visible) = fresh(measure, from, pose) else {
-        return 1;
-    };
-    if to == from {
-        return visible;
-    }
-    let coarse = BrickGrid::new(pyramid.level(from).extent()).count().max(1);
-    let fine = BrickGrid::new(pyramid.level(to).extent()).count().max(1);
-    visible.saturating_mul(fine).div_ceil(coarse).max(1)
+fn fresh(measure: &[Option<Measured>], level: usize, pose: u64) -> Option<usize> {
+    measure
+        .get(level)
+        .copied()
+        .flatten()
+        .filter(|held| held.pose == pose)
+        .map(|held| held.visible)
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {

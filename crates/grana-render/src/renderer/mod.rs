@@ -40,8 +40,9 @@ use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, FitView, Ladder, Limits, Measured, Planner, Schedule, VolumeFit, bucket_scale,
-    capacities, fit_measured, fit_volume, volume_dispatch,
+    self, BAND, FitView, Ladder, LadderView, Limits, Measured, Planner, Schedule, VolumeFit,
+    bucket_scale, capacities, fit_measured, fit_volume, ladder_count, truncated, volume_dispatch,
+    volume_ladder,
 };
 use crate::present::Present;
 use crate::schema::SceneFrame;
@@ -408,8 +409,7 @@ impl Renderer {
             self.budget,
             pyramid,
         )?;
-        self.residence
-            .setup(device, resources.slots(), pyramid.level_count());
+        self.residence.setup(device, resources.slots(), pyramid);
         self.resources = Some(resources);
         self.time = 0;
         if let Some(meshes) = self.meshes.as_mut() {
@@ -485,8 +485,14 @@ impl Renderer {
         let Some(resources) = self.resources.as_mut() else {
             return;
         };
-        let written = resources.upload(bricks, &mut self.residence, self.time);
-        self.uploads += written as u64;
+        let uploaded = resources.upload(bricks, &mut self.residence, self.time);
+        self.uploads += uploaded.written as u64;
+        if !uploaded.denied.is_empty() {
+            self.residence.denied(uploaded.denied.len());
+        }
+        let mut unplaced = uploaded.dropped;
+        unplaced.extend(uploaded.denied);
+        self.residence.discard(&unplaced);
     }
 
     pub fn abandon(&mut self, requests: &[BrickRequest]) {

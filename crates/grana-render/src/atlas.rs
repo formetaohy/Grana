@@ -581,6 +581,14 @@ impl Atlas {
         self.space.free
     }
 
+    pub fn available(&self) -> usize {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(slot, held)| held.brick.is_none() || !self.held(*slot as u32))
+            .count()
+    }
+
     pub fn reserve_vacant(&mut self, count: usize) -> Vec<u32> {
         let mut slots = Vec::with_capacity(count.min(self.space.free));
         while slots.len() < count {

@@ -279,7 +279,7 @@ impl Resources {
         bricks: &[(BrickRequest, PackedBrick)],
         residence: &mut Residence,
         time: u32,
-    ) -> usize {
+    ) -> Uploaded {
         let Self {
             bricks: tables,
             atlas,
@@ -294,40 +294,32 @@ impl Resources {
         } = self;
         let content = residence.content();
         let mut generation = residence.generation();
-        let mut supplied = Vec::new();
+        let mut settled = Vec::new();
         let mut released = Vec::new();
         let mut missing = Vec::new();
+        let mut dropped = Vec::new();
         let total = *channels;
         let mut values = [0.0f32; CELL_WORDS];
         {
+            let placement = Placement {
+                pyramid,
+                arena,
+                total,
+                time,
+            };
             let (prefetched, refreshes) = residence.streams();
             for (position, (request, packed)) in bricks.iter().enumerate() {
                 let BrickRequest {
                     time: held,
                     level,
-                    coord,
                     channels: scope,
+                    ..
                 } = *request;
-                if held < time {
+                let Some(index) = placement.index(request, packed) else {
                     prefetched.remove(request);
+                    dropped.push(*request);
                     continue;
-                }
-                if level >= pyramid.level_count()
-                    || level < arena.first()
-                    || held >= pyramid.frame_count()
-                    || packed.channels() != total
-                {
-                    continue;
-                }
-                let extent = pyramid.level(level).extent();
-                if coord.x() >= extent.x().div_ceil(BRICK_SIDE)
-                    || coord.y() >= extent.y().div_ceil(BRICK_SIDE)
-                    || coord.z() >= extent.z().div_ceil(BRICK_SIDE)
-                {
-                    continue;
-                }
-                let grid = BrickGrid::new(extent);
-                let index = grid.index(coord);
+                };
                 prefetched.remove(request);
                 let demand = held == time;
                 let bound = tables[level]
@@ -349,9 +341,11 @@ impl Resources {
                             shadow.mark(level, index);
                         }
                     }
+                    settled.push(*request);
                     continue;
                 }
                 if !scope.covers(total) || atlas.is_hollow(held, level, index) {
+                    dropped.push(*request);
                     continue;
                 }
                 let maximum = packed
@@ -374,10 +368,11 @@ impl Resources {
                     if current {
                         generation += 1;
                     }
-                    supplied.push((held, level, index));
+                    settled.push(*request);
                     continue;
                 }
                 missing.push(Pending {
+                    request: *request,
                     position,
                     held,
                     level,
@@ -402,12 +397,12 @@ impl Resources {
             released.push((brick.time, brick.level, brick.index));
         }
         let prefetch_slots = atlas.reserve_vacant(prefetch.len());
-        for (held, slot) in demand
+        let placements = demand
             .iter()
-            .zip(&slots)
-            .chain(prefetch.iter().zip(&prefetch_slots))
-        {
-            let (position, packed) = (held.position, &bricks[held.position].1);
+            .zip(slots.iter())
+            .chain(prefetch.iter().zip(prefetch_slots.iter()));
+        for (pending, slot) in placements {
+            let (position, packed) = (pending.position, &bricks[pending.position].1);
             occupancy.reset(*slot);
             for (pack, block) in packed.packs() {
                 staged.push((pack, *slot, position));
@@ -417,32 +412,43 @@ impl Resources {
             atlas.assign(
                 *slot,
                 ResidentBrick {
-                    time: held.held,
-                    level: held.level,
-                    index: held.index,
+                    time: pending.held,
+                    level: pending.level,
+                    index: pending.index,
                 },
-                held.demand,
+                pending.demand,
             );
-            if held.publish
-                && let Some(table) = tables[held.level].as_mut()
+            if pending.publish
+                && let Some(table) = tables[pending.level].as_mut()
             {
                 table.set_record(
                     arena,
-                    held.index,
-                    BrickRecord::new(*slot + 1, held.held, content),
+                    pending.index,
+                    BrickRecord::new(*slot + 1, pending.held, content),
                 );
-                shadow.mark(held.level, held.index);
+                shadow.mark(pending.level, pending.index);
             }
-            if held.current {
+            if pending.current {
                 generation += 1;
             }
-            supplied.push((held.held, held.level, held.index));
+            settled.push(pending.request);
         }
+        let denied = demand
+            .iter()
+            .skip(slots.len())
+            .map(|pending| pending.request)
+            .collect::<Vec<_>>();
+        dropped.extend(
+            prefetch
+                .iter()
+                .skip(prefetch_slots.len())
+                .map(|pending| pending.request),
+        );
         residence.set_generation(generation);
         stage(upload, atlas, bricks, staged);
-        let uploaded = supplied.len();
-        for (held, level, index) in supplied {
-            residence.supply(held, level, index);
+        let uploaded = settled.len();
+        for request in settled {
+            residence.supply(request);
         }
         for (held, level, index) in released {
             residence.release(pyramid, held, level, index);
@@ -450,7 +456,11 @@ impl Resources {
         for table in tables.iter_mut().flatten() {
             table.flush(upload, arena);
         }
-        uploaded
+        Uploaded {
+            written: uploaded,
+            denied,
+            dropped,
+        }
     }
 
     pub(super) fn abandon(
@@ -470,7 +480,7 @@ impl Resources {
         } = self;
         let content = residence.content();
         let mut generation = residence.generation();
-        let mut released = Vec::new();
+        let mut settled = Vec::new();
         residence.discard(requests);
         for request in requests {
             let BrickRequest {
@@ -495,7 +505,7 @@ impl Resources {
             }
             let index = BrickGrid::new(extent).index(coord);
             if atlas.slot(held, level, index).is_some() || atlas.is_hollow(held, level, index) {
-                released.push((held, level, index));
+                settled.push(*request);
                 continue;
             }
             atlas.assign_hollow(held, level, index);
@@ -507,19 +517,20 @@ impl Resources {
                 shadow.mark(level, index);
             }
             generation += 1;
-            released.push((held, level, index));
+            settled.push(*request);
         }
         for table in tables.iter_mut().flatten() {
             table.flush(upload, arena);
         }
         residence.set_generation(generation);
-        for (held, level, index) in released {
-            residence.supply(held, level, index);
+        for request in settled {
+            residence.supply(request);
         }
     }
 }
 
 struct Pending {
+    request: BrickRequest,
     position: usize,
     held: u32,
     level: usize,
@@ -527,6 +538,43 @@ struct Pending {
     demand: bool,
     current: bool,
     publish: bool,
+}
+
+pub(super) struct Uploaded {
+    pub(super) written: usize,
+    pub(super) denied: Vec<BrickRequest>,
+    pub(super) dropped: Vec<BrickRequest>,
+}
+
+struct Placement<'a> {
+    pyramid: &'a Pyramid,
+    arena: &'a BrickArena,
+    total: usize,
+    time: u32,
+}
+
+impl Placement<'_> {
+    fn index(&self, request: &BrickRequest, packed: &PackedBrick) -> Option<usize> {
+        let BrickRequest {
+            time, level, coord, ..
+        } = *request;
+        if time < self.time
+            || level >= self.pyramid.level_count()
+            || level < self.arena.first()
+            || time >= self.pyramid.frame_count()
+            || packed.channels() != self.total
+        {
+            return None;
+        }
+        let extent = self.pyramid.level(level).extent();
+        if coord.x() >= extent.x().div_ceil(BRICK_SIDE)
+            || coord.y() >= extent.y().div_ceil(BRICK_SIDE)
+            || coord.z() >= extent.z().div_ceil(BRICK_SIDE)
+        {
+            return None;
+        }
+        Some(BrickGrid::new(extent).index(coord))
+    }
 }
 
 fn slot_bytes(pyramid: &Pyramid) -> u64 {

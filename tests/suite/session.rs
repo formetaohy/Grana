@@ -1700,6 +1700,7 @@ fn reads_each_streamed_brick_once() {
         1.0,
     );
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut requested = std::collections::HashSet::new();
     loop {
         session.poll();
         let scene = session.scene().expect("the series opens");
@@ -1712,6 +1713,12 @@ fn reads_each_streamed_brick_once() {
             .poll_requests(gpu.device(), time)
             .expect("the demand polls")
         {
+            for request in &requests.volume {
+                assert!(
+                    requested.insert(*request),
+                    "the stream asked again for a brick it had already read"
+                );
+            }
             session.request(requests.time, &requests.volume, &requests.prefetch);
         }
         engine

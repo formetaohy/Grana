@@ -48,7 +48,6 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Reg
             height,
             limits,
             capacity: 1,
-            current: None,
         },
         ladder.base,
     );

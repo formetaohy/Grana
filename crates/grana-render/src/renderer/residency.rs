@@ -438,6 +438,10 @@ impl FrameTarget {
         &held.group
     }
 
+    pub(super) fn drop_fade(&mut self) {
+        self.fade = None;
+    }
+
     pub(super) fn snapshot(&mut self, encoder: &mut CommandEncoder, region: [u32; 4]) {
         let Some(fade) = self.fade.as_ref() else {
             return;

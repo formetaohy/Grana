@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use grana_volume::{Extent, VoxelData, VoxelFormat, VoxelSemantics};
 
-const SOURCE_BUDGET: u64 = 512 << 20;
 const TOTAL_BUDGET: u64 = 1536 << 20;
-const MINIMUM_BUDGET: u64 = 48 << 20;
 
 const RATIO: u32 = 2;
 
@@ -39,56 +37,85 @@ impl Plane {
 }
 
 pub(crate) struct Caches {
-    levels: Vec<grana_store::LruCache<Key, Plane>>,
+    levels: Vec<Level>,
+}
+
+struct Level {
+    budget: u64,
+    cache: grana_store::LruCache<Key, Plane>,
 }
 
 impl Caches {
     pub(crate) fn of(pyramid: &grana_volume::Pyramid) -> Self {
-        let stored = pyramid.stored();
         let channel_bytes = pyramid
             .channels()
             .iter()
             .map(|channel| channel.format().bytes() as u64)
             .sum::<u64>();
-        let mut remaining = TOTAL_BUDGET;
-        let budgets = pyramid
+        let wanted = pyramid
             .levels()
             .iter()
-            .enumerate()
-            .map(|(level, info)| {
+            .map(|info| {
                 let extent = info.extent();
-                let wanted = if level < stored {
-                    SOURCE_BUDGET
-                } else {
-                    let plane = u64::from(extent.x()) * u64::from(extent.y()) * channel_bytes;
-                    plane * u64::from(extent.z())
-                };
-                let budget = wanted.min(remaining).max(MINIMUM_BUDGET);
-                remaining = remaining.saturating_sub(budget);
-                budget
+                u64::from(extent.x())
+                    * u64::from(extent.y())
+                    * channel_bytes
+                    * u64::from(extent.z())
             })
             .collect::<Vec<_>>();
         Self {
-            levels: budgets
+            levels: shares(&wanted, TOTAL_BUDGET)
                 .into_iter()
-                .map(|budget| grana_store::LruCache::single(budget, Plane::bytes))
+                .map(|budget| Level {
+                    budget,
+                    cache: grana_store::LruCache::single(budget, Plane::bytes),
+                })
                 .collect(),
         }
     }
 
     pub(crate) fn fetch(&self, key: Key) -> Option<Arc<Plane>> {
-        self.level(key.level).fetch(key)
+        self.level(key.level).cache.fetch(key)
     }
 
     pub(crate) fn insert(&self, key: Key, plane: Arc<Plane>) {
-        self.level(key.level).insert(key, plane);
+        let level = self.level(key.level);
+        if plane.bytes() <= level.budget {
+            level.cache.insert(key, plane);
+        }
     }
 
-    fn level(&self, level: u32) -> &grana_store::LruCache<Key, Plane> {
+    fn level(&self, level: u32) -> &Level {
         self.levels
             .get(level as usize)
             .expect("a cached plane names a level of the pyramid")
     }
+}
+
+fn shares(wanted: &[u64], total: u64) -> Vec<u64> {
+    assert!(!wanted.is_empty(), "a pyramid holds at least one level");
+    let sum = wanted.iter().map(|bytes| u128::from(*bytes)).sum::<u128>();
+    let mut budgets = if sum == 0 {
+        vec![1; wanted.len()]
+    } else {
+        wanted
+            .iter()
+            .map(|bytes| ((u128::from(total) * u128::from(*bytes)) / sum) as u64)
+            .map(|share| share.max(1))
+            .collect::<Vec<_>>()
+    };
+    let mut held = budgets.iter().sum::<u64>();
+    while held > total {
+        let index = (0..budgets.len())
+            .max_by_key(|index| budgets[*index])
+            .expect("a pyramid holds at least one level");
+        if budgets[index] <= 1 {
+            break;
+        }
+        budgets[index] -= 1;
+        held -= 1;
+    }
+    budgets
 }
 
 pub(crate) fn reduce(

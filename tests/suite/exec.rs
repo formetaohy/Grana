@@ -43,6 +43,26 @@ fn a_batch_runs_every_item_once_across_its_shards() {
         (0..200usize).collect::<Vec<_>>(),
         "a batch runs each item once"
     );
+
+    let ordered = Executor::new(Role::Read, 1);
+    let (sender, pipe) = Pipe::new(1024);
+    ordered.submit_batch(
+        Priority::Demand,
+        (0..200usize).collect(),
+        4,
+        move |_, item| {
+            let _ = sender.send(item);
+        },
+    );
+    let mut sequence = Vec::new();
+    while sequence.len() < 200 {
+        sequence.push(receive(&pipe).expect("a batch reports every item"));
+    }
+    assert_eq!(
+        sequence,
+        (0..200usize).collect::<Vec<_>>(),
+        "one lane serves its bricks in the order they were requested"
+    );
 }
 
 #[test]

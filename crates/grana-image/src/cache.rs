@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
@@ -57,6 +57,8 @@ pub(crate) struct Store {
     root: PathBuf,
     staging: PathBuf,
     bytes: Accounting,
+    recent: Mutex<HashMap<PathBuf, u64>>,
+    tick: AtomicU64,
 }
 
 impl Store {
@@ -67,6 +69,8 @@ impl Store {
             root: root.to_path_buf(),
             staging,
             bytes: accounting(root),
+            recent: Mutex::new(HashMap::new()),
+            tick: AtomicU64::new(0),
         })
     }
 
@@ -168,10 +172,19 @@ impl Store {
     }
 
     fn touch(&self, path: &Path) {
-        let Ok(file) = OpenOptions::new().write(true).open(path) else {
-            return;
-        };
-        let _ = file.set_modified(SystemTime::now());
+        let tick = self.tick.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut recent = self
+            .recent
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        recent.insert(path.to_path_buf(), tick);
+    }
+
+    fn forget(&self, path: &Path) {
+        self.recent
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(path);
     }
 
     fn grow(&self, length: u64) {
@@ -195,12 +208,17 @@ impl Store {
                 break;
             }
             if std::fs::remove_file(&path).is_ok() {
+                self.forget(&path);
                 *total = total.saturating_sub(length);
             }
         }
     }
 
-    fn entries(&self) -> Vec<(SystemTime, u64, PathBuf)> {
+    fn entries(&self) -> Vec<(Recency, u64, PathBuf)> {
+        let recent = self
+            .recent
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut entries = Vec::new();
         let Ok(directories) = std::fs::read_dir(&self.root) else {
             return entries;
@@ -219,12 +237,28 @@ impl Store {
                 if !metadata.is_file() {
                     continue;
                 }
-                let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-                entries.push((modified, metadata.len(), file.path()));
+                let path = file.path();
+                let recency = match recent.get(&path) {
+                    Some(tick) => Recency {
+                        touched: 1,
+                        stamp: u128::from(*tick),
+                    },
+                    None => Recency {
+                        touched: 0,
+                        stamp: modified(&metadata),
+                    },
+                };
+                entries.push((recency, metadata.len(), path));
             }
         }
         entries
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Recency {
+    touched: u8,
+    stamp: u128,
 }
 
 pub fn default_root() -> Option<PathBuf> {
