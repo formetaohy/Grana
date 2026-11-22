@@ -14,6 +14,7 @@ mod outline;
 mod parallel;
 mod plan;
 mod root;
+mod scene;
 mod schema;
 mod shape;
 mod space;
@@ -28,7 +29,7 @@ pub use grana_net::Transfer;
 pub use hcs::{
     Field, Kind as GroupKind, Plate, Well, group_path, kind as group_kind, open as open_plate,
 };
-pub use image::{Image, outlines};
+pub use image::{GroupImage, Image, outlines};
 pub use label::{
     ChunkFill, Label, LabelSpec, Labels, Written, read_labels, write as write_labels,
     write_group_labels,

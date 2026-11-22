@@ -7,6 +7,7 @@ use grana_volume::{
     Calibration, Census, ChannelInfo, Intensity, Pyramid, Statistics, VoxelData, VoxelFormat,
     VoxelSemantics, name_of, tint_of,
 };
+use serde_json::{Map, Value};
 use zarrs::array::data_type::{
     float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
 };
@@ -20,6 +21,7 @@ use crate::cache::{self, Cache};
 use crate::metadata::{self, ChannelMetadata};
 use crate::outline::Outline;
 use crate::root::{Root, Witness};
+use crate::scene::Scene;
 
 struct LevelArray {
     path: String,
@@ -28,7 +30,22 @@ struct LevelArray {
     witness: OnceLock<Result<Witness, String>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Footprint {
+    Display,
+    Source,
+}
+
 pub struct Image {
+    kind: Kind,
+}
+
+enum Kind {
+    Group(GroupImage),
+    Scene(Scene),
+}
+
+pub struct GroupImage {
     root: Root,
     group: String,
     name: String,
@@ -38,6 +55,8 @@ pub struct Image {
     pyramid: Pyramid,
     axes: Vec<metadata::Axis>,
     datasets: Vec<metadata::Dataset>,
+    systems: Vec<metadata::System>,
+    intrinsic: Option<String>,
 }
 
 impl Image {
@@ -50,42 +69,132 @@ impl Image {
     }
 
     pub fn outline(root: &Root, group: &str) -> Result<Outline, Error> {
-        let tag = root.tag(group);
-        let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
-            path: tag.clone(),
-            detail: error.to_string(),
-        })?;
-        let metadata = metadata::parse(&tag, opened.attributes())?;
-        let dataset = metadata
-            .datasets
-            .first()
-            .expect("a multiscale image lists a dataset");
-        let array_path = crate::hcs::join(group, &dataset.path);
-        let array = open_array(root.readable(), &array_path)?;
-        let layout = axes::layout(&metadata.axes, array.shape(), dataset)
-            .map_err(|detail| Error::Unsupported { path: tag, detail })?;
-        let channels = u32::try_from(layout.channel_count()).map_err(|_| Error::Unsupported {
-            path: array_path,
-            detail: "the channel axis is too long".to_string(),
-        })?;
-        Ok(Outline::new(layout.extent, channels, layout.frame_count()))
+        GroupImage::outline(root, group)
     }
 
     pub fn open_root(root: Root, group: &str) -> Result<Self, Error> {
+        let attributes = crate::hcs::attributes(&root, group)?;
+        let fields = crate::hcs::fields(&attributes);
+        if fields.contains_key("multiscales") {
+            let image = GroupImage::open(&root, group, attributes, Footprint::Display, None)?;
+            return Ok(Self {
+                kind: Kind::Group(image),
+            });
+        }
+        if fields.contains_key("scene") {
+            let scene = Scene::open(root, group, &attributes)?;
+            return Ok(Self {
+                kind: Kind::Scene(scene),
+            });
+        }
+        Err(metadata::absent(&root.tag(group), &attributes, fields))
+    }
+
+    pub fn name(&self) -> &str {
+        match &self.kind {
+            Kind::Group(image) => image.name(),
+            Kind::Scene(scene) => scene.name(),
+        }
+    }
+
+    pub fn transfer(&self) -> Option<Arc<grana_net::Transfer>> {
+        match &self.kind {
+            Kind::Group(image) => image.transfer(),
+            Kind::Scene(scene) => scene.transfer(),
+        }
+    }
+
+    pub fn identity(&self) -> Option<u64> {
+        match &self.kind {
+            Kind::Group(image) => image.identity(),
+            Kind::Scene(scene) => scene.identity(),
+        }
+    }
+
+    pub fn stamps(
+        &self,
+        level: usize,
+        time: u32,
+        channel: usize,
+        x: Range<u32>,
+        y: Range<u32>,
+        z: Range<u32>,
+    ) -> Result<Option<u64>, Error> {
+        match &self.kind {
+            Kind::Group(image) => image.stamps(level, time, channel, x, y, z),
+            Kind::Scene(scene) => scene.stamps(level, time, channel, x, y, z),
+        }
+    }
+
+    pub fn labels(&self) -> Result<crate::Labels, Error> {
+        match &self.kind {
+            Kind::Group(image) => image.labels(),
+            Kind::Scene(_) => Ok(crate::Labels::empty()),
+        }
+    }
+
+    pub fn pyramid(&self) -> &Pyramid {
+        match &self.kind {
+            Kind::Group(image) => image.pyramid(),
+            Kind::Scene(scene) => scene.pyramid(),
+        }
+    }
+
+    pub fn read_region(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        x: Range<u32>,
+        y: Range<u32>,
+        z: Range<u32>,
+    ) -> Result<VoxelData, Error> {
+        match &self.kind {
+            Kind::Group(image) => image.read_region(time, level, channel, x, y, z),
+            Kind::Scene(scene) => scene.read_region(time, level, channel, x, y, z),
+        }
+    }
+}
+
+impl GroupImage {
+    pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
+        let root = Root::local(path)?;
+        let attributes = crate::hcs::attributes(&root, group)?;
+        Self::open(&root, group, attributes, Footprint::Display, None)
+    }
+
+    pub(crate) fn open_member(root: &Root, group: &str, cache_bytes: u64) -> Result<Self, Error> {
+        let attributes = crate::hcs::attributes(root, group)?;
+        Self::open(
+            root,
+            group,
+            attributes,
+            Footprint::Source,
+            Some(cache_bytes),
+        )
+    }
+
+    pub(crate) fn open(
+        root: &Root,
+        group: &str,
+        attributes: Map<String, Value>,
+        footprint: Footprint,
+        cache_bytes: Option<u64>,
+    ) -> Result<Self, Error> {
         let tag = root.tag(group);
-        let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
-            path: tag.clone(),
-            detail: error.to_string(),
-        })?;
-        let metadata = metadata::parse(&tag, opened.attributes())?;
+        let metadata = metadata::parse(&tag, &attributes)?;
+        let datasets = match footprint {
+            Footprint::Display => &metadata.datasets,
+            Footprint::Source => &metadata.source.datasets,
+        };
         let readable: Arc<dyn ReadableStorageTraits> = root.readable();
-        let cache_bytes = cache::per_level(metadata.datasets.len());
-        let mut levels = Vec::with_capacity(metadata.datasets.len());
+        let cache_bytes = cache_bytes.unwrap_or_else(|| cache::per_level(datasets.len()));
+        let mut levels = Vec::with_capacity(datasets.len());
         let mut channel_count = None;
         let mut frames = None;
         let mut interval = None;
         let mut format = None;
-        for dataset in &metadata.datasets {
+        for dataset in datasets {
             let array_path = crate::hcs::join(group, &dataset.path);
             let array = Arc::new(open_array(readable.clone(), &array_path)?);
             let level_format = supported_format(&tag, &array)?;
@@ -188,14 +297,14 @@ impl Image {
         })?;
         let stored = level_metadata.len();
         let calibration = metadata.calibration.unwrap_or_else(|| {
-            if metadata.datasets.iter().all(|dataset| dataset.placed) {
+            if datasets.iter().all(|dataset| dataset.placed) {
                 Calibration::Recorded
             } else {
                 Calibration::Uncalibrated
             }
         });
         Ok(Self {
-            root,
+            root: root.clone(),
             group: group.to_string(),
             name,
             version: metadata.version,
@@ -211,8 +320,32 @@ impl Image {
                 calibration,
             ),
             axes: metadata.axes,
-            datasets: metadata.datasets,
+            datasets: datasets.clone(),
+            systems: metadata.systems,
+            intrinsic: metadata.source.name,
         })
+    }
+
+    fn outline(root: &Root, group: &str) -> Result<Outline, Error> {
+        let tag = root.tag(group);
+        let opened = Group::open(root.listable(), group).map_err(|error| Error::Open {
+            path: tag.clone(),
+            detail: error.to_string(),
+        })?;
+        let metadata = metadata::parse(&tag, opened.attributes())?;
+        let dataset = metadata
+            .datasets
+            .first()
+            .expect("a multiscale image lists a dataset");
+        let array_path = crate::hcs::join(group, &dataset.path);
+        let array = open_array(root.readable(), &array_path)?;
+        let layout = axes::layout(&metadata.axes, array.shape(), dataset)
+            .map_err(|detail| Error::Unsupported { path: tag, detail })?;
+        let channels = u32::try_from(layout.channel_count()).map_err(|_| Error::Unsupported {
+            path: array_path,
+            detail: "the channel axis is too long".to_string(),
+        })?;
+        Ok(Outline::new(layout.extent, channels, layout.frame_count()))
     }
 
     pub(crate) fn version(&self) -> &str {
@@ -231,11 +364,19 @@ impl Image {
         &self.datasets
     }
 
+    pub(crate) fn systems(&self) -> &[metadata::System] {
+        &self.systems
+    }
+
+    pub(crate) fn intrinsic(&self) -> Option<&str> {
+        self.intrinsic.as_deref()
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn transfer(&self) -> Option<std::sync::Arc<grana_net::Transfer>> {
+    pub fn transfer(&self) -> Option<Arc<grana_net::Transfer>> {
         self.root.transfer()
     }
 

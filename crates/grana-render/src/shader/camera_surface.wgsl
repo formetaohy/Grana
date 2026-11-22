@@ -12,5 +12,5 @@ fn motion_surface(pixel: vec2<i32>, ndc: vec2<f32>) -> Surface {
     if (slice_active()) {
         return nearest_surface(object, slice_surface(ndc));
     }
-    return nearest_surface(object, volume_surface_at(pixel));
+    return nearest_surface(object, volume_motion_at(pixel));
 }

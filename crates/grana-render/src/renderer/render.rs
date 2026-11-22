@@ -113,6 +113,7 @@ impl Renderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.present"),
         });
+        self.stage(&mut encoder, &prepared);
         self.show(device, queue, &mut encoder, target, &frame, prepared.ready);
         queue.submit([encoder.finish()]);
         self.register();
@@ -550,7 +551,7 @@ impl Renderer {
         let Self {
             convergence, info, ..
         } = self;
-        if !prepared.ready || !info.drawn {
+        if !prepared.ready || !info.drawn || convergence.converged() {
             return Ok(());
         }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -572,6 +573,24 @@ impl Renderer {
         Ok(())
     }
 
+    fn stage(&mut self, encoder: &mut CommandEncoder, prepared: &Prepared) {
+        let Self {
+            resources,
+            residence,
+            ..
+        } = self;
+        let (Some(resources), Some(slot)) = (resources.as_ref(), prepared.reserved) else {
+            return;
+        };
+        residence.stage(
+            encoder,
+            slot,
+            &resources.planner,
+            prepared.residency,
+            prepared.pose,
+        );
+    }
+
     fn accumulate(
         &mut self,
         device: &Device,
@@ -587,22 +606,12 @@ impl Renderer {
             convergence,
             resources,
             info,
-            residence,
             dummy_normal,
             dummy_volume,
             ..
         } = self;
         let (Some(resources), true) = (resources.as_ref(), prepared.ready) else {
             info.fading = false;
-            if let (Some(slot), Some(resources)) = (prepared.reserved, resources.as_ref()) {
-                residence.stage(
-                    encoder,
-                    slot,
-                    &resources.planner,
-                    prepared.residency,
-                    prepared.pose,
-                );
-            }
             return;
         };
         let view = prepared.shot.view;
@@ -629,15 +638,6 @@ impl Renderer {
         });
         info.history = intact;
         info.age = target.age;
-        if let Some(slot) = prepared.reserved {
-            residence.stage(
-                encoder,
-                slot,
-                &resources.planner,
-                prepared.residency,
-                prepared.pose,
-            );
-        }
     }
 
     fn show(

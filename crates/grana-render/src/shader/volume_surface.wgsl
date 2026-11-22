@@ -19,10 +19,14 @@ fn volume_surface_at(pixel: vec2<i32>) -> Surface {
     return Surface(depth, normal.xyz, true);
 }
 
-fn volume_anchor_at(pixel: vec2<i32>) -> f32 {
-    return textureLoad(volume_surface, volume_texel(pixel), 0).x;
-}
-
-fn volume_depth_at(pixel: vec2<i32>) -> f32 {
-    return textureLoad(volume_surface, volume_texel(pixel), 0).y;
+fn volume_motion_at(pixel: vec2<i32>) -> Surface {
+    let surface = volume_surface_at(pixel);
+    if (surface.known) {
+        return surface;
+    }
+    let front = textureLoad(volume_surface, volume_texel(pixel), 0).x;
+    if (front >= UNREACHED_DEPTH) {
+        return surface;
+    }
+    return Surface(front, vec3<f32>(0.0), true);
 }

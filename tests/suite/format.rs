@@ -1897,6 +1897,145 @@ fn browses_an_ome_zarr_plate() {
 }
 
 #[test]
+fn opens_a_scene_root_and_composites_its_images() {
+    let temp = Temp::new("suite-zarr-scene");
+    let path = temp.path().join("scene.ome.zarr");
+    write_scene_member(&path.join("left"), 0.0, 11.0);
+    write_scene_member(&path.join("right"), 6.0, 22.0);
+    write_scene_root(&path);
+    let scene = grana_zarr::Image::open(&path).expect("the scene root opens");
+    let pyramid = scene.pyramid();
+    assert_eq!(pyramid.level(0).extent(), Extent::new(12, 4, 1));
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(1.0, 1.0, 1.0));
+    for axis in 0..3 {
+        assert!(
+            pyramid.level(0).center()[axis].abs() <= 1.0e-5,
+            "the composite centres its levels like a plain image"
+        );
+    }
+    let data = scene
+        .read_region(0, 0, 0, 0..12, 0..4, 0..1)
+        .expect("the composite reads");
+    let values = (0..12).map(|x| data.value(x)).collect::<Vec<_>>();
+    assert_eq!(
+        values,
+        [11.0; 6].into_iter().chain([22.0; 6]).collect::<Vec<_>>(),
+        "each tile fills its own half of the scene"
+    );
+    let loaded = Image::open(&Source::file(path)).expect("the scene opens through the loader");
+    assert_eq!(loaded.pyramid().level(0).extent(), Extent::new(12, 4, 1));
+}
+
+fn write_scene_member(path: &std::path::Path, offset: f32, value: f32) {
+    let level = Level::of(
+        Extent::new(6, 4, 1),
+        Basis::diagonal(Spacing::new(1.0, 1.0, 1.0)),
+    );
+    let center = level.voxel_center([0.0, 0.0, 0.0]);
+    let placement = [-center[0] + offset, -center[1], -center[2]];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [1.0, 1.0, 1.0],
+        data: Intensity::new(0.0, 255.0),
+        window: Intensity::new(0.0, 255.0),
+    }];
+    let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
+        Ok(VoxelData::F32(vec![value; block.voxels()]))
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        path,
+        &mut ImageSpec {
+            name: "tile",
+            channels: &channels,
+            levels: &[level],
+            placement,
+            frames: 1,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::F32,
+            calibration: Calibration::Recorded,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the scene member writes");
+    let metadata = path.join("zarr.json");
+    let mut attributes = serde_json::from_slice::<serde_json::Value>(
+        &std::fs::read(&metadata).expect("the member metadata reads"),
+    )
+    .expect("the member metadata parses");
+    let ome = attributes["attributes"]["ome"]
+        .as_object_mut()
+        .expect("the member declares its ome metadata");
+    ome["version"] = serde_json::json!("0.6");
+    let multiscales = ome["multiscales"]
+        .as_array_mut()
+        .expect("the member lists its multiscales");
+    let entry = multiscales
+        .first_mut()
+        .expect("the member lists a multiscale")
+        .as_object_mut()
+        .expect("a multiscale is a json object");
+    let axes = entry.remove("axes").expect("the member lists its axes");
+    entry.insert(
+        "coordinateSystems".to_string(),
+        serde_json::json!([{ "name": "physical", "axes": axes }]),
+    );
+    for dataset in entry["datasets"]
+        .as_array_mut()
+        .expect("the member lists its datasets")
+    {
+        let sample = dataset["path"]
+            .as_str()
+            .expect("a dataset names its array")
+            .to_string();
+        let transforms = dataset["coordinateTransformations"].clone();
+        dataset["coordinateTransformations"] = serde_json::json!([{
+            "type": "sequence",
+            "input": { "path": sample },
+            "output": { "name": "physical" },
+            "transformations": transforms,
+        }]);
+    }
+    std::fs::write(&metadata, attributes.to_string()).expect("the member metadata writes");
+}
+
+fn write_scene_root(path: &std::path::Path) {
+    std::fs::create_dir_all(path).expect("the scene directory creates");
+    let axes = serde_json::json!([
+        { "name": "x", "type": "space", "unit": "micrometer" },
+        { "name": "y", "type": "space", "unit": "micrometer" },
+        { "name": "z", "type": "space", "unit": "micrometer" },
+    ]);
+    let placement =
+        serde_json::json!([[0, 0, 0, 0, 1, 0], [0, 0, 0, 1, 0, 0], [0, 0, 1, 0, 0, 0],]);
+    let transform = |group: &str| {
+        serde_json::json!({
+            "type": "affine",
+            "input": { "path": group, "name": "physical" },
+            "output": { "name": "world" },
+            "affine": placement,
+        })
+    };
+    let attributes = serde_json::json!({
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": {
+            "ome": {
+                "version": "0.6",
+                "scene": {
+                    "coordinateSystems": [{ "name": "world", "axes": axes }],
+                    "coordinateTransformations": [transform("left"), transform("right")],
+                },
+            }
+        }
+    });
+    std::fs::write(path.join("zarr.json"), attributes.to_string())
+        .expect("the scene metadata writes");
+}
+
+#[test]
 fn writes_and_reads_a_label_image() {
     let temp = Temp::new("suite-zarr-label-write");
     let path = temp.path().join("labelled.ome.zarr");

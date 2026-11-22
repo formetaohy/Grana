@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use glam::Vec3;
-use grana_volume::{Level, VoxelData, VoxelFormat, VoxelSemantics};
+use grana_volume::{Filter, Level, VoxelData, VoxelFormat, VoxelSemantics, VoxelValue};
 use grana_warp::Warp;
 
 pub(crate) enum Plan {
@@ -18,7 +18,6 @@ pub(crate) struct FieldPlan {
     source: [Range<u32>; 3],
     level: Level,
     warp: Warp,
-    limits: [u32; 3],
 }
 
 struct Axis {
@@ -66,7 +65,6 @@ pub(crate) fn plan(ranges: &[Range<u32>; 3], level: Level, warp: &Warp, limits: 
             source: field_source(ranges, level, warp, limits),
             level,
             warp: warp.clone(),
-            limits,
         }),
     }
 }
@@ -133,7 +131,7 @@ pub(crate) fn resample(
                 $(
                     (VoxelData::$variant(values), Plan::Shift(plan)) => {
                         VoxelData::$variant(if nearest {
-                            sample_nearest(values, plan, ranges)
+                            nearest_shift(values, plan, ranges)
                         } else {
                             interpolate_shift(values, plan, ranges)
                         })
@@ -156,7 +154,7 @@ pub(crate) fn zeros(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData 
     VoxelData::blank(format, count)
 }
 
-fn sample_nearest<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
+fn nearest_shift<T: VoxelValue>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
     let [x_axis, y_axis, z_axis] = &plan.axes;
     let width = (ranges[0].end - ranges[0].start) as usize;
     let height = (ranges[1].end - ranges[1].start) as usize;
@@ -172,25 +170,29 @@ fn sample_nearest<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 
     let mut values = Vec::with_capacity(width * height * depth);
     for z in 0..depth {
         let Some(z_at) = z_axis.nearest(z) else {
-            values.extend((0..width * height).map(|_| T::encode(0.0)));
+            values.extend((0..width * height).map(|_| T::from_f32(0.0)));
             continue;
         };
         for y in 0..height {
             let Some(y_at) = y_axis.nearest(y) else {
-                values.extend((0..width).map(|_| T::encode(0.0)));
+                values.extend((0..width).map(|_| T::from_f32(0.0)));
                 continue;
             };
             let base = z_at * stride[2] + y_at * stride[1];
             for x in 0..width {
-                let value = x_axis.nearest(x).map_or(0.0, |at| data[base + at].decode());
-                values.push(T::encode(value));
+                let value = x_axis.nearest(x).map_or(0.0, |at| data[base + at].to_f32());
+                values.push(T::from_f32(value));
             }
         }
     }
     values
 }
 
-fn interpolate_shift<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32>; 3]) -> Vec<T> {
+fn interpolate_shift<T: VoxelValue>(
+    data: &[T],
+    plan: &ShiftPlan,
+    ranges: &[Range<u32>; 3],
+) -> Vec<T> {
     let [x_axis, y_axis, z_axis] = &plan.axes;
     let width = (ranges[0].end - ranges[0].start) as usize;
     let height = (ranges[1].end - ranges[1].start) as usize;
@@ -215,22 +217,22 @@ fn interpolate_shift<T: Value>(data: &[T], plan: &ShiftPlan, ranges: &[Range<u32
                     for (x, slot) in row.iter_mut().enumerate() {
                         let mut value = 0.0;
                         if let Some(at) = x_axis.lower[x] {
-                            value += data[base + at].decode() * x_axis.lower_weight;
+                            value += data[base + at].to_f32() * x_axis.lower_weight;
                         }
                         if let Some(at) = x_axis.upper[x] {
-                            value += data[base + at].decode() * x_axis.upper_weight;
+                            value += data[base + at].to_f32() * x_axis.upper_weight;
                         }
                         *slot += value * weight;
                     }
                 }
             }
-            values.extend(row.iter().map(|value| T::encode(*value)));
+            values.extend(row.iter().map(|value| T::from_f32(*value)));
         }
     }
     values
 }
 
-fn interpolate_field<T: Value>(
+fn interpolate_field<T: VoxelValue>(
     data: &[T],
     plan: &FieldPlan,
     ranges: &[Range<u32>; 3],
@@ -262,7 +264,11 @@ fn interpolate_field<T: Value>(
         source[1].start as f32,
         source[2].start as f32,
     );
-    let stride = [1usize, dims[0], dims[0] * dims[1]];
+    let filter = if nearest {
+        Filter::Nearest
+    } else {
+        Filter::Linear
+    };
     let mut values = Vec::with_capacity(width * height * depth);
     for z in 0..depth {
         for y in 0..height {
@@ -272,142 +278,12 @@ fn interpolate_field<T: Value>(
                 let point = row + step[0] * x as f32;
                 let at = index + Vec3::new(x as f32, 0.0, 0.0);
                 let offset = inverse * Vec3::from(plan.warp.sample(point.to_array()));
-                let position = at + offset;
-                values.push(T::encode(if nearest {
-                    sample_nearest_voxel(data, &dims, &stride, position, first, plan.limits)
-                } else {
-                    sample(data, &dims, &stride, position, first, plan.limits)
-                }));
+                let position = (at + offset - first).to_array().map(f64::from);
+                values.push(T::from_f32(
+                    grana_volume::resample(data, dims, position, filter).unwrap_or(0.0),
+                ));
             }
         }
     }
     values
-}
-
-fn sample_nearest_voxel<T: Value>(
-    data: &[T],
-    dims: &[usize; 3],
-    stride: &[usize; 3],
-    position: Vec3,
-    first: Vec3,
-    limits: [u32; 3],
-) -> f32 {
-    let at = [
-        position.x.round() as i64,
-        position.y.round() as i64,
-        position.z.round() as i64,
-    ];
-    if (0..3).any(|axis| at[axis] < 0 || at[axis] >= i64::from(limits[axis])) {
-        return 0.0;
-    }
-    let local = [
-        (at[0] as f32 - first.x) as usize,
-        (at[1] as f32 - first.y) as usize,
-        (at[2] as f32 - first.z) as usize,
-    ];
-    if (0..3).any(|axis| local[axis] >= dims[axis]) {
-        return 0.0;
-    }
-    data[local[0] * stride[0] + local[1] * stride[1] + local[2] * stride[2]].decode()
-}
-
-fn sample<T: Value>(
-    data: &[T],
-    dims: &[usize; 3],
-    stride: &[usize; 3],
-    position: Vec3,
-    first: Vec3,
-    limits: [u32; 3],
-) -> f32 {
-    let low = [
-        position.x.floor() as i64,
-        position.y.floor() as i64,
-        position.z.floor() as i64,
-    ];
-    let weight = [
-        position.x - low[0] as f32,
-        position.y - low[1] as f32,
-        position.z - low[2] as f32,
-    ];
-    let mut sum = 0.0f32;
-    for corner in 0..8usize {
-        let mut factor = 1.0f32;
-        for (axis, component) in weight.iter().enumerate() {
-            factor *= if (corner >> axis) & 1 == 1 {
-                *component
-            } else {
-                1.0 - *component
-            };
-        }
-        if factor == 0.0 {
-            continue;
-        }
-        let at = [
-            low[0] + (corner & 1) as i64,
-            low[1] + ((corner >> 1) & 1) as i64,
-            low[2] + ((corner >> 2) & 1) as i64,
-        ];
-        if (0..3).any(|axis| at[axis] < 0 || at[axis] >= i64::from(limits[axis])) {
-            continue;
-        }
-        let local = [
-            (at[0] as f32 - first.x) as usize,
-            (at[1] as f32 - first.y) as usize,
-            (at[2] as f32 - first.z) as usize,
-        ];
-        if (0..3).any(|axis| local[axis] >= dims[axis]) {
-            continue;
-        }
-        sum += data[local[0] * stride[0] + local[1] * stride[1] + local[2] * stride[2]].decode()
-            * factor;
-    }
-    sum
-}
-
-trait Value: Copy {
-    fn decode(self) -> f32;
-    fn encode(value: f32) -> Self;
-}
-
-macro_rules! value {
-    ($type:ty, $minimum:expr, $maximum:expr) => {
-        impl Value for $type {
-            fn decode(self) -> f32 {
-                self as f32
-            }
-
-            fn encode(value: f32) -> Self {
-                value.round().clamp($minimum as f32, $maximum as f32) as Self
-            }
-        }
-    };
-}
-
-value!(u8, u8::MIN, u8::MAX);
-value!(u16, u16::MIN, u16::MAX);
-value!(u32, u32::MIN, u32::MAX);
-value!(u64, u64::MIN, u64::MAX);
-value!(i8, i8::MIN, i8::MAX);
-value!(i16, i16::MIN, i16::MAX);
-value!(i32, i32::MIN, i32::MAX);
-value!(i64, i64::MIN, i64::MAX);
-
-impl Value for f32 {
-    fn decode(self) -> f32 {
-        self
-    }
-
-    fn encode(value: f32) -> Self {
-        value
-    }
-}
-
-impl Value for f64 {
-    fn decode(self) -> f32 {
-        self as f32
-    }
-
-    fn encode(value: f32) -> Self {
-        f64::from(value)
-    }
 }

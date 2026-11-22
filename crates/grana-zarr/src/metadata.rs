@@ -74,9 +74,17 @@ pub struct Metadata {
     pub minor: u32,
     pub axes: Vec<Axis>,
     pub datasets: Vec<Dataset>,
+    pub source: Intrinsic,
+    pub systems: Vec<System>,
     pub channels: Vec<ChannelMetadata>,
     pub label_image: bool,
     pub calibration: Option<Calibration>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Intrinsic {
+    pub name: Option<String>,
+    pub datasets: Vec<Dataset>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,9 +106,19 @@ pub struct ChannelMetadata {
 }
 
 #[derive(Clone, Debug)]
-struct System {
+pub(crate) struct System {
     name: String,
     axes: Vec<Axis>,
+}
+
+impl System {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn axes(&self) -> &[Axis] {
+        &self.axes
+    }
 }
 
 pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Error> {
@@ -127,11 +145,25 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
         .and_then(|multiscales| multiscales.first())
         .ok_or_else(|| absent(path, attributes, fields))?;
     let schema = Schema::of(minor);
-    let frame = match schema {
-        Schema::Named => named(path, multiscales, schema)?,
-        Schema::Direct => direct(path, multiscales, schema)?,
+    let systems = coordinate_systems(path, multiscales)?;
+    let (frame, intrinsic) = match schema {
+        Schema::Named => {
+            let (frame, system) = named(path, multiscales, schema, &systems)?;
+            (frame, Some(system))
+        }
+        Schema::Direct => (direct(path, multiscales, schema)?, None),
     };
     let datasets = placed(path, multiscales, &frame)?;
+    let source = match &intrinsic {
+        Some(system) => Intrinsic {
+            name: Some(system.name.clone()),
+            datasets: placed(path, multiscales, &intrinsic_frame(schema, system))?,
+        },
+        None => Intrinsic {
+            name: None,
+            datasets: datasets.clone(),
+        },
+    };
     let channels = channels(path, fields.get("omero"))?;
     Ok(Metadata {
         name: multiscales
@@ -143,6 +175,8 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
         minor,
         axes: frame.source,
         datasets,
+        source,
+        systems,
         channels,
         label_image: fields.contains_key("image-label"),
         calibration: calibration(path, attributes)?,
@@ -193,7 +227,11 @@ fn minor_version(path: &str, version: &str) -> Result<u32, Error> {
     Ok(minor)
 }
 
-fn absent(path: &str, attributes: &Map<String, Value>, fields: &Map<String, Value>) -> Error {
+pub(crate) fn absent(
+    path: &str,
+    attributes: &Map<String, Value>,
+    fields: &Map<String, Value>,
+) -> Error {
     let collection = fields
         .get("bioformats2raw.layout")
         .or_else(|| attributes.get("bioformats2raw.layout"))
@@ -240,8 +278,12 @@ fn direct(path: &str, multiscale: &Value, schema: Schema) -> Result<Frame, Error
     })
 }
 
-fn named(path: &str, multiscale: &Value, schema: Schema) -> Result<Frame, Error> {
-    let systems = systems(path, multiscale)?;
+fn named(
+    path: &str,
+    multiscale: &Value,
+    schema: Schema,
+    systems: &[System],
+) -> Result<(Frame, System), Error> {
     let intrinsic = entries(path, multiscale)?
         .first()
         .and_then(|dataset| dataset.get("coordinateTransformations"))
@@ -255,17 +297,19 @@ fn named(path: &str, multiscale: &Value, schema: Schema) -> Result<Frame, Error>
                 path,
                 "the dataset transforms name no intrinsic coordinate system",
             )
-        })?;
+        })?
+        .to_string();
     let source = systems
         .iter()
         .find(|system| system.name == intrinsic)
+        .cloned()
         .ok_or_else(|| {
             metadata_error(
                 path,
                 format!("the coordinate system `{intrinsic}` is not declared"),
             )
         })?;
-    let (global, target, display) = match display(path, multiscale, &systems, intrinsic)? {
+    let (global, target, display) = match display(path, multiscale, systems, &intrinsic)? {
         Some((affine, target)) => (affine, target.axes, true),
         None => (
             Affine::identity(source.axes.len()),
@@ -273,14 +317,28 @@ fn named(path: &str, multiscale: &Value, schema: Schema) -> Result<Frame, Error>
             false,
         ),
     };
-    Ok(Frame {
+    Ok((
+        Frame {
+            schema,
+            source: source.axes.clone(),
+            target,
+            display,
+            placed: true,
+            global,
+        },
+        source,
+    ))
+}
+
+fn intrinsic_frame(schema: Schema, system: &System) -> Frame {
+    Frame {
         schema,
-        source: source.axes.clone(),
-        target,
-        display,
+        source: system.axes.clone(),
+        target: system.axes.clone(),
+        display: false,
         placed: true,
-        global,
-    })
+        global: Affine::identity(system.axes.len()),
+    }
 }
 
 fn placed(path: &str, multiscale: &Value, frame: &Frame) -> Result<Vec<Dataset>, Error> {
@@ -431,7 +489,7 @@ fn compose(placement: Placement<'_>) -> Result<Dataset, Error> {
     })
 }
 
-fn space_axes(path: &str, axes: &[Axis]) -> Result<[Option<usize>; 3], Error> {
+pub(crate) fn space_axes(path: &str, axes: &[Axis]) -> Result<[Option<usize>; 3], Error> {
     let mut found = [None; 3];
     for (slot, axis) in axes.iter().enumerate() {
         if axis.kind() != AxisKind::Space {
@@ -517,13 +575,10 @@ fn length(vector: &[f64; 3]) -> f64 {
     vector.iter().map(|value| value * value).sum::<f64>().sqrt()
 }
 
-fn systems(path: &str, multiscale: &Value) -> Result<Vec<System>, Error> {
-    let systems = multiscale
-        .get("coordinateSystems")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            metadata_error(path, "the multiscales metadata names no coordinate system")
-        })?;
+pub(crate) fn coordinate_systems(path: &str, value: &Value) -> Result<Vec<System>, Error> {
+    let Some(systems) = value.get("coordinateSystems").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
     systems
         .iter()
         .map(|system| {

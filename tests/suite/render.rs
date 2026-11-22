@@ -2089,6 +2089,102 @@ fn reports_a_converged_image_only_when_it_stops_changing() {
     );
 }
 
+fn beads_volume() -> Volume {
+    let extent = Extent::new(64, 64, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.2);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for cell in 0..8usize {
+        let centre = [
+            (cell % 2) as f32 * 24.0 + 20.0,
+            ((cell / 2) % 2) as f32 * 24.0 + 20.0,
+            (cell / 4) as f32 * 8.0 + 8.0,
+        ];
+        for z in 0..extent.z() {
+            for y in 0..extent.y() {
+                for x in 0..extent.x() {
+                    let point = [x as f32, y as f32, z as f32];
+                    let distance = (0..3)
+                        .map(|axis| (point[axis] - centre[axis]).powi(2))
+                        .sum::<f32>()
+                        .sqrt();
+                    if distance <= 5.0 {
+                        values[extent.index(x, y, z) as usize] = 60_000;
+                    }
+                }
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new(
+            "beads",
+            [1.0, 0.6, 0.2],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+#[test]
+fn converges_a_hard_edged_isosurface_before_the_sample_budget() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = beads_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([1.0, 0.6, 0.2])];
+    let channels = channels(&pyramid, &transfers)
+        .into_iter()
+        .map(|row| grana_render::ChannelRow {
+            volume: VolumeStyle::new(grana_display::VolumeMode::Isosurface, 0.5),
+            ..row
+        })
+        .collect::<Vec<_>>();
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle_with(&gpu, &mut renderer, || frame(&view), &volume);
+    let mut info = renderer
+        .draw(gpu.device(), gpu.queue(), frame(&view))
+        .expect("the isosurface draws");
+    let mut draws = 0;
+    while !info.converged && !info.exhausted && draws < 512 {
+        info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("the isosurface draws");
+        draws += 1;
+    }
+    assert!(
+        info.converged,
+        "a hard edged isosurface ran to the sample budget at {} levels",
+        info.error
+    );
+    assert!(
+        info.error <= 2.0,
+        "the reported error {} exceeds the target at convergence",
+        info.error
+    );
+}
+
 fn depth_quads(quads: &[([f32; 2], f32, f32)]) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();

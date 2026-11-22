@@ -39,9 +39,10 @@ pub struct VoxelUnits<'a> {
     scale: f32,
 }
 
-pub(crate) trait Sample: Copy + 'static {
+pub trait VoxelValue: Copy + 'static {
     fn to_f32(self) -> f32;
     fn to_f64(self) -> f64;
+    fn from_f32(value: f32) -> Self;
 }
 
 impl VoxelFormat {
@@ -502,6 +503,36 @@ impl VoxelData {
             Self::F64(data) => for_each(data, visit),
         }
     }
+
+    pub fn sample(
+        &self,
+        dims: [usize; 3],
+        position: [f64; 3],
+        filter: crate::Filter,
+    ) -> Option<f32> {
+        macro_rules! held {
+            ($($variant:ident),*) => {
+                match self {
+                    $(Self::$variant(data) => crate::resample(data, dims, position, filter),)*
+                }
+            };
+        }
+        held!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+    }
+
+    pub fn set_value(&mut self, index: usize, value: f32) {
+        macro_rules! held {
+            ($($variant:ident),*) => {
+                match self {
+                    $(Self::$variant(data) => {
+                        assert!(index < data.len(), "the voxel lies inside the volume");
+                        data[index] = VoxelValue::from_f32(value);
+                    })*
+                }
+            };
+        }
+        held!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+    }
 }
 
 impl VoxelUnits<'_> {
@@ -534,16 +565,16 @@ impl VoxelUnits<'_> {
     }
 }
 
-fn for_each<T: Sample>(data: &[T], mut visit: impl FnMut(f32)) {
+fn for_each<T: VoxelValue>(data: &[T], mut visit: impl FnMut(f32)) {
     data.iter().for_each(|value| visit(value.to_f32()));
 }
 
-fn value_of<T: Sample>(data: &[T], index: usize) -> f32 {
+fn value_of<T: VoxelValue>(data: &[T], index: usize) -> f32 {
     assert!(index < data.len(), "the voxel lies inside the volume");
     data[index].to_f32()
 }
 
-fn wide_of<T: Sample>(data: &[T], index: usize) -> f64 {
+fn wide_of<T: VoxelValue>(data: &[T], index: usize) -> f64 {
     assert!(index < data.len(), "the voxel lies inside the volume");
     data[index].to_f64()
 }
@@ -598,7 +629,7 @@ fn blit_rows<T: Copy>(
     }
 }
 
-fn visit_range<T: Sample>(
+fn visit_range<T: VoxelValue>(
     data: &[T],
     range: Range<usize>,
     unit: impl Fn(f32) -> f32,
@@ -628,9 +659,9 @@ fn extract<T: Copy>(
     values
 }
 
-macro_rules! sample {
-    ($type:ty) => {
-        impl Sample for $type {
+macro_rules! value {
+    ($type:ty, $minimum:expr, $maximum:expr) => {
+        impl VoxelValue for $type {
             fn to_f32(self) -> f32 {
                 self as f32
             }
@@ -638,20 +669,24 @@ macro_rules! sample {
             fn to_f64(self) -> f64 {
                 self as f64
             }
+
+            fn from_f32(value: f32) -> Self {
+                value.round().clamp($minimum as f32, $maximum as f32) as Self
+            }
         }
     };
 }
 
-sample!(u8);
-sample!(u16);
-sample!(u32);
-sample!(u64);
-sample!(i8);
-sample!(i16);
-sample!(i32);
-sample!(i64);
+value!(u8, u8::MIN, u8::MAX);
+value!(u16, u16::MIN, u16::MAX);
+value!(u32, u32::MIN, u32::MAX);
+value!(u64, u64::MIN, u64::MAX);
+value!(i8, i8::MIN, i8::MAX);
+value!(i16, i16::MIN, i16::MAX);
+value!(i32, i32::MIN, i32::MAX);
+value!(i64, i64::MIN, i64::MAX);
 
-impl Sample for f32 {
+impl VoxelValue for f32 {
     fn to_f32(self) -> f32 {
         self
     }
@@ -659,14 +694,22 @@ impl Sample for f32 {
     fn to_f64(self) -> f64 {
         f64::from(self)
     }
+
+    fn from_f32(value: f32) -> Self {
+        value
+    }
 }
 
-impl Sample for f64 {
+impl VoxelValue for f64 {
     fn to_f32(self) -> f32 {
         self as f32
     }
 
     fn to_f64(self) -> f64 {
         self
+    }
+
+    fn from_f32(value: f32) -> Self {
+        f64::from(value)
     }
 }

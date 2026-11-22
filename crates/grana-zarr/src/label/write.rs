@@ -8,7 +8,7 @@ use zarrs::array::{Array, ArrayBuilder, DataType, Element, FillValue, data_type}
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
 
-use crate::Image;
+use crate::GroupImage;
 use crate::chunk::Chunk;
 use crate::error::Error;
 use crate::metadata::{Axis, AxisKind};
@@ -144,7 +144,7 @@ pub fn write_group(path: &Path, group: &str, mut spec: LabelSpec<'_>) -> Result<
             detail: "label images are written into OME-Zarr 0.6 (zarr v3) datasets".to_string(),
         });
     }
-    let image = Image::open_group(path, group).map_err(|error| fail(error.to_string()))?;
+    let image = GroupImage::open_group(path, group).map_err(|error| fail(error.to_string()))?;
     let layout = layout(&image, &spec).map_err(&fail)?;
     label_index(&directory, image.version()).map_err(&fail)?;
     let root = directory.join("labels").join(spec.name);
@@ -205,7 +205,7 @@ pub(crate) fn write_inside(
         root.join("zarr.json").is_file(),
         "a dataset holds its image before it holds its labels"
     );
-    let image = Image::open_group(root, group).map_err(|error| error.to_string())?;
+    let image = GroupImage::open_group(root, group).map_err(|error| error.to_string())?;
     let layout = layout(&image, &spec)?;
     build(root, group, spec.name, &image, &layout, &mut spec)?;
     if spec.cancelled() {
@@ -273,7 +273,7 @@ struct Layout {
     z: Option<usize>,
 }
 
-fn layout(image: &Image, spec: &LabelSpec<'_>) -> Result<Layout, String> {
+fn layout(image: &GroupImage, spec: &LabelSpec<'_>) -> Result<Layout, String> {
     if image.minor() < 5 {
         return Err(format!(
             "label images are written into OME-Zarr 0.5 or newer datasets, not {}",
@@ -350,7 +350,7 @@ fn build(
     root: &Path,
     image_group: &str,
     dirname: &str,
-    image: &Image,
+    image: &GroupImage,
     layout: &Layout,
     spec: &mut LabelSpec<'_>,
 ) -> Result<(), String> {
@@ -510,7 +510,7 @@ fn build(
 
 #[derive(Clone, Copy)]
 struct Slice<'a> {
-    image: &'a Image,
+    image: &'a GroupImage,
     level: usize,
     frames: &'a [u32],
 }

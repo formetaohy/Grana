@@ -23,7 +23,12 @@ fn march_volume(
     dither: f32,
     peaks: ptr<function, array<f32, CHANNEL_LIMIT>>,
 ) -> March {
-    var march = March(vec3<f32>(0.0), 1.0, vec2<f32>(0.0, 1.0), vec4<f32>(0.0));
+    var march = March(
+        vec3<f32>(0.0),
+        1.0,
+        vec2<f32>(UNREACHED_DEPTH, UNREACHED_DEPTH),
+        vec4<f32>(0.0),
+    );
     if (finish <= begin) {
         return march;
     }
@@ -87,7 +92,7 @@ fn march_volume(
                 let albedo = sample.emission / max(sample.extinction, OPTICAL_MINIMUM_TAU);
                 march.radiance += march.transmittance * alpha * structure_lighting(albedo, structure_tap(texel), world);
                 march.transmittance *= 1.0 - alpha;
-                if (march.surface.x <= 0.0) {
+                if (march.surface.x >= UNREACHED_DEPTH) {
                     march.surface.x = clip_depth(world);
                 }
             }

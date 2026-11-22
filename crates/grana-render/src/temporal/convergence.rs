@@ -29,7 +29,7 @@ const SLOTS: usize = 2;
 
 const CEILING: f32 = 64.0;
 
-const CONFIDENCE: f32 = 1.96;
+const QUANTILE: f64 = 0.95;
 
 pub(crate) struct Convergence {
     pipeline: ComputePipeline,
@@ -237,7 +237,7 @@ impl Limit {
     fn new(region: [u32; 4], exposure: f32) -> Self {
         Self {
             region,
-            scale: [CEILING, CONFIDENCE, SAMPLE_FLOOR as f32, exposure],
+            scale: [CEILING, QUANTILE as f32, SAMPLE_FLOOR as f32, exposure],
         }
     }
 }
@@ -261,13 +261,14 @@ fn bound(counts: &[u32]) -> f32 {
     if total == 0 {
         return 0.0;
     }
-    let squared = counts
-        .iter()
-        .enumerate()
-        .map(|(index, count)| {
-            let error = f64::from(CEILING) * ((index as f64 + 0.5) / BINS as f64).powi(2);
-            f64::from(*count) * error * error
-        })
-        .sum::<f64>();
-    (squared / total as f64).sqrt() as f32
+    let wanted = (total as f64 * QUANTILE).ceil() as u64;
+    let mut carried = 0u64;
+    for (index, count) in counts.iter().enumerate() {
+        carried += u64::from(*count);
+        if carried >= wanted {
+            let edge = (index as f64 + 1.0) / BINS as f64;
+            return (f64::from(CEILING) * edge * edge) as f32;
+        }
+    }
+    CEILING
 }
