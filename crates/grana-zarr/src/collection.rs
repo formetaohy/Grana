@@ -209,10 +209,17 @@ fn images(root: &Root) -> Result<Option<Vec<grana_ome::Image>>, Error> {
         path: root.tag(OME_METADATA),
         detail: format!("the OME metadata is not valid UTF-8: {error}"),
     })?;
-    let images = grana_ome::parse(text).map_err(|detail| Error::Metadata {
+    let described = grana_ome::parse(text).map_err(|detail| Error::Metadata {
         path: root.tag(OME_METADATA),
         detail,
     })?;
+    if described.binary_only {
+        return Err(Error::Metadata {
+            path: root.tag(OME_METADATA),
+            detail: "the OME metadata leaves its pixels in a companion file".to_string(),
+        });
+    }
+    let images = described.images;
     if images.is_empty() {
         return Err(Error::Metadata {
             path: root.tag(OME_METADATA),

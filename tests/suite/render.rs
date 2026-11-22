@@ -1946,6 +1946,96 @@ fn refuses_a_transparency_store_that_cannot_hold_the_layers_it_needs() {
 }
 
 #[test]
+fn abandons_the_bricks_a_reader_cannot_supply() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let mut missing = Vec::new();
+    for _ in 0..8 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("the frame draws");
+        if let Some(requests) = next_demand(&gpu, &mut renderer) {
+            missing = requests.volume;
+        }
+        if !missing.is_empty() {
+            break;
+        }
+    }
+    assert!(
+        !missing.is_empty(),
+        "the view demands bricks before any of them arrive"
+    );
+    renderer.abandon(&missing);
+    let held = SceneFrame {
+        versions: versions(),
+        ..scene
+    };
+    let changed = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &held,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if let Some(requests) = next_demand(&gpu, &mut renderer) {
+            assert!(
+                requests.volume.is_empty(),
+                "an abandoned region is demanded again: {} bricks",
+                requests.volume.len()
+            );
+        }
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&changed))
+            .expect("the changed frame draws");
+        if info.settled {
+            assert_eq!(
+                info.view.resident, info.view.demand,
+                "an abandoned region stays missing"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the view never settles over an abandoned region"
+        );
+    }
+}
+
+#[test]
 fn keeps_the_accumulated_image_through_a_quiet_camera_move() {
     let Some(gpu) = gpu() else {
         return;

@@ -30,6 +30,9 @@ pub(crate) struct Upload {
     bytes: Vec<u8>,
     filled: usize,
     copies: Vec<Copy>,
+    commanded: u64,
+    staged: u64,
+    payload: u64,
 }
 
 impl Upload {
@@ -40,7 +43,14 @@ impl Upload {
             bytes: Vec::new(),
             filled: 0,
             copies: Vec::new(),
+            commanded: 0,
+            staged: 0,
+            payload: 0,
         }
+    }
+
+    pub fn counters(&self) -> (u64, u64, u64) {
+        (self.commanded, self.staged, self.payload)
     }
 
     pub fn texture(
@@ -62,6 +72,8 @@ impl Upload {
             "an uploaded image covers its rows"
         );
         let offset = self.reserve(bytes, ALIGNMENT) as u64;
+        self.payload += bytes.len() as u64;
+        self.commanded += 1;
         self.copies.push(Copy::Texture {
             texture: texture.clone(),
             origin,
@@ -97,6 +109,8 @@ impl Upload {
         let row_bytes = width.next_multiple_of(ALIGNMENT);
         let length = row_bytes * extent * extent;
         let offset = self.reserve_blank(length, ALIGNMENT);
+        self.payload += (width * extent * extent) as u64;
+        self.commanded += 1;
         for line in 0..extent * extent {
             let row = &mut self.bytes[offset + line * row_bytes..offset + line * row_bytes + width];
             for (column, source) in columns.iter().enumerate() {
@@ -127,6 +141,8 @@ impl Upload {
             return;
         }
         let offset = self.reserve(bytes, 4) as u64;
+        self.payload += bytes.len() as u64;
+        self.commanded += 1;
         self.copies.push(Copy::Buffer {
             target: target.clone(),
             target_offset,
@@ -141,6 +157,7 @@ impl Upload {
             return;
         }
         let size = self.filled.next_multiple_of(4);
+        self.staged += size as u64;
         let capacity = (size as u64).max(CAPACITY_FLOOR).next_power_of_two();
         if self.capacity < capacity {
             self.buffer = Some(device.create_buffer(&BufferDescriptor {

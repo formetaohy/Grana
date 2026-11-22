@@ -8,6 +8,7 @@ mod job;
 mod loader;
 mod network;
 mod rate;
+mod reads;
 mod recent;
 mod recipe;
 mod recovery;
@@ -33,6 +34,7 @@ pub use job::{
     register, relation, segment, track,
 };
 pub use loader::Loader;
+pub use reads::Reads;
 pub use recent::{Entry as RecentEntry, Kind as RecentKind, Recent};
 pub use session::{Effects, Localizations, Session};
 pub use task::Poll;

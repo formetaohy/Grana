@@ -57,6 +57,7 @@ use crate::input::Input;
 use crate::loader::{Event as LoaderEvent, Loader};
 use crate::network::Watcher;
 use crate::rate::Rate;
+use crate::reads::Reads;
 use crate::recent::{Entry as RecentEntry, Recent};
 use crate::recipe::Recipe;
 use crate::recovery::Recovery;
@@ -143,6 +144,9 @@ pub struct Session {
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
     in_flight: HashSet<BrickRequest>,
+    abandoned: Vec<BrickRequest>,
+    reads_started: u64,
+    reads_delivered: u64,
     failed: HashMap<BrickRequest, Failure>,
     bricks: Vec<(BrickRequest, PackedBrick)>,
     pending: Option<Pending>,
@@ -239,6 +243,9 @@ impl Session {
             analysis: Vec::new(),
             progress: Vec::new(),
             in_flight: HashSet::new(),
+            abandoned: Vec::new(),
+            reads_started: 0,
+            reads_delivered: 0,
             failed: HashMap::new(),
             bricks: Vec::new(),
             pending: None,
@@ -400,6 +407,7 @@ impl Session {
             source.invalidate();
         }
         self.in_flight.clear();
+        self.abandoned.clear();
         self.failed.clear();
         self.bricks.clear();
     }
@@ -642,7 +650,20 @@ impl Session {
         }
     }
     pub fn take_bricks(&mut self) -> Vec<(BrickRequest, PackedBrick)> {
-        std::mem::take(&mut self.bricks)
+        let bricks = std::mem::take(&mut self.bricks);
+        for (request, _) in &bricks {
+            self.in_flight.remove(request);
+        }
+        bricks
+    }
+    pub fn take_abandoned(&mut self) -> Vec<BrickRequest> {
+        std::mem::take(&mut self.abandoned)
+    }
+    pub fn reads(&self) -> Reads {
+        Reads {
+            started: self.reads_started,
+            delivered: self.reads_delivered,
+        }
     }
     pub fn take_damage(&mut self) -> Vec<Damage> {
         std::mem::take(&mut self.damages)
@@ -781,6 +802,7 @@ impl Session {
             in_flight,
             failed,
             message,
+            reads_started,
             ..
         } = self;
         let Some(loader) = source.as_ref() else {
@@ -811,6 +833,7 @@ impl Session {
         }
         in_flight.extend(demand_batch.iter().copied());
         in_flight.extend(prefetch_batch.iter().copied());
+        *reads_started += (demand_batch.len() + prefetch_batch.len()) as u64;
         if !loader.request(&demand_batch, &prefetch_batch) {
             *source = None;
             in_flight.clear();

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -207,7 +207,14 @@ impl File {
 impl Image {
     pub fn open(path: &Path, series: usize) -> Result<Self, Error> {
         let first = File::open(path)?;
-        let images = metadata(&first, path)?;
+        let described = metadata(&first, path)?;
+        if described.binary_only {
+            return Err(Error::unsupported(
+                path,
+                "the OME-TIFF leaves its pixels in a companion file the metadata names",
+            ));
+        }
+        let images = described.images;
         let ome = match images.get(series) {
             Some(ome) => Some(ome),
             None if series == 0 => None,
@@ -260,6 +267,15 @@ impl Image {
                     placed.len()
                 ),
             ));
+        }
+        let mut pages: HashSet<(usize, usize)> = HashSet::with_capacity(placed.len());
+        for slot in placed.values() {
+            if !pages.insert((slot.file, slot.page)) {
+                return Err(Error::metadata(
+                    path,
+                    "the OME-TIFF metadata maps two planes onto one TIFF page",
+                ));
+            }
         }
         let deepest = placed
             .values()
@@ -911,19 +927,25 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
     Ok(Some((micrometres / value) as f32))
 }
 
-fn metadata(volume: &File, path: &Path) -> Result<Vec<OmeImage>, Error> {
+fn metadata(volume: &File, path: &Path) -> Result<grana_ome::Metadata, Error> {
     let description = volume
         .directory()?
         .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?;
     parse_metadata(description.as_deref(), path)
 }
 
-fn parse_metadata(description: Option<&str>, path: &Path) -> Result<Vec<OmeImage>, Error> {
+fn parse_metadata(description: Option<&str>, path: &Path) -> Result<grana_ome::Metadata, Error> {
     let Some(text) = description else {
-        return Ok(Vec::new());
+        return Ok(grana_ome::Metadata {
+            images: Vec::new(),
+            binary_only: false,
+        });
     };
     if !text.trim_start().starts_with('<') {
-        return Ok(Vec::new());
+        return Ok(grana_ome::Metadata {
+            images: Vec::new(),
+            binary_only: false,
+        });
     }
     grana_ome::parse(text).map_err(|detail| Error::metadata(path, detail))
 }
@@ -938,6 +960,7 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
     let directory = Directory::read(&store, &header, header.first, path)?;
     let description = directory.ascii(&store, TAG_IMAGE_DESCRIPTION, path)?;
     Ok(parse_metadata(description.as_deref(), path)?
+        .images
         .into_iter()
         .map(|ome| ome.name)
         .collect())
@@ -1055,6 +1078,7 @@ fn region(
             level: request.level,
             page: slot.page,
             channel: request.channel,
+            chunky: level.planes.chunky(),
             x: (request.x.start, request.x.end),
             y: (request.y.start, request.y.end),
         };

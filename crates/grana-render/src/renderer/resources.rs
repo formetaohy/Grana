@@ -241,7 +241,7 @@ impl Resources {
         bricks: &[(BrickRequest, PackedBrick)],
         residence: &mut Residence,
         time: u32,
-    ) {
+    ) -> usize {
         let Self {
             bricks: tables,
             atlas,
@@ -390,6 +390,7 @@ impl Resources {
         }
         residence.set_generation(generation);
         stage(upload, atlas, bricks, staged);
+        let uploaded = supplied.len();
         for (held, level, index) in supplied {
             residence.supply(held, level, index);
         }
@@ -398,6 +399,71 @@ impl Resources {
         }
         for table in tables.iter_mut().flatten() {
             table.flush(upload, arena);
+        }
+        uploaded
+    }
+
+    pub(super) fn abandon(
+        &mut self,
+        requests: &[BrickRequest],
+        residence: &mut Residence,
+        time: u32,
+    ) {
+        let Self {
+            pyramid,
+            arena,
+            atlas,
+            bricks: tables,
+            shadow,
+            upload,
+            ..
+        } = self;
+        let content = residence.content();
+        let mut generation = residence.generation();
+        let mut released = Vec::new();
+        for request in requests {
+            let BrickRequest {
+                time: held,
+                level,
+                coord,
+                ..
+            } = *request;
+            if level >= pyramid.level_count()
+                || level < arena.first()
+                || held >= pyramid.frame_count()
+                || held != time
+            {
+                continue;
+            }
+            let extent = pyramid.level(level).extent();
+            if coord.x() >= extent.x().div_ceil(BRICK_SIDE)
+                || coord.y() >= extent.y().div_ceil(BRICK_SIDE)
+                || coord.z() >= extent.z().div_ceil(BRICK_SIDE)
+            {
+                continue;
+            }
+            let index = BrickGrid::new(extent).index(coord);
+            if atlas.slot(held, level, index).is_some() || atlas.is_hollow(held, level, index) {
+                released.push((held, level, index));
+                continue;
+            }
+            atlas.assign_hollow(held, level, index);
+            if let Some(table) = tables[level]
+                .as_mut()
+                .filter(|table| table.time() == Some(held))
+            {
+                table.set_record(arena, index, BrickRecord::hollow(held, content));
+                shadow.mark(level, index);
+            }
+            generation += 1;
+            released.push((held, level, index));
+        }
+        for table in tables.iter_mut().flatten() {
+            table.flush(upload, arena);
+        }
+        residence.set_generation(generation);
+        for (held, level, index) in released {
+            residence.supply(held, level, index);
         }
     }
 }

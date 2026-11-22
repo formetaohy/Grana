@@ -702,7 +702,7 @@ impl Session {
                     data,
                 } => {
                     if !self.stale(generation) {
-                        self.in_flight.remove(&request);
+                        self.reads_delivered += 1;
                         self.transfer.record(bytes, Instant::now());
                         self.bricks.push((request, data));
                     }
@@ -724,11 +724,10 @@ impl Session {
                         };
                         failure.attempts += 1;
                         let exhausted = !retryable || failure.attempts >= RETRY_LIMIT;
-                        if exhausted {
-                            failure.attempts = RETRY_LIMIT;
-                        }
                         failure.retry_at = Instant::now() + Failure::backoff(failure.attempts);
                         if exhausted {
+                            self.failed.remove(&request);
+                            self.abandoned.push(request);
                             grana_log::warn!(target: "grana::session", %detail, "a volume region could not be read");
                         }
                         self.message = Some(Message::error(format!(
@@ -748,6 +747,8 @@ impl Session {
                     self.source = None;
                     self.channels = None;
                     self.in_flight.clear();
+                    self.abandoned.clear();
+                    self.failed.clear();
                     self.project = None;
                     self.baseline = None;
                     self.transfer.reset();

@@ -3,10 +3,16 @@ use quick_xml::events::{BytesStart, Event};
 
 use crate::image::{Channel, Image, Plane, TiffData};
 
-pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
+pub struct Metadata {
+    pub images: Vec<Image>,
+    pub binary_only: bool,
+}
+
+pub fn parse(xml: &str) -> Result<Metadata, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut images: Vec<Image> = Vec::new();
+    let mut binary_only = false;
     let mut depth = 0usize;
     let mut image_depth = None;
     let mut pending: Option<TiffData> = None;
@@ -26,6 +32,8 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
                 } else if image_depth.is_some() {
                     let series = images.last_mut().expect("an Image element opened a series");
                     element(&start, series, &mut pending)?;
+                } else if name.as_ref() == b"BinaryOnly" {
+                    binary_only = true;
                 }
                 if name.as_ref() == b"MapAnnotation" {
                     annotation = Some(Annotation::new());
@@ -48,6 +56,8 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
                     {
                         series.tiff_data.push(block);
                     }
+                } else if name.as_ref() == b"BinaryOnly" {
+                    binary_only = true;
                 }
             }
             Event::Text(text) => {
@@ -86,7 +96,10 @@ pub fn parse(xml: &str) -> Result<Vec<Image>, String> {
     if let (Some(series), Some(block)) = (images.last_mut(), pending) {
         series.tiff_data.push(block);
     }
-    Ok(images)
+    Ok(Metadata {
+        images,
+        binary_only,
+    })
 }
 
 struct Annotation {

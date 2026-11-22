@@ -48,6 +48,7 @@ use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
+use crate::statistics::Statistics;
 use crate::target::SceneTarget;
 use crate::temporal;
 use crate::volume::VolumePass;
@@ -197,6 +198,9 @@ pub struct Renderer {
     sequence: u64,
     info: FrameInfo,
     fragments: u64,
+    plans: u64,
+    waits: u64,
+    uploads: u64,
     pipelines: Pipelines,
 }
 
@@ -273,6 +277,9 @@ impl Renderer {
             sequence: 0,
             info: FrameInfo::default(),
             fragments: FRAGMENT_BUDGET,
+            plans: 0,
+            waits: 0,
+            uploads: 0,
             pipelines: pipelines.clone(),
         }
     }
@@ -477,7 +484,35 @@ impl Renderer {
         let Some(resources) = self.resources.as_mut() else {
             return;
         };
-        resources.upload(bricks, &mut self.residence, self.time);
+        let written = resources.upload(bricks, &mut self.residence, self.time);
+        self.uploads += written as u64;
+    }
+
+    pub fn abandon(&mut self, requests: &[BrickRequest]) {
+        let Some(resources) = self.resources.as_mut() else {
+            return;
+        };
+        resources.abandon(requests, &mut self.residence, self.time);
+    }
+
+    pub fn statistics(&self) -> Statistics {
+        let (copies, staged, payload) = self
+            .resources
+            .as_ref()
+            .map_or((0, 0, 0), |resources| resources.upload.counters());
+        let evictions = self
+            .resources
+            .as_ref()
+            .map_or(0, |resources| resources.atlas.evictions());
+        Statistics {
+            plans: self.plans,
+            waits: self.waits,
+            uploads: self.uploads,
+            evictions,
+            copies,
+            staged,
+            payload,
+        }
     }
 
     pub fn damage(&mut self, damages: &[Damage]) {

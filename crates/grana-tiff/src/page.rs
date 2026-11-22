@@ -67,6 +67,7 @@ pub(crate) struct Plane<'a> {
     pub level: usize,
     pub page: usize,
     pub channel: u32,
+    pub chunky: bool,
     pub x: (u32, u32),
     pub y: (u32, u32),
 }
@@ -265,7 +266,19 @@ impl Page {
             let held = self.block(plane, sample, &block)?;
             let pixels = block.width as usize * block.rows as usize;
             let channels = (held.voxel_count() / pixels) as u32;
-            let index = plane.channel.min(channels - 1);
+            let index = if self.planar || !plane.chunky {
+                0
+            } else {
+                plane.channel
+            };
+            if index >= channels {
+                return Err(Error::metadata(
+                    plane.source.path,
+                    format!(
+                        "the TIFF page holds {channels} channels while the series reads channel {index}"
+                    ),
+                ));
+            }
             let width = right - left;
             let extracted = extract(
                 &held,

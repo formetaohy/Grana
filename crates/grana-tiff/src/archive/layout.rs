@@ -289,10 +289,8 @@ pub(crate) fn description(spec: &ImageSpec<'_>) -> String {
             color(channel.tint)
         ));
     }
-    let planes = plane_positions(spec);
     xml.push_str(&plane_positions(spec));
     xml.push_str(&channels(spec));
-    xml.push_str(&planes);
     xml.push_str("  </Pixels>\n </Image>\n");
     xml.push_str(&annotations(spec));
     xml.push_str("</OME>");

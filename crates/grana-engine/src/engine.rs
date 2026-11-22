@@ -176,6 +176,15 @@ impl Engine {
         self.generation = self.renderer.generation();
     }
 
+    pub fn abandon(&mut self, requests: &[BrickRequest]) {
+        self.renderer.abandon(requests);
+        self.generation = self.renderer.generation();
+    }
+
+    pub fn statistics(&self) -> grana_render::Statistics {
+        self.renderer.statistics()
+    }
+
     pub fn draw(&mut self, device: &Device, queue: &Queue, view: View<'_>) -> Result<(), String> {
         assert!(
             view.size[0] > 0 && view.size[1] > 0,

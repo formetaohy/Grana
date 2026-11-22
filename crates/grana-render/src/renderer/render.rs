@@ -94,10 +94,14 @@ impl Renderer {
                 return Ok(self.info);
             }
             Err(Halt::Hold(info)) => {
+                self.waits += 1;
                 queue.submit([encoder.finish()]);
                 return Ok(info);
             }
-            Err(Halt::Fail(detail)) => return Err(detail),
+            Err(Halt::Fail(detail)) => {
+                queue.submit([encoder.finish()]);
+                return Err(detail);
+            }
         };
         let stride = prepared.stride;
         queue.submit([encoder.finish()]);
@@ -577,11 +581,13 @@ impl Renderer {
         let Self {
             resources,
             residence,
+            plans,
             ..
         } = self;
         let (Some(resources), Some(slot)) = (resources.as_ref(), prepared.reserved) else {
             return;
         };
+        *plans += 1;
         residence.stage(
             encoder,
             slot,

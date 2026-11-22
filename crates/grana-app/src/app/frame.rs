@@ -47,6 +47,14 @@ impl App {
         if !damages.is_empty() {
             engine.damage(&damages);
         }
+        let bricks = session.take_bricks();
+        if !bricks.is_empty() {
+            engine.upload(&bricks);
+        }
+        let abandoned = session.take_abandoned();
+        if !abandoned.is_empty() {
+            engine.abandon(&abandoned);
+        }
         let time = session.scene().map_or(0, |scene| scene.time());
         if let Some(requests) = engine.poll_requests(surface.device(), time)? {
             let current = session
@@ -55,10 +63,6 @@ impl App {
             if current {
                 session.request(requests.time, &requests.volume, &requests.prefetch);
             }
-        }
-        let bricks = session.take_bricks();
-        if !bricks.is_empty() {
-            engine.upload(&bricks);
         }
         let view = session.take_view();
         if let Some(view) = view {

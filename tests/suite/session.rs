@@ -1665,6 +1665,95 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
 }
 
 #[test]
+fn reads_each_streamed_brick_once() {
+    let Some(gpu) = support::gpu() else {
+        return;
+    };
+    let mut session = Session::new();
+    open_series(&mut session, "nuclei", series());
+    let mut engine = Engine::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        gpu.pipelines(),
+    );
+    let pyramid = session
+        .scene()
+        .expect("the series opens")
+        .dataset
+        .pyramid()
+        .clone();
+    engine.set_dataset(gpu.device(), &pyramid);
+    let mut camera = Camera::new(35.0);
+    camera.fit(
+        session
+            .scene()
+            .expect("the series opens")
+            .dataset
+            .world_size(),
+        1.0,
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        session.poll();
+        let scene = session.scene().expect("the series opens");
+        let time = scene.time();
+        let bricks = session.take_bricks();
+        if !bricks.is_empty() {
+            engine.upload(&bricks);
+        }
+        if let Some(requests) = engine
+            .poll_requests(gpu.device(), time)
+            .expect("the demand polls")
+        {
+            session.request(requests.time, &requests.volume, &requests.prefetch);
+        }
+        engine
+            .draw(
+                gpu.device(),
+                gpu.queue(),
+                grana_engine::View {
+                    scene: session.scene().expect("the series opens"),
+                    camera: &camera,
+                    size: [160, 160],
+                    delivery: Delivery::Immediate,
+                    level_cap: 99,
+                    overlays: &[],
+                },
+            )
+            .expect("the viewport draws");
+        let info = engine.info();
+        if info.drawn && info.view.demand > 0 && info.view.resident == info.view.demand {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stream never filled the view: {:?}",
+            info.view
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let reads = session.reads();
+    let statistics = engine.statistics();
+    assert_eq!(
+        reads.delivered, reads.started,
+        "every started read was delivered"
+    );
+    assert_eq!(
+        reads.delivered, statistics.uploads,
+        "the stream read each resident brick once"
+    );
+    assert!(
+        statistics.evictions == 0,
+        "a view that fits the atlas budget evicts nothing"
+    );
+    assert!(
+        statistics.staged <= 4 * statistics.payload,
+        "the upload staging stays within four times its payload"
+    );
+}
+
+#[test]
 fn keeps_the_replay_when_an_applied_protocol_does_not_fit() {
     let mut session = Session::new();
     open_series(&mut session, "protocol", series());

@@ -226,6 +226,7 @@ pub(crate) struct Atlas {
     hold_generation: u8,
     versions: Vec<u32>,
     writes: u64,
+    evictions: u64,
     now: u32,
     identity: HashMap<(u32, usize, usize), u32>,
 }
@@ -366,6 +367,7 @@ impl Atlas {
             hold_generation: 0,
             versions: vec![0; capacity],
             writes: 0,
+            evictions: 0,
             now: 0,
             identity: HashMap::new(),
         }
@@ -406,6 +408,10 @@ impl Atlas {
 
     pub fn writes(&self) -> u64 {
         self.writes
+    }
+
+    pub fn evictions(&self) -> u64 {
+        self.evictions
     }
 
     pub fn affect(
@@ -463,6 +469,7 @@ impl Atlas {
                 *slot = Slot::EMPTY;
                 identity.remove(&(brick.time, brick.level, brick.index));
                 space.release(cursor);
+                self.evictions += 1;
                 evicted.push(brick);
                 cursor = next;
             }
@@ -577,6 +584,7 @@ impl Atlas {
         } = self;
         let held = slots[slot as usize];
         let brick = held.brick?;
+        self.evictions += 1;
         let key = (brick.time, brick.level);
         let (previous, next) = (held.previous, held.next);
         slots[slot as usize] = Slot::EMPTY;

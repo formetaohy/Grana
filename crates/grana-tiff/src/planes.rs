@@ -74,6 +74,10 @@ impl Planes {
         self.sizes[slot(Axis::C)]
     }
 
+    pub(crate) fn chunky(&self) -> bool {
+        self.chunky
+    }
+
     pub(crate) fn depth(&self) -> u32 {
         self.sizes[slot(Axis::Z)]
     }

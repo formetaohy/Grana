@@ -150,6 +150,16 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         data < plane,
         "the OME-XML lists every TiffData before the first Plane"
     );
+    assert_eq!(
+        text.matches("<TiffData").count(),
+        6,
+        "the OME-XML declares each of its six planes once"
+    );
+    assert_eq!(
+        text.matches("<Plane ").count(),
+        6,
+        "the OME-XML positions each of its six planes once"
+    );
     assert_eq!(image.pyramid().level_count(), 3);
     assert_eq!(
         image.pyramid().calibration(),
@@ -1702,7 +1712,6 @@ const UNPLACED: &str = concat!(
 );
 
 const OVERVIEW_BYTES: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-
 fn write_two_series(path: &std::path::Path) {
     support::ome_tiff(
         path,
@@ -1712,6 +1721,49 @@ fn write_two_series(path: &std::path::Path) {
             (2, 2, &[7u8; 4]),
             (2, 2, &[9u8; 4]),
         ],
+    );
+}
+
+const PARTIAL: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\" UUID=\"urn:uuid:5f3e0f1c-6b8a-4b34-9d1a-0b6f3d9f2c11\">\n",
+    " <BinaryOnly MetadataFile=\"companion.ome\" UUID=\"urn:uuid:5f3e0f1c-6b8a-4b34-9d1a-0b6f3d9f2c11\"/>\n",
+    "</OME>\n"
+);
+
+const DOUBLED_PAGE: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+    " <Image Name=\"Doubled\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"µm\">\n",
+    "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"0\" PlaneCount=\"1\" FirstZ=\"0\"/>\n",
+    "   <TiffData IFD=\"0\" PlaneCount=\"1\" FirstZ=\"1\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    "</OME>\n"
+);
+
+#[test]
+fn rejects_ome_tiff_metadata_it_cannot_place() {
+    let temp = Temp::new("suite-ome-tiff-placing");
+    let partial = temp.path().join("partial.ome.tif");
+    support::ome_tiff(&partial, PARTIAL, &[(2, 2, &[1u8; 4])]);
+    let detail = grana_tiff::Image::open(&partial, 0)
+        .err()
+        .expect("a partial metadata file holds no pixels of its own");
+    assert!(
+        detail.to_string().contains("companion file"),
+        "a partial metadata file names its companion: {detail}"
+    );
+    let doubled = temp.path().join("doubled.ome.tif");
+    support::ome_tiff(&doubled, DOUBLED_PAGE, &[(2, 2, &[3u8; 4])]);
+    let detail = grana_tiff::Image::open(&doubled, 0)
+        .err()
+        .expect("two planes cannot share one TIFF page");
+    assert!(
+        detail.to_string().contains("one TIFF page"),
+        "a doubled page mapping is refused: {detail}"
     );
 }
 

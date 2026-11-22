@@ -23,6 +23,7 @@ mod schema;
 mod section;
 mod shadow;
 mod splat;
+mod statistics;
 mod surface;
 mod table;
 mod target;
@@ -40,3 +41,4 @@ pub use schema::{
     ChannelRow, Digest, Layer, LayerKey, Overlay, SceneFrame, Style, Versions, overlay_digest,
 };
 pub use splat::{SPLAT_LEVELS, Splat, SplatChunk, SplatGeometry, SplatLevel, SplatStyle, Splats};
+pub use statistics::Statistics;
