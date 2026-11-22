@@ -17,7 +17,9 @@ const ABSENT: u32 = u32::MAX;
 
 pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
-pub(crate) const STRUCTURE_BYTES: u64 = (grana_volume::PADDED_SIDE as u64).pow(3) * 4;
+pub(crate) const STRUCTURE_SIDE: u32 = PADDED_SIDE / 2 + 2;
+
+pub(crate) const STRUCTURE_BYTES: u64 = (STRUCTURE_SIDE as u64).pow(3) * 4;
 
 fn pack_format(components: usize) -> TextureFormat {
     match components {
@@ -297,12 +299,13 @@ impl Atlas {
             .collect::<Vec<_>>();
         let mut bindings = views.iter().collect::<Vec<&TextureView>>();
         bindings.resize(PACK_LIMIT, dummy);
+        let structure_dims = slot_grid.map(|count| count * STRUCTURE_SIDE);
         let structure = device.create_texture(&TextureDescriptor {
             label: Some("grana.atlas.structure"),
             size: wgpu::Extent3d {
-                width: dims[0],
-                height: dims[1],
-                depth_or_array_layers: dims[2],
+                width: structure_dims[0],
+                height: structure_dims[1],
+                depth_or_array_layers: structure_dims[2],
             },
             mip_level_count: 1,
             sample_count: 1,

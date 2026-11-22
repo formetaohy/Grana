@@ -90,7 +90,9 @@ fn build_renderer(gpu: &Gpu, pyramid: &Pyramid) -> Renderer {
         BUDGET,
         gpu.pipelines(),
     );
-    renderer.set_dataset(gpu.device(), pyramid);
+    renderer
+        .set_dataset(gpu.device(), pyramid)
+        .expect("the test budget holds the volume");
     renderer
 }
 
@@ -310,8 +312,9 @@ fn streams_and_shades_two_channels() {
     let view_texture = target.create_view(&Default::default());
     assert_eq!(
         renderer.slot_bytes(),
-        u64::from(grana_volume::PADDED_SIDE).pow(3) * (4 + 4),
-        "a two channel slot holds one packed source texel and one structure texel"
+        u64::from(grana_volume::PADDED_SIDE).pow(3) * 4
+            + u64::from(grana_volume::PADDED_SIDE / 2 + 2).pow(3) * 4,
+        "a two channel slot holds one packed source texel and one half resolution structure texel"
     );
     let view = View {
         target: &view_texture,
@@ -1248,7 +1251,9 @@ fn fits_the_volume_level_to_the_residency_budget() {
             16 << 20,
             gpu.pipelines(),
         );
-        renderer.set_dataset(gpu.device(), &pyramid);
+        renderer
+            .set_dataset(gpu.device(), &pyramid)
+            .expect("the test budget holds the volume");
         let target = texture(&gpu, SIDE);
         let view_texture = target.create_view(&Default::default());
         let view = ladder_view(&view_texture, &camera, &scene);
@@ -1267,10 +1272,12 @@ fn fits_the_volume_level_to_the_residency_budget() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
-        400 << 10,
+        200 << 10,
         gpu.pipelines(),
     );
-    renderer.set_dataset(gpu.device(), &pyramid);
+    renderer
+        .set_dataset(gpu.device(), &pyramid)
+        .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
     let view = ladder_view(&view_texture, &camera, &scene);
@@ -1315,7 +1322,9 @@ fn restarts_accumulation_when_the_band_ladder_changes() {
         16 << 20,
         gpu.pipelines(),
     );
-    renderer.set_dataset(gpu.device(), &pyramid);
+    renderer
+        .set_dataset(gpu.device(), &pyramid)
+        .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
     let view = ladder_view(&view_texture, &camera, &scene);
@@ -2532,7 +2541,9 @@ fn prefetches_the_carried_frame_into_vacant_slots() {
         8 << 20,
         gpu.pipelines(),
     );
-    renderer.set_dataset(gpu.device(), &pyramid);
+    renderer
+        .set_dataset(gpu.device(), &pyramid)
+        .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
     let view = View {

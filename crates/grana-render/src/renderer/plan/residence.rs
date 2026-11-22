@@ -743,10 +743,8 @@ impl Residence {
         budget.min(PREFETCH_LIMIT)
     }
 
-    fn observe(&mut self, pyramid: &Pyramid, time: u32) {
-        let next = carried_frame(time, pyramid.frame_count());
-        self.prefetched
-            .retain(|request| request.time == time || request.time == next);
+    fn observe(&mut self, time: u32) {
+        self.prefetched.retain(|request| request.time > time);
         self.batches.retain(|batch| batch.time >= time);
         let Some(demand) = self.demand.as_ref() else {
             return;
@@ -784,7 +782,7 @@ impl Residence {
             }
             *restaged = false;
         }
-        self.observe(pyramid, time);
+        self.observe(time);
         let demand = self.demand.as_ref().expect("the demand is staged");
         let mut requests = Requests {
             time: demand.key.time,
@@ -815,7 +813,7 @@ impl Residence {
         {
             let next = carried_frame(demand.key.time, pyramid.frame_count());
             let budget = self.prefetch_budget(atlas, demand);
-            if budget > 0 {
+            if next > demand.key.time && budget > 0 {
                 let issued = {
                     let prefetch = Prefetch {
                         budget,

@@ -124,9 +124,15 @@ impl Engine {
         }
     }
 
-    pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
+    pub fn set_budget(&mut self, budget: u64) {
+        assert!(budget > 0, "the engine keeps a positive residency budget");
+        self.budget = budget;
+        self.renderer.set_budget(budget);
+    }
+
+    pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) -> Result<(), String> {
         self.renderer.set_budget(self.budget);
-        self.renderer.set_dataset(device, pyramid);
+        self.renderer.set_dataset(device, pyramid)?;
         self.pending_pick = None;
         self.prepared = None;
         self.plan = None;
@@ -134,6 +140,7 @@ impl Engine {
         self.content = None;
         self.failure = None;
         self.info = FrameInfo::default();
+        Ok(())
     }
 
     pub fn holds(&self, pyramid: &Pyramid) -> bool {

@@ -312,7 +312,9 @@ impl App {
         };
         self.engine = Some(engine);
         grana_log::info!(target: "grana::engine", "the render engine is ready");
-        self.sync_dataset(false);
+        if let Err(detail) = self.sync_dataset(false) {
+            self.fail(detail);
+        }
     }
 
     pub(super) fn pump(&mut self) -> bool {

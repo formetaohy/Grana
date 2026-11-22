@@ -13,7 +13,7 @@ impl App {
         if replaced || reloaded {
             self.replaced = self.session.replaced();
             self.content = self.session.content();
-            self.sync_dataset(replaced);
+            self.sync_dataset(replaced)?;
             if replaced {
                 self.needs_fit = true;
                 self.camera_touched = false;
@@ -73,7 +73,7 @@ impl App {
         Ok(())
     }
 
-    pub(super) fn sync_dataset(&mut self, replaced: bool) {
+    pub(super) fn sync_dataset(&mut self, replaced: bool) -> Result<(), String> {
         let App {
             surface,
             engine,
@@ -81,17 +81,19 @@ impl App {
             ..
         } = self;
         let (Some(surface), Some(engine)) = (surface.as_ref(), engine.as_mut()) else {
-            return;
+            return Ok(());
         };
         let pyramid = session.scene().map(|scene| scene.dataset.pyramid().clone());
         let Some(pyramid) = pyramid else {
-            return;
+            return Ok(());
         };
         if replaced || !engine.holds(&pyramid) {
-            engine.set_dataset(surface.device(), &pyramid);
+            engine.set_budget(surface.budget());
+            engine.set_dataset(surface.device(), &pyramid)?;
         } else {
             engine.invalidate(&pyramid);
         }
+        Ok(())
     }
 
     pub(super) fn fit_view(&mut self) {

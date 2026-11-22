@@ -333,7 +333,7 @@ impl Renderer {
                 ceiling,
             )?;
             self.set_budget(budget);
-            self.set_dataset(device, pyramid);
+            self.set_dataset(device, pyramid)?;
         }
         self.fragments = ceiling.saturating_sub(self.budget);
         Ok(())
@@ -398,7 +398,7 @@ impl Renderer {
         self.exporting = exporting;
     }
 
-    pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
+    pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) -> Result<(), String> {
         let resources = Resources::new(
             device,
             &self.layouts,
@@ -407,7 +407,7 @@ impl Renderer {
             &self.dummy,
             self.budget,
             pyramid,
-        );
+        )?;
         self.residence
             .setup(device, resources.slots(), pyramid.level_count());
         self.resources = Some(resources);
@@ -426,6 +426,7 @@ impl Renderer {
         self.fade = None;
         self.motion = None;
         self.info = FrameInfo::default();
+        Ok(())
     }
 
     pub fn draw(

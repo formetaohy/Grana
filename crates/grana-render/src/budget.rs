@@ -14,10 +14,14 @@ pub fn texture_budget(memory: Option<&Memory>) -> u64 {
     let Some(memory) = memory else {
         return FALLBACK;
     };
+    let pool = memory.pool();
     let (pool, share) = if memory.integrated() {
-        (memory.local() + memory.shared(), INTEGRATED_SHARE)
+        (
+            pool.local().saturating_add(pool.non_local()),
+            INTEGRATED_SHARE,
+        )
     } else {
-        (memory.local(), DISCRETE_SHARE)
+        (pool.local(), DISCRETE_SHARE)
     };
     (pool / share).clamp(FLOOR, CEILING)
 }

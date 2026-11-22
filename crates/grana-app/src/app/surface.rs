@@ -62,6 +62,10 @@ impl Surface {
         self.gpu.lost()
     }
 
+    pub(super) fn budget(&self) -> u64 {
+        grana_render::texture_budget(self.gpu.memory())
+    }
+
     pub(super) fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
         self.gpu.acquire()
     }

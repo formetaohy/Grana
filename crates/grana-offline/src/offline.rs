@@ -115,7 +115,9 @@ impl Offline {
             Err(detail) => return Outcome::Failed { detail },
         };
         self.renderer.set_budget(self.budget);
-        self.renderer.set_dataset(&self.device, &pyramid);
+        if let Err(detail) = self.renderer.set_dataset(&self.device, &pyramid) {
+            return Outcome::Failed { detail };
+        }
         if let Err(detail) =
             self.renderer
                 .reserve(&self.device, &pyramid, needed.slots, EXPORT_CEILING)

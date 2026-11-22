@@ -1,4 +1,4 @@
-﻿use std::time::{Duration, Instant};
+use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use grana_display::Camera;
@@ -39,10 +39,12 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
         256 << 20,
         gpu.pipelines(),
     );
-    engine.set_dataset(
-        gpu.device(),
-        session.scene().expect("a scene").dataset.pyramid(),
-    );
+    engine
+        .set_dataset(
+            gpu.device(),
+            session.scene().expect("a scene").dataset.pyramid(),
+        )
+        .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
     camera.fit(session.scene().expect("a scene").dataset.world_size(), 1.0);
     let frames = session.scene().expect("a scene").frame_count();

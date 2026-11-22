@@ -113,7 +113,10 @@ impl Renderer {
             self.accumulate(device, queue, &mut encoder, target, &frame, &prepared);
             queue.submit([encoder.finish()]);
         }
-        self.judge(device, queue, target, &frame, &prepared)?;
+        if let Err(detail) = self.judge(device, queue, target, &frame, &prepared) {
+            self.register();
+            return Err(detail);
+        }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.present"),
         });

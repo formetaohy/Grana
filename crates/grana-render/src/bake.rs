@@ -24,7 +24,7 @@ const SHADER: &str = concat!(
     include_str!("shader/structure.wgsl")
 );
 
-pub(crate) const BAKE_TILES: u32 = 9;
+pub(crate) const BAKE_TILES: u32 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]

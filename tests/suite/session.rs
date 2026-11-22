@@ -1,4 +1,4 @@
-﻿use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
@@ -1570,10 +1570,12 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
         256 << 20,
         gpu.pipelines(),
     );
-    engine.set_dataset(
-        gpu.device(),
-        session.scene().expect("the series opens").dataset.pyramid(),
-    );
+    engine
+        .set_dataset(
+            gpu.device(),
+            session.scene().expect("the series opens").dataset.pyramid(),
+        )
+        .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
     camera.fit(
         session
@@ -1685,7 +1687,9 @@ fn reads_each_streamed_brick_once() {
         .dataset
         .pyramid()
         .clone();
-    engine.set_dataset(gpu.device(), &pyramid);
+    engine
+        .set_dataset(gpu.device(), &pyramid)
+        .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
     camera.fit(
         session

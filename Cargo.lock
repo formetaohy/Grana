@@ -3956,6 +3956,7 @@ dependencies = [
  "grana-display",
  "grana-geometry",
  "grana-gpu",
+ "grana-log",
  "grana-volume",
  "half",
  "rayon",

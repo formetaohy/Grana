@@ -702,6 +702,7 @@ impl Session {
                     data,
                 } => {
                     if !self.stale(generation) {
+                        self.failed.remove(&request);
                         self.reads_delivered += 1;
                         self.transfer.record(bytes, Instant::now());
                         self.bricks.push((request, data));

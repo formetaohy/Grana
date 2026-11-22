@@ -24,7 +24,9 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         256 << 20,
         gpu.pipelines(),
     );
-    renderer.set_dataset(gpu.device(), &pyramid);
+    renderer
+        .set_dataset(gpu.device(), &pyramid)
+        .expect("the test budget holds the volume");
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("grana.optics.target"),
         size: wgpu::Extent3d {

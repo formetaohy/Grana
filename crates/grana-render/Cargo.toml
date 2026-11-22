@@ -12,6 +12,7 @@ glam = { workspace = true }
 grana-display = { workspace = true }
 grana-geometry = { workspace = true }
 grana-gpu = { workspace = true }
+grana-log = { workspace = true }
 grana-volume = { workspace = true }
 half = { workspace = true }
 rayon = { workspace = true }

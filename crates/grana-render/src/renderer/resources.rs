@@ -5,12 +5,14 @@ use grana_volume::{
 };
 
 use crate::atlas::ResidentBrick;
-use crate::brick::BrickRecord;
+use crate::brick::{BrickRecord, RECORD_BYTES};
 use crate::occupancy::{CELL_WORDS, Occupancy};
 
 use super::*;
 
 const APRON: u32 = 1;
+
+const MINIMUM_SLOTS: u64 = 2;
 
 pub(super) struct Resources {
     pub(super) pyramid: Pyramid,
@@ -41,6 +43,46 @@ impl Resources {
         dummy: &TextureView,
         budget: u64,
         pyramid: &Pyramid,
+    ) -> Result<Self, String> {
+        let least = least_budget(pyramid);
+        let mut budget = budget;
+        loop {
+            let attempt = grana_gpu::scoped(device, || {
+                Self::allocate(device, layouts, pipelines, sampler, dummy, budget, pyramid)
+            });
+            match attempt {
+                Ok(resources) => return Ok(resources),
+                Err(wgpu::Error::OutOfMemory { .. }) if budget > least => {
+                    budget = (budget / 2).max(least);
+                    grana_log::warn!(
+                        target: "grana::render",
+                        budget,
+                        "the graphics device is short of memory, so the brick residency shrinks"
+                    );
+                }
+                Err(wgpu::Error::OutOfMemory { .. }) => {
+                    return Err(format!(
+                        "the graphics device cannot hold the smallest brick residency of {:.1} MiB",
+                        least as f64 / (1u64 << 20) as f64
+                    ));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "the renderer could not allocate its dataset resources: {error}"
+                    ));
+                }
+            }
+        }
+    }
+
+    fn allocate(
+        device: &Device,
+        layouts: &Layouts,
+        pipelines: &Pipelines,
+        sampler: &Sampler,
+        dummy: &TextureView,
+        budget: u64,
+        pyramid: &Pyramid,
     ) -> Self {
         let channels = pyramid.channel_count();
         assert!(
@@ -56,12 +98,7 @@ impl Resources {
             .iter()
             .map(|level| BrickGrid::new(level.extent()).count() as u64)
             .sum::<u64>();
-        let source_bytes = (0..pack_count(channels))
-            .map(|pack| texels(components(channels, pack)) as u64)
-            .sum::<u64>()
-            * (PADDED_SIDE as u64).pow(3)
-            * size_of::<u16>() as u64;
-        let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
+        let slot_bytes = slot_bytes(pyramid);
         let requested = (budget / slot_bytes).max(1).min(holdable);
         let atlas = Atlas::new(
             device,
@@ -271,6 +308,10 @@ impl Resources {
                     coord,
                     channels: scope,
                 } = *request;
+                if held < time {
+                    prefetched.remove(request);
+                    continue;
+                }
                 if level >= pyramid.level_count()
                     || level < arena.first()
                     || held >= pyramid.frame_count()
@@ -486,6 +527,22 @@ struct Pending {
     demand: bool,
     current: bool,
     publish: bool,
+}
+
+fn slot_bytes(pyramid: &Pyramid) -> u64 {
+    let channels = pyramid.channel_count();
+    let source = (0..pack_count(channels))
+        .map(|pack| texels(components(channels, pack)) as u64)
+        .sum::<u64>()
+        * (PADDED_SIDE as u64).pow(3)
+        * size_of::<u16>() as u64;
+    source + crate::atlas::STRUCTURE_BYTES
+}
+
+fn least_budget(pyramid: &Pyramid) -> u64 {
+    let coarsest = pyramid.level_count().saturating_sub(1);
+    let records = BrickGrid::new(pyramid.level(coarsest).extent()).count() as u64;
+    (slot_bytes(pyramid) * MINIMUM_SLOTS).max(records * RECORD_BYTES * RECORD_SHARE)
 }
 
 fn occupy(values: &mut [f32], occupancy: &mut Occupancy, slot: u32, pack: usize, block: &Pack) {
