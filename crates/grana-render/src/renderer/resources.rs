@@ -233,7 +233,7 @@ impl Resources {
         for table in bricks.iter_mut().flatten() {
             table.flush(upload, arena);
         }
-        residence.restale();
+        residence.revalidate();
     }
 
     pub(super) fn upload(
@@ -258,6 +258,7 @@ impl Resources {
         let mut generation = residence.generation();
         let mut supplied = Vec::new();
         let mut released = Vec::new();
+        let mut missing = Vec::new();
         let total = *channels;
         let mut values = [0.0f32; CELL_WORDS];
         {
@@ -332,45 +333,60 @@ impl Resources {
                     supplied.push((held, level, index));
                     continue;
                 }
-                let demand = !prefetched.contains(request);
-                let Some((slot, evicted)) = atlas.allocate(time, held) else {
-                    continue;
-                };
-                if let Some(brick) = evicted {
-                    if let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut)
-                        && other.drop_record(arena, brick.index, brick.time)
-                    {
-                        shadow.mark(brick.level, brick.index);
-                    }
-                    released.push((brick.time, brick.level, brick.index));
-                }
-                occupancy.reset(slot);
-                for (pack, block) in packed.packs() {
-                    staged.push((pack, slot, position));
-                    occupy(&mut values, occupancy, slot, pack, block);
-                }
-                occupancy.flush(upload, slot);
-                atlas.assign(
-                    slot,
-                    ResidentBrick {
-                        time: held,
-                        level,
-                        index,
-                    },
-                    demand,
-                );
-                if publish {
-                    if let Some(table) = tables[level].as_mut() {
-                        table.set_record(arena, index, BrickRecord::new(slot + 1, held, content));
-                    }
-                    shadow.mark(level, index);
-                }
-                if current {
-                    generation += 1;
-                }
-                supplied.push((held, level, index));
+                missing.push(Pending {
+                    position,
+                    held,
+                    level,
+                    index,
+                    demand: !prefetched.contains(request),
+                    current,
+                    publish,
+                });
                 refreshes.remove(request);
             }
+        }
+        let mut evicted = Vec::new();
+        let allow_future = missing.iter().all(|held| held.held <= time);
+        let slots = atlas.reserve(time, allow_future, missing.len(), &mut evicted);
+        for brick in evicted {
+            if let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut)
+                && other.drop_record(arena, brick.index, brick.time)
+            {
+                shadow.mark(brick.level, brick.index);
+            }
+            released.push((brick.time, brick.level, brick.index));
+        }
+        for (held, slot) in missing.iter().zip(&slots) {
+            let (position, packed) = (held.position, &bricks[held.position].1);
+            occupancy.reset(*slot);
+            for (pack, block) in packed.packs() {
+                staged.push((pack, *slot, position));
+                occupy(&mut values, occupancy, *slot, pack, block);
+            }
+            occupancy.flush(upload, *slot);
+            atlas.assign(
+                *slot,
+                ResidentBrick {
+                    time: held.held,
+                    level: held.level,
+                    index: held.index,
+                },
+                held.demand,
+            );
+            if held.publish
+                && let Some(table) = tables[held.level].as_mut()
+            {
+                table.set_record(
+                    arena,
+                    held.index,
+                    BrickRecord::new(*slot + 1, held.held, content),
+                );
+                shadow.mark(held.level, held.index);
+            }
+            if held.current {
+                generation += 1;
+            }
+            supplied.push((held.held, held.level, held.index));
         }
         residence.set_generation(generation);
         stage(upload, atlas, bricks, staged);
@@ -384,6 +400,16 @@ impl Resources {
             table.flush(upload, arena);
         }
     }
+}
+
+struct Pending {
+    position: usize,
+    held: u32,
+    level: usize,
+    index: usize,
+    demand: bool,
+    current: bool,
+    publish: bool,
 }
 
 fn occupy(values: &mut [f32], occupancy: &mut Occupancy, slot: u32, pack: usize, block: &Pack) {

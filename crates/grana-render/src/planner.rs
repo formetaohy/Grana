@@ -83,7 +83,7 @@ pub(crate) struct Schedule {
 pub(crate) struct Demand {
     pub info: ViewInfo,
     pub requests: Vec<BrickRequest>,
-    pub buckets: Vec<u32>,
+    pub missing: Vec<(u32, u32)>,
     pub indices: Vec<u32>,
 }
 
@@ -351,14 +351,14 @@ pub(crate) fn decode_plan(
     }
     let grid = BrickGrid::new(pyramid.level(level).extent());
     let mut requests = Vec::new();
-    let mut buckets = Vec::new();
+    let mut missing = Vec::new();
     let mut indices = Vec::with_capacity(demand);
     for (position, bucket) in bucket_of.iter().enumerate() {
         let entry = word(DEMAND_BASE + position);
         let index = entry & !MISSING;
         indices.push(index);
         if entry & MISSING != 0 {
-            buckets.push(*bucket);
+            missing.push((index, *bucket));
             requests.push(BrickRequest::new(time, level, grid.coord(index as usize)));
         }
     }
@@ -370,7 +370,7 @@ pub(crate) fn decode_plan(
             resident: demand - requests.len(),
         },
         requests,
-        buckets,
+        missing,
         indices,
     })
 }

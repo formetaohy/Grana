@@ -613,12 +613,11 @@ impl Session {
 
     pub(super) fn poll_source(&mut self) -> bool {
         let mut repaint = false;
-        let mut processed = 0;
-        while processed < UPLOAD_BATCH {
+        let deadline = Instant::now() + DRAIN;
+        while Instant::now() < deadline {
             let Some(event) = self.source.as_ref().and_then(Loader::poll) else {
                 break;
             };
-            processed += 1;
             repaint = true;
             let current = self.source.as_ref().map(Loader::source);
             match event {

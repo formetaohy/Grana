@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use grana_exec::{Executor, Pipe, Poll, Role};
+use grana_exec::{Executor, Pipe, Poll, Priority, Role};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -19,6 +19,30 @@ fn receive<T>(pipe: &Pipe<T>) -> Option<T> {
             Poll::Closed => return None,
         }
     }
+}
+
+#[test]
+fn a_batch_runs_every_item_once_across_its_shards() {
+    let executor = Executor::new(Role::Read, 4);
+    let (sender, pipe) = Pipe::new(1024);
+    executor.submit_batch(
+        Priority::Demand,
+        (0..200usize).collect(),
+        7,
+        move |_, item| {
+            let _ = sender.send(item);
+        },
+    );
+    let mut delivered = Vec::new();
+    while delivered.len() < 200 {
+        delivered.push(receive(&pipe).expect("a batch reports every item"));
+    }
+    delivered.sort_unstable();
+    assert_eq!(
+        delivered,
+        (0..200usize).collect::<Vec<_>>(),
+        "a batch runs each item once"
+    );
 }
 
 #[test]

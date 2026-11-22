@@ -130,11 +130,10 @@ impl Session {
         }
         let mut repaint = false;
         let mut updates: Vec<(usize, Job, Update)> = Vec::new();
-        let mut budget = UPLOAD_BATCH;
+        let deadline = Instant::now() + DRAIN;
         for (index, analysis) in self.analysis.iter().enumerate() {
             let job = analysis.job();
-            while budget > 0 {
-                budget -= 1;
+            while Instant::now() < deadline {
                 match analysis.poll() {
                     Poll::Event(Event::Progress { time, done, total }) => {
                         updates.push((index, job, Update::Progress(time, done, total)));
@@ -265,7 +264,7 @@ impl Session {
                     }
                 }
             }
-            if budget == 0 {
+            if Instant::now() >= deadline {
                 break;
             }
         }

@@ -80,7 +80,7 @@ use tasks::Tasks;
 
 const MAX_IN_FLIGHT: usize = 8192;
 
-const UPLOAD_BATCH: usize = 64;
+const DRAIN: Duration = Duration::from_millis(2);
 
 const RETRY_FLOOR: Duration = Duration::from_millis(250);
 

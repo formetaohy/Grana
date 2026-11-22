@@ -8,7 +8,9 @@ use grana_pipeline::Channels;
 use grana_scene::Drifts;
 use grana_volume::{BrickRequest, CHANNEL_LIMIT, Fingerprint, PackedBrick, Pyramid, VolumeSeries};
 
-const CAPACITY: usize = 16;
+const INBOX: usize = 64;
+
+const BATCH: usize = 8;
 
 pub struct Opened {
     pub name: String,
@@ -83,7 +85,7 @@ impl Loader {
             transfer: None,
         };
         let channels = Arc::new(Channels::stored(Arc::new(image)));
-        let (sender, events) = Pipe::new(CAPACITY);
+        let (sender, events) = Pipe::new(INBOX);
         (
             Self {
                 events,
@@ -120,7 +122,7 @@ impl Loader {
 
     fn open(source: Source) -> Self {
         let remote = source.is_remote();
-        let (sender, events) = Pipe::new(CAPACITY);
+        let (sender, events) = Pipe::new(INBOX);
         let shared = Arc::new(Shared {
             time: AtomicU32::new(0),
             drifts: RwLock::new(Drifts::new()),
@@ -174,13 +176,18 @@ impl Loader {
         let current = self.shared.time.load(AtomicOrdering::Relaxed);
         let generation = self.generation();
         for (priority, requests) in [(Priority::Demand, demand), (Priority::Background, prefetch)] {
-            for request in requests.iter().copied() {
-                if request.time < current {
-                    continue;
-                }
-                let shared = Arc::clone(&self.shared);
-                let events = self.sender.clone();
-                self.reader.submit_with(priority, move |cancel| {
+            let batch = requests
+                .iter()
+                .copied()
+                .filter(|request| request.time >= current)
+                .collect::<Vec<_>>();
+            if batch.is_empty() {
+                continue;
+            }
+            let shared = Arc::clone(&self.shared);
+            let events = self.sender.clone();
+            self.reader
+                .submit_batch(priority, batch, BATCH, move |cancel, request| {
                     let outcome =
                         grana_exec::contain(|| read(request, generation, &shared, cancel, &events));
                     if let Err(fault) = outcome {
@@ -195,7 +202,6 @@ impl Loader {
                         );
                     }
                 });
-            }
         }
         true
     }

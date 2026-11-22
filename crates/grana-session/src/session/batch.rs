@@ -327,9 +327,8 @@ impl Session {
         let mut repaint = false;
         let mut finished = false;
         let mut fatal = false;
-        let mut budget = UPLOAD_BATCH;
-        while budget > 0 {
-            budget -= 1;
+        let deadline = Instant::now() + DRAIN;
+        while Instant::now() < deadline {
             let event = match batch.poll() {
                 BatchPoll::Event(event) => event,
                 BatchPoll::Empty => break,

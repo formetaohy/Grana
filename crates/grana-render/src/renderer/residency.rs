@@ -1,10 +1,93 @@
 use super::*;
 use glam::Mat4;
 
+const QUANTUM_BRICK: f32 = 0.5;
+
+const QUANTUM_FLOOR: f32 = 0.5;
+
+const QUANTUM_CEILING: f32 = 24.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Levels {
     pub(super) ladder: Ladder,
     pub(super) capacity: [usize; BAND],
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Resolution {
+    pub(super) length: f32,
+    pub(super) angle: f32,
+}
+
+impl Resolution {
+    pub(super) fn of(pyramid: &Pyramid, level: usize, camera: &Camera, height: u32) -> Self {
+        let level = pyramid.level(level.min(pyramid.level_count() - 1));
+        let voxel = level.voxel().into_iter().fold(0.0f32, f32::max);
+        let brick = grana_volume::BRICK_SIDE as f32 * voxel;
+        let point = camera.world_per_point(height.max(1) as f32, camera.distance());
+        let length = (QUANTUM_BRICK * brick).clamp(QUANTUM_FLOOR * point, QUANTUM_CEILING * point);
+        let reach = (camera.pivot() - camera.eye()).length().max(length);
+        Self {
+            length,
+            angle: length / reach,
+        }
+    }
+
+    pub(super) fn position(self, values: [f32; 3]) -> [i32; 3] {
+        values.map(|value| quantise(value, self.length))
+    }
+
+    pub(super) fn direction(self, values: [f32; 3]) -> [i32; 3] {
+        values.map(|value| quantise(value, self.angle))
+    }
+}
+
+pub(super) fn quantise(value: f32, step: f32) -> i32 {
+    assert!(
+        step > 0.0 && step.is_finite(),
+        "a view quantum is a positive length"
+    );
+    (value / step)
+        .round()
+        .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct RegionKey {
+    enabled: bool,
+    center: [i32; 3],
+    half: [i32; 3],
+    axes: [[i32; 3]; 3],
+}
+
+impl RegionKey {
+    fn of(region: Region, quantum: Resolution) -> Self {
+        Self {
+            enabled: region.enabled(),
+            center: quantum.position(region.center().to_array()),
+            half: quantum.position(region.half().to_array()),
+            axes: [0, 1, 2].map(|axis| quantum.direction(region.axis(axis).to_array())),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Hash)]
+pub(super) struct SliceKey {
+    axis: usize,
+    right: [i32; 3],
+    up: [i32; 3],
+    step: i32,
+}
+
+impl SliceKey {
+    pub(super) fn of(slice: grana_display::Slice, quantum: Resolution) -> Self {
+        Self {
+            axis: slice.axis(),
+            right: quantum.direction(slice.right().to_array()),
+            up: quantum.direction(slice.up().to_array()),
+            step: quantise(slice.step(), quantum.length),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -14,14 +97,14 @@ pub(super) struct ViewKey {
     pub(super) prefetch: bool,
     pub(super) assured: bool,
     pub(super) time: u32,
-    pub(super) region: Region,
-    pub(super) eye: [f32; 3],
-    pub(super) focus: [f32; 3],
-    pub(super) field_of_view: f32,
-    pub(super) projection: grana_display::CameraProjection,
-    pub(super) slice: Option<grana_display::Slice>,
     pub(super) size: [u32; 2],
     pub(super) levels: Levels,
+    region: RegionKey,
+    eye: [i32; 3],
+    focus: [i32; 3],
+    field_of_view: i32,
+    projection: grana_display::CameraProjection,
+    slice: Option<SliceKey>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -35,6 +118,7 @@ pub(super) struct ViewState<'a> {
     pub(super) size: [u32; 2],
     pub(super) region: Region,
     pub(super) levels: Levels,
+    pub(super) quantum: Resolution,
 }
 
 impl ViewKey {
@@ -44,6 +128,7 @@ impl ViewKey {
             size,
             region,
             levels,
+            quantum,
         } = view;
         Self {
             epoch,
@@ -51,15 +136,53 @@ impl ViewKey {
             prefetch: mode.prefetch,
             assured: mode.assured,
             time,
-            region,
-            eye: camera.eye().to_array(),
-            focus: camera.pivot().to_array(),
-            field_of_view: camera.fov_y(),
-            projection: camera.projection(),
-            slice: camera.slice(),
             size,
             levels,
+            region: RegionKey::of(region, quantum),
+            eye: quantum.position(camera.eye().to_array()),
+            focus: quantum.position(camera.pivot().to_array()),
+            field_of_view: quantise(camera.fov_y(), quantum.angle),
+            projection: camera.projection(),
+            slice: camera.slice().map(|slice| SliceKey::of(slice, quantum)),
         }
+    }
+
+    pub(super) fn same_view(&self, other: &Self) -> bool {
+        self.epoch == other.epoch
+            && self.prefetch == other.prefetch
+            && self.assured == other.assured
+            && self.time == other.time
+            && self.size == other.size
+            && self.levels == other.levels
+            && self.region == other.region
+            && self.eye == other.eye
+            && self.focus == other.focus
+            && self.field_of_view == other.field_of_view
+            && self.projection == other.projection
+            && self.slice == other.slice
+    }
+
+    pub(super) fn digest(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.epoch.hash(&mut hasher);
+        self.prefetch.hash(&mut hasher);
+        self.assured.hash(&mut hasher);
+        self.time.hash(&mut hasher);
+        self.size.hash(&mut hasher);
+        self.levels.ladder.hash(&mut hasher);
+        self.levels.capacity.hash(&mut hasher);
+        self.region.enabled.hash(&mut hasher);
+        self.region.center.hash(&mut hasher);
+        self.region.half.hash(&mut hasher);
+        self.region.axes.hash(&mut hasher);
+        self.eye.hash(&mut hasher);
+        self.focus.hash(&mut hasher);
+        self.field_of_view.hash(&mut hasher);
+        self.projection.index().hash(&mut hasher);
+        self.slice
+            .map(|slice| (slice.axis, slice.right, slice.up, slice.step))
+            .hash(&mut hasher);
+        hasher.finish()
     }
 }
 

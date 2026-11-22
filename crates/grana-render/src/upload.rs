@@ -3,7 +3,7 @@ use wgpu::{
     TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
 };
 
-const ALIGNMENT: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
+const ALIGNMENT: usize = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
 
 const CAPACITY_FLOOR: u64 = 1 << 20;
 
@@ -28,6 +28,7 @@ pub(crate) struct Upload {
     buffer: Option<Buffer>,
     capacity: u64,
     bytes: Vec<u8>,
+    filled: usize,
     copies: Vec<Copy>,
 }
 
@@ -37,6 +38,7 @@ impl Upload {
             buffer: None,
             capacity: 0,
             bytes: Vec::new(),
+            filled: 0,
             copies: Vec::new(),
         }
     }
@@ -59,7 +61,7 @@ impl Upload {
             u64::from(row_bytes) * u64::from(rows) * u64::from(extent[2].max(1)),
             "an uploaded image covers its rows"
         );
-        let offset = self.reserve(bytes, ALIGNMENT);
+        let offset = self.reserve(bytes, ALIGNMENT) as u64;
         self.copies.push(Copy::Texture {
             texture: texture.clone(),
             origin,
@@ -92,11 +94,9 @@ impl Upload {
             );
         }
         let width = stride * columns.len();
-        let row_bytes = width.next_multiple_of(ALIGNMENT as usize);
-        let offset = self.bytes.len().next_multiple_of(ALIGNMENT as usize);
+        let row_bytes = width.next_multiple_of(ALIGNMENT);
         let length = row_bytes * extent * extent;
-        self.bytes.resize(offset, 0);
-        self.bytes.resize(offset + length, 0);
+        let offset = self.reserve_blank(length, ALIGNMENT);
         for line in 0..extent * extent {
             let row = &mut self.bytes[offset + line * row_bytes..offset + line * row_bytes + width];
             for (column, source) in columns.iter().enumerate() {
@@ -126,7 +126,7 @@ impl Upload {
         if bytes.is_empty() {
             return;
         }
-        let offset = self.reserve(bytes, 4);
+        let offset = self.reserve(bytes, 4) as u64;
         self.copies.push(Copy::Buffer {
             target: target.clone(),
             target_offset,
@@ -137,11 +137,11 @@ impl Upload {
 
     pub fn encode(&mut self, device: &Device, queue: &Queue, encoder: &mut CommandEncoder) {
         if self.copies.is_empty() {
-            self.bytes.clear();
+            self.filled = 0;
             return;
         }
-        let size = (self.bytes.len() as u64).next_multiple_of(4);
-        let capacity = size.max(CAPACITY_FLOOR).next_power_of_two();
+        let size = self.filled.next_multiple_of(4);
+        let capacity = (size as u64).max(CAPACITY_FLOOR).next_power_of_two();
         if self.capacity < capacity {
             self.buffer = Some(device.create_buffer(&BufferDescriptor {
                 label: Some("grana.upload.staging"),
@@ -151,9 +151,11 @@ impl Upload {
             }));
             self.capacity = capacity;
         }
-        self.bytes.resize(size as usize, 0);
+        if self.bytes.len() < size {
+            self.bytes.resize(size, 0);
+        }
         let buffer = self.buffer.as_ref().expect("the upload staging is sized");
-        queue.write_buffer(buffer, 0, &self.bytes);
+        queue.write_buffer(buffer, 0, &self.bytes[..size]);
         for copy in self.copies.drain(..) {
             match copy {
                 Copy::Texture {
@@ -196,18 +198,27 @@ impl Upload {
                 } => encoder.copy_buffer_to_buffer(buffer, offset, &target, target_offset, size),
             }
         }
-        self.bytes.clear();
+        self.filled = 0;
     }
 
     pub fn discard(&mut self) {
-        self.bytes.clear();
+        self.filled = 0;
         self.copies.clear();
     }
 
-    fn reserve(&mut self, bytes: &[u8], alignment: u64) -> u64 {
-        let offset = (self.bytes.len() as u64).next_multiple_of(alignment);
-        self.bytes.resize(offset as usize, 0);
-        self.bytes.extend_from_slice(bytes);
+    fn reserve(&mut self, bytes: &[u8], alignment: usize) -> usize {
+        let offset = self.reserve_blank(bytes.len(), alignment);
+        self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
+        offset
+    }
+
+    fn reserve_blank(&mut self, len: usize, alignment: usize) -> usize {
+        let offset = self.filled.next_multiple_of(alignment);
+        let end = offset + len;
+        if self.bytes.len() < end {
+            self.bytes.resize(end, 0);
+        }
+        self.filled = end;
         offset
     }
 }

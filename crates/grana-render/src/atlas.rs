@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 
 use grana_volume::PADDED_SIDE;
 use wgpu::{
@@ -12,6 +12,8 @@ use grana_volume::CHANNEL_LIMIT;
 use grana_volume::{PACK_LIMIT, components};
 
 const HOLLOW_FRAMES: usize = 8;
+
+const ABSENT: u32 = u32::MAX;
 
 pub(crate) const STRUCTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
@@ -43,6 +45,8 @@ struct Slot {
     brick: Option<ResidentBrick>,
     holds: u8,
     referenced: bool,
+    previous: u32,
+    next: u32,
 }
 
 impl Slot {
@@ -50,7 +54,155 @@ impl Slot {
         brick: None,
         holds: 0,
         referenced: false,
+        previous: ABSENT,
+        next: ABSENT,
     };
+}
+
+#[derive(Clone, Copy)]
+struct Frame {
+    head: u32,
+    tail: u32,
+}
+
+struct Space {
+    words: Vec<u64>,
+    free: usize,
+    cursor: usize,
+}
+
+impl Space {
+    fn new(capacity: usize) -> Self {
+        let mut words = vec![u64::MAX; capacity.div_ceil(u64::BITS as usize)];
+        let held = capacity % u64::BITS as usize;
+        if held != 0
+            && let Some(last) = words.last_mut()
+        {
+            *last = (1u64 << held) - 1;
+        }
+        Self {
+            words,
+            free: capacity,
+            cursor: 0,
+        }
+    }
+
+    fn take(&mut self) -> Option<u32> {
+        if self.free == 0 {
+            return None;
+        }
+        let count = self.words.len();
+        for offset in 0..count {
+            let word = (self.cursor + offset) % count;
+            let bits = self.words[word];
+            if bits == 0 {
+                continue;
+            }
+            let bit = bits.trailing_zeros() as usize;
+            self.words[word] &= !(1u64 << bit);
+            self.free -= 1;
+            self.cursor = word;
+            return Some((word * u64::BITS as usize + bit) as u32);
+        }
+        None
+    }
+
+    fn release(&mut self, slot: u32) {
+        let index = slot as usize;
+        assert!(
+            self.words[index / u64::BITS as usize] & (1u64 << (index % u64::BITS as usize)) == 0,
+            "a released brick slot was occupied"
+        );
+        self.words[index / u64::BITS as usize] |= 1u64 << (index % u64::BITS as usize);
+        self.free += 1;
+    }
+
+    fn restore(&mut self, capacity: usize) {
+        *self = Self::new(capacity);
+    }
+}
+
+#[derive(Default)]
+struct HollowFrame {
+    indices: Vec<u32>,
+}
+
+struct Hollows {
+    frames: HashMap<(u32, usize), HollowFrame>,
+    positions: HashMap<(u32, usize, usize), u32>,
+    remembered: Vec<u32>,
+}
+
+impl Hollows {
+    fn new() -> Self {
+        Self {
+            frames: HashMap::new(),
+            positions: HashMap::new(),
+            remembered: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frames.clear();
+        self.positions.clear();
+        self.remembered.clear();
+    }
+
+    fn holds(&self, time: u32, level: usize, index: usize) -> bool {
+        self.positions.contains_key(&(time, level, index))
+    }
+
+    fn assign(&mut self, time: u32, level: usize, index: usize) {
+        if self.positions.contains_key(&(time, level, index)) {
+            return;
+        }
+        self.remember(time);
+        let positions = &mut self.positions;
+        let frame = self.frames.entry((time, level)).or_default();
+        positions.insert((time, level, index), frame.indices.len() as u32);
+        frame.indices.push(index as u32);
+    }
+
+    fn release(&mut self, time: u32, level: usize, index: usize) -> bool {
+        let Some(position) = self.positions.remove(&(time, level, index)) else {
+            return false;
+        };
+        let empty = {
+            let Some(frame) = self.frames.get_mut(&(time, level)) else {
+                return true;
+            };
+            let last = frame.indices.len() - 1;
+            frame.indices.swap(position as usize, last);
+            frame.indices.pop();
+            if let Some(moved) = frame.indices.get(position as usize) {
+                self.positions
+                    .insert((time, level, *moved as usize), position);
+            }
+            frame.indices.is_empty()
+        };
+        if empty {
+            self.frames.remove(&(time, level));
+        }
+        true
+    }
+
+    fn remember(&mut self, time: u32) {
+        if self.remembered.contains(&time) {
+            return;
+        }
+        self.remembered.push(time);
+        while self.remembered.len() > HOLLOW_FRAMES {
+            let dropped = self.remembered.remove(0);
+            self.frames.retain(|(held, _), _| *held != dropped);
+            self.positions.retain(|(held, _, _), _| *held != dropped);
+        }
+    }
+
+    fn indices(&self, time: u32, level: usize) -> Option<&[u32]> {
+        self.frames
+            .get(&(time, level))
+            .map(|frame| frame.indices.as_slice())
+    }
 }
 
 pub(crate) struct AtlasBinding<'a> {
@@ -66,18 +218,16 @@ pub(crate) struct Atlas {
     source: BindGroup,
     group: BindGroup,
     slot_grid: [u32; 3],
-    free: Vec<u32>,
+    space: Space,
     slots: Vec<Slot>,
+    frames: HashMap<(u32, usize), Frame>,
+    hollow: Hollows,
     hand: usize,
     hold_generation: u8,
     versions: Vec<u32>,
     writes: u64,
     now: u32,
     identity: HashMap<(u32, usize, usize), u32>,
-    frames: BTreeMap<(u32, usize), Vec<u32>>,
-    hollow: HashSet<(u32, usize, usize)>,
-    hollowed: BTreeMap<(u32, usize), Vec<usize>>,
-    remembered: Vec<u32>,
 }
 
 impl Atlas {
@@ -208,18 +358,16 @@ impl Atlas {
             source,
             group,
             slot_grid,
-            free: (0..capacity as u32).rev().collect(),
+            space: Space::new(capacity),
             slots: vec![Slot::EMPTY; capacity],
+            frames: HashMap::new(),
+            hollow: Hollows::new(),
             hand: 0,
             hold_generation: 0,
             versions: vec![0; capacity],
             writes: 0,
             now: 0,
             identity: HashMap::new(),
-            frames: BTreeMap::new(),
-            hollow: HashSet::new(),
-            hollowed: BTreeMap::new(),
-            remembered: Vec::new(),
         }
     }
 
@@ -269,110 +417,100 @@ impl Atlas {
     ) {
         held.clear();
         released.clear();
-        for (time, framed) in self.frames.keys().copied() {
-            if framed == level && self.identity.contains_key(&(time, level, index)) {
-                held.push(ResidentBrick { time, level, index });
+        for frame in self.frames.keys() {
+            if frame.1 != level {
+                continue;
+            }
+            if self.identity.contains_key(&(frame.0, level, index)) {
+                held.push(ResidentBrick {
+                    time: frame.0,
+                    level,
+                    index,
+                });
             }
         }
-        for time in self.remembered.clone() {
-            if self.unhollow(time, level, index) {
+        let remembered = self.hollow.remembered.clone();
+        for time in remembered {
+            if self.hollow.release(time, level, index) {
                 released.push(time);
             }
         }
     }
 
-    fn unhollow(&mut self, time: u32, level: usize, index: usize) -> bool {
-        if !self.hollow.remove(&(time, level, index)) {
-            return false;
-        }
-        let empty = {
-            let hollowed = self.hollowed.entry((time, level)).or_default();
-            if let Some(position) = hollowed.iter().position(|hollow| *hollow == index) {
-                hollowed.remove(position);
-            }
-            hollowed.is_empty()
-        };
-        if empty {
-            self.hollowed.remove(&(time, level));
-        }
-        true
-    }
-
     pub fn evict_other_frames(&mut self, time: u32) -> Vec<ResidentBrick> {
+        let Self {
+            slots,
+            frames,
+            space,
+            identity,
+            ..
+        } = self;
+        let doomed = frames
+            .keys()
+            .copied()
+            .filter(|frame| frame.0 != time)
+            .collect::<Vec<_>>();
         let mut evicted = Vec::new();
-        for (frame, slots) in std::mem::take(&mut self.frames) {
-            if frame.0 == time {
-                self.frames.insert(frame, slots);
+        for key in doomed {
+            let Some(frame) = frames.remove(&key) else {
                 continue;
-            }
-            for slot in slots {
-                let brick = self.slots[slot as usize]
-                    .brick
-                    .expect("a framed slot holds a brick");
-                self.slots[slot as usize] = Slot::EMPTY;
-                self.identity
-                    .remove(&(brick.time, brick.level, brick.index));
-                self.free.push(slot);
+            };
+            let mut cursor = frame.head;
+            while cursor != ABSENT {
+                let slot = &mut slots[cursor as usize];
+                let brick = slot.brick.take().expect("a framed slot holds a brick");
+                let next = slot.next;
+                *slot = Slot::EMPTY;
+                identity.remove(&(brick.time, brick.level, brick.index));
+                space.release(cursor);
                 evicted.push(brick);
+                cursor = next;
             }
         }
         evicted
     }
 
     pub fn is_hollow(&self, time: u32, level: usize, index: usize) -> bool {
-        self.hollow.contains(&(time, level, index))
+        self.hollow.holds(time, level, index)
     }
 
     pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {
-        if !self.hollow.insert((time, level, index)) {
-            return;
-        }
-        self.hollowed.entry((time, level)).or_default().push(index);
-        self.remember(time);
+        self.hollow.assign(time, level, index);
     }
 
     pub fn remember(&mut self, time: u32) {
-        if self.remembered.contains(&time) {
-            return;
-        }
-        self.remembered.push(time);
-        while self.remembered.len() > HOLLOW_FRAMES {
-            let dropped = self.remembered.remove(0);
-            self.hollow.retain(|(held, _, _)| *held != dropped);
-            self.hollowed.retain(|(held, _), _| *held != dropped);
-        }
+        self.hollow.remember(time);
     }
 
     pub fn reset(&mut self) {
-        let capacity = self.slots.len() as u32;
-        self.free = (0..capacity).rev().collect();
+        let capacity = self.slots.len();
+        self.space.restore(capacity);
         self.slots.fill(Slot::EMPTY);
+        self.frames.clear();
+        self.hollow.clear();
         self.hand = 0;
         self.hold_generation = 0;
         self.identity.clear();
-        self.frames.clear();
-        self.hollow.clear();
-        self.hollowed.clear();
-        self.remembered.clear();
     }
 
     pub fn residents(&self, time: u32, level: usize, out: &mut Vec<Resident>) {
         out.clear();
-        if let Some(slots) = self.frames.get(&(time, level)) {
-            for slot in slots {
-                out.push(Resident {
-                    index: self.slots[*slot as usize]
-                        .brick
-                        .expect("a framed slot holds a brick")
-                        .index,
-                    slot: Some(*slot),
-                });
-            }
+        let mut cursor = self
+            .frames
+            .get(&(time, level))
+            .map_or(ABSENT, |frame| frame.head);
+        while cursor != ABSENT {
+            let slot = &self.slots[cursor as usize];
+            out.push(Resident {
+                index: slot.brick.expect("a framed slot holds a brick").index,
+                slot: Some(cursor),
+            });
+            cursor = slot.next;
         }
-        if let Some(indices) = self.hollowed.get(&(time, level)) {
+        if let Some(indices) = self.hollow.indices(time, level) {
             for index in indices {
                 out.push(Resident {
-                    index: *index,
+                    index: *index as usize,
                     slot: None,
                 });
             }
@@ -405,32 +543,60 @@ impl Atlas {
         }
     }
 
-    pub fn allocate(&mut self, now: u32, request: u32) -> Option<(u32, Option<ResidentBrick>)> {
+    pub fn reserve(
+        &mut self,
+        now: u32,
+        allow_future: bool,
+        count: usize,
+        evicted: &mut Vec<ResidentBrick>,
+    ) -> Vec<u32> {
         self.now = now;
-        if let Some(slot) = self.free.pop() {
-            return Some((slot, None));
+        let mut slots = Vec::with_capacity(count);
+        while slots.len() < count {
+            if let Some(slot) = self.space.take() {
+                slots.push(slot);
+                continue;
+            }
+            let Some(victim) = self.victim(allow_future) else {
+                break;
+            };
+            if let Some(brick) = self.detach(victim) {
+                evicted.push(brick);
+            }
+            slots.push(victim);
         }
-        let victim = self.victim(request <= now)?;
-        let brick = self.slots[victim as usize]
-            .brick
-            .expect("the eviction candidate holds a brick");
-        self.slots[victim as usize] = Slot::EMPTY;
-        self.identity
-            .remove(&(brick.time, brick.level, brick.index));
-        self.forget(brick.time, brick.level, victim);
-        Some((victim, Some(brick)))
+        slots
     }
 
-    fn forget(&mut self, time: u32, level: usize, slot: u32) {
-        let Some(slots) = self.frames.get_mut(&(time, level)) else {
-            return;
-        };
-        if let Some(position) = slots.iter().position(|framed| *framed == slot) {
-            slots.remove(position);
+    fn detach(&mut self, slot: u32) -> Option<ResidentBrick> {
+        let Self {
+            slots,
+            frames,
+            identity,
+            ..
+        } = self;
+        let held = slots[slot as usize];
+        let brick = held.brick?;
+        let key = (brick.time, brick.level);
+        let (previous, next) = (held.previous, held.next);
+        slots[slot as usize] = Slot::EMPTY;
+        identity.remove(&(brick.time, brick.level, brick.index));
+        if let Some(frame) = frames.get_mut(&key) {
+            if previous == ABSENT {
+                frame.head = next;
+            } else {
+                slots[previous as usize].next = next;
+            }
+            if next == ABSENT {
+                frame.tail = previous;
+            } else {
+                slots[next as usize].previous = previous;
+            }
+            if frame.head == ABSENT {
+                frames.remove(&key);
+            }
         }
-        if slots.is_empty() {
-            self.frames.remove(&(time, level));
-        }
+        Some(brick)
     }
 
     fn victim(&mut self, allow_future: bool) -> Option<u32> {
@@ -472,32 +638,38 @@ impl Atlas {
     }
 
     pub fn assign(&mut self, slot: u32, brick: ResidentBrick, hold: bool) {
-        self.release(slot);
-        self.unhollow(brick.time, brick.level, brick.index);
-        self.identity
-            .insert((brick.time, brick.level, brick.index), slot);
-        self.frames
-            .entry((brick.time, brick.level))
-            .or_default()
-            .push(slot);
-        {
-            let placed = &mut self.slots[slot as usize];
-            placed.brick = Some(brick);
-            placed.referenced = true;
+        let Self {
+            slots,
+            frames,
+            identity,
+            hollow,
+            ..
+        } = self;
+        assert!(
+            slots[slot as usize].brick.is_none(),
+            "an allocated brick slot is vacant"
+        );
+        hollow.release(brick.time, brick.level, brick.index);
+        identity.insert((brick.time, brick.level, brick.index), slot);
+        let frame = frames.entry((brick.time, brick.level)).or_insert(Frame {
+            head: ABSENT,
+            tail: ABSENT,
+        });
+        let tail = frame.tail;
+        slots[slot as usize].previous = tail;
+        slots[slot as usize].next = ABSENT;
+        slots[slot as usize].brick = Some(brick);
+        slots[slot as usize].referenced = true;
+        if tail == ABSENT {
+            frame.head = slot;
+        } else {
+            slots[tail as usize].next = slot;
         }
+        frame.tail = slot;
         if hold {
-            self.hold(slot);
+            slots[slot as usize].holds |= 1 << self.hold_generation;
         }
         self.written(slot);
-    }
-
-    fn release(&mut self, slot: u32) {
-        let Some(previous) = self.slots[slot as usize].brick else {
-            return;
-        };
-        self.identity
-            .remove(&(previous.time, previous.level, previous.index));
-        self.forget(previous.time, previous.level, slot);
     }
 
     pub fn texture(&self, pack: usize) -> &Texture {

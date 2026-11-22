@@ -2018,6 +2018,79 @@ fn keeps_the_accumulated_image_through_a_quiet_camera_move() {
 }
 
 #[test]
+fn keeps_the_demand_plan_through_a_sub_brick_pan() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let pyramid = volume.pyramid();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let resting = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle(&gpu, &mut renderer, &resting, &volume);
+    assert!(!renderer.requests_pending());
+    let mut quiet = camera.clone();
+    quiet.pan(Vec2::new(1.0, 0.0), SIDE as f32);
+    let nudged = View {
+        target: &view_texture,
+        camera: &quiet,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    renderer
+        .draw(gpu.device(), gpu.queue(), capped(&nudged, CAP))
+        .expect("the nudged frame draws");
+    assert!(
+        !renderer.requests_pending(),
+        "a sub-brick pan keeps the demand plan it already holds"
+    );
+    let mut loud = camera.clone();
+    loud.pan(Vec2::new(64.0, 0.0), SIDE as f32);
+    let panned = View {
+        target: &view_texture,
+        camera: &loud,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    renderer
+        .draw(gpu.device(), gpu.queue(), capped(&panned, CAP))
+        .expect("the panned frame draws");
+    assert!(
+        renderer.requests_pending(),
+        "a pan across bricks plans the demand again"
+    );
+}
+
+#[test]
 fn reports_a_converged_image_only_when_it_stops_changing() {
     let Some(gpu) = gpu() else {
         return;

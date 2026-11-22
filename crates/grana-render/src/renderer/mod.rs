@@ -10,10 +10,9 @@ mod timing;
 mod view;
 
 use plan::Residence;
-use residency::{FrameTarget, LevelKey, Levels, Mode, TargetCache, ViewKey, ViewState};
+use residency::{FrameTarget, LevelKey, Levels, TargetCache, ViewKey};
 use resources::Resources;
 use signature::Signature;
-use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
