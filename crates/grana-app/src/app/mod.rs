@@ -283,6 +283,7 @@ impl App {
             gpu.device.clone(),
             gpu.queue.clone(),
             gpu.format(),
+            grana_render::texture_budget(gpu.memory()),
             gpu.pipelines().clone(),
         ));
         let mut ui: Ui<grana_editor::Message> =
@@ -705,11 +706,12 @@ fn spawn_engine(
     device: wgpu::Device,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
+    budget: u64,
     pipelines: grana_gpu::Pipelines,
 ) -> Receiver<Engine> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(Engine::new(&device, &queue, format, &pipelines));
+        let _ = sender.send(Engine::new(&device, &queue, format, budget, &pipelines));
     });
     receiver
 }

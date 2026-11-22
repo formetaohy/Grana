@@ -3,6 +3,7 @@ mod codec;
 mod color;
 mod directory;
 mod error;
+mod fileset;
 mod image;
 mod layout;
 mod page;

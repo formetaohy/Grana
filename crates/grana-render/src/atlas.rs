@@ -553,7 +553,6 @@ impl Atlas {
     pub fn reserve(
         &mut self,
         now: u32,
-        allow_future: bool,
         count: usize,
         evicted: &mut Vec<ResidentBrick>,
     ) -> Vec<u32> {
@@ -564,13 +563,28 @@ impl Atlas {
                 slots.push(slot);
                 continue;
             }
-            let Some(victim) = self.victim(allow_future) else {
+            let Some(victim) = self.victim() else {
                 break;
             };
             if let Some(brick) = self.detach(victim) {
                 evicted.push(brick);
             }
             slots.push(victim);
+        }
+        slots
+    }
+
+    pub fn vacancies(&self) -> usize {
+        self.space.free
+    }
+
+    pub fn reserve_vacant(&mut self, count: usize) -> Vec<u32> {
+        let mut slots = Vec::with_capacity(count.min(self.space.free));
+        while slots.len() < count {
+            let Some(slot) = self.space.take() else {
+                break;
+            };
+            slots.push(slot);
         }
         slots
     }
@@ -607,11 +621,11 @@ impl Atlas {
         Some(brick)
     }
 
-    fn victim(&mut self, allow_future: bool) -> Option<u32> {
-        self.sweep(false, true)
+    fn victim(&mut self) -> Option<u32> {
+        self.sweep(true, true)
+            .or_else(|| self.sweep(true, false))
+            .or_else(|| self.sweep(false, true))
             .or_else(|| self.sweep(false, false))
-            .or_else(|| allow_future.then(|| self.sweep(true, true)).flatten())
-            .or_else(|| allow_future.then(|| self.sweep(true, false)).flatten())
     }
 
     fn sweep(&mut self, future: bool, referenced: bool) -> Option<u32> {

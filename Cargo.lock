@@ -3640,6 +3640,7 @@ dependencies = [
  "grana-log",
  "pollster",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

@@ -162,12 +162,11 @@ impl ViewKey {
             && self.slice == other.slice
     }
 
-    pub(super) fn digest(&self) -> u64 {
+    pub(super) fn prefetch_digest(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.epoch.hash(&mut hasher);
         self.prefetch.hash(&mut hasher);
         self.assured.hash(&mut hasher);
-        self.time.hash(&mut hasher);
         self.size.hash(&mut hasher);
         self.levels.ladder.hash(&mut hasher);
         self.levels.capacity.hash(&mut hasher);

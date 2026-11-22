@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+﻿use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
@@ -1567,6 +1567,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        256 << 20,
         gpu.pipelines(),
     );
     engine.set_dataset(
@@ -1675,6 +1676,7 @@ fn reads_each_streamed_brick_once() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        256 << 20,
         gpu.pipelines(),
     );
     let pyramid = session

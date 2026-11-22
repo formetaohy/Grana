@@ -6,6 +6,7 @@ use crate::image::{Channel, Image, Plane, TiffData};
 pub struct Metadata {
     pub images: Vec<Image>,
     pub binary_only: bool,
+    pub uuid: Option<String>,
 }
 
 pub fn parse(xml: &str) -> Result<Metadata, String> {
@@ -13,10 +14,12 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
     reader.config_mut().trim_text(true);
     let mut images: Vec<Image> = Vec::new();
     let mut binary_only = false;
+    let mut uuid = None;
     let mut depth = 0usize;
     let mut image_depth = None;
     let mut pending: Option<TiffData> = None;
     let mut annotation: Option<Annotation> = None;
+    let mut uuid_text: Option<String> = None;
     loop {
         let event = reader.read_event().map_err(|error| error.to_string())?;
         match event {
@@ -34,11 +37,16 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
                     element(&start, series, &mut pending)?;
                 } else if name.as_ref() == b"BinaryOnly" {
                     binary_only = true;
+                } else if name.as_ref() == b"OME" && uuid.is_none() {
+                    uuid = attribute(&start, b"UUID")?;
                 }
                 if name.as_ref() == b"MapAnnotation" {
                     annotation = Some(Annotation::new());
                 } else if let Some(held) = annotation.as_mut() {
                     held.enter(name.as_ref());
+                }
+                if name.as_ref() == b"UUID" && pending.is_some() {
+                    uuid_text = Some(String::new());
                 }
             }
             Event::Empty(start) => {
@@ -58,9 +66,17 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
                     }
                 } else if name.as_ref() == b"BinaryOnly" {
                     binary_only = true;
+                } else if name.as_ref() == b"OME" && uuid.is_none() {
+                    uuid = attribute(&start, b"UUID")?;
                 }
             }
             Event::Text(text) => {
+                if let Some(held) = uuid_text.as_mut() {
+                    let decoded = text.decode().map_err(|error| error.to_string())?;
+                    let value =
+                        quick_xml::escape::unescape(&decoded).map_err(|error| error.to_string())?;
+                    held.push_str(&value);
+                }
                 if let Some(held) = annotation.as_mut() {
                     let decoded = text.decode().map_err(|error| error.to_string())?;
                     let value =
@@ -71,6 +87,15 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
             Event::End(end) => {
                 let name = end.name();
                 let name = name.local_name();
+                if name.as_ref() == b"UUID"
+                    && let Some(held) = uuid_text.take()
+                    && let Some(block) = pending.as_mut()
+                {
+                    let held = held.trim();
+                    if !held.is_empty() {
+                        block.uuid = Some(held.to_string());
+                    }
+                }
                 if image_depth.is_some() && name.as_ref() == b"TiffData" {
                     let series = images.last_mut().expect("an Image element opened a series");
                     if let Some(block) = pending.take() {
@@ -99,6 +124,7 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
     Ok(Metadata {
         images,
         binary_only,
+        uuid,
     })
 }
 
@@ -204,6 +230,7 @@ fn element(
                 planes: integer_attribute(start, b"PlaneCount")?
                     .unwrap_or(u32::from(ifd.is_some())),
                 file: attribute(start, b"FileName")?,
+                uuid: None,
             });
             Ok(())
         }

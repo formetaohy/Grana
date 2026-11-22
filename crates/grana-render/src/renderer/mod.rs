@@ -504,6 +504,7 @@ impl Renderer {
             .resources
             .as_ref()
             .map_or(0, |resources| resources.atlas.evictions());
+        let (prefetched, prefetch_hits) = self.residence.prefetch_counts();
         Statistics {
             plans: self.plans,
             waits: self.waits,
@@ -512,6 +513,8 @@ impl Renderer {
             copies,
             staged,
             payload,
+            prefetched,
+            prefetch_hits,
         }
     }
 

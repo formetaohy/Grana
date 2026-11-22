@@ -38,6 +38,7 @@ pub struct TiffData {
     pub t: u32,
     pub planes: u32,
     pub file: Option<String>,
+    pub uuid: Option<String>,
 }
 
 #[derive(Default, Clone)]

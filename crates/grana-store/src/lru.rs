@@ -151,6 +151,13 @@ impl<K: Copy + Eq + Hash, V> LruCache<K, V> {
         }
     }
 
+    pub fn single(budget: u64, size: fn(&V) -> u64) -> Self {
+        Self {
+            shards: vec![Mutex::new(Shard::new(budget.max(1)))],
+            size,
+        }
+    }
+
     pub fn fetch(&self, key: K) -> Option<Arc<V>> {
         self.lock(key).fetch(key)
     }

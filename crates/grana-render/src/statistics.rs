@@ -7,4 +7,6 @@ pub struct Statistics {
     pub copies: u64,
     pub staged: u64,
     pub payload: u64,
+    pub prefetched: u64,
+    pub prefetch_hits: u64,
 }

@@ -60,9 +60,11 @@ impl App {
             let current = session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
-            if current {
-                session.request(requests.time, &requests.volume, &requests.prefetch);
-            }
+            session.request(
+                time,
+                if current { &requests.volume } else { &[] },
+                &requests.prefetch,
+            );
         }
         let view = session.take_view();
         if let Some(view) = view {

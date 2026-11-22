@@ -56,10 +56,11 @@ impl Resources {
             .iter()
             .map(|level| BrickGrid::new(level.extent()).count() as u64)
             .sum::<u64>();
-        let packed = (0..pack_count(channels))
-            .map(|pack| texels(components(channels, pack)))
-            .sum::<usize>();
-        let source_bytes = (PADDED_SIDE as u64).pow(3) * size_of::<u16>() as u64 * packed as u64;
+        let source_bytes = (0..pack_count(channels))
+            .map(|pack| texels(components(channels, pack)) as u64)
+            .sum::<u64>()
+            * (PADDED_SIDE as u64).pow(3)
+            * size_of::<u16>() as u64;
         let slot_bytes = source_bytes + crate::atlas::STRUCTURE_BYTES;
         let requested = (budget / slot_bytes).max(1).min(holdable);
         let atlas = Atlas::new(
@@ -286,6 +287,8 @@ impl Resources {
                 }
                 let grid = BrickGrid::new(extent);
                 let index = grid.index(coord);
+                prefetched.remove(request);
+                let demand = held == time;
                 let bound = tables[level]
                     .as_ref()
                     .is_some_and(|table| table.time() == Some(held));
@@ -338,7 +341,7 @@ impl Resources {
                     held,
                     level,
                     index,
-                    demand: !prefetched.contains(request),
+                    demand,
                     current,
                     publish,
                 });
@@ -346,8 +349,9 @@ impl Resources {
             }
         }
         let mut evicted = Vec::new();
-        let allow_future = missing.iter().all(|held| held.held <= time);
-        let slots = atlas.reserve(time, allow_future, missing.len(), &mut evicted);
+        let (demand, prefetch): (Vec<Pending>, Vec<Pending>) =
+            missing.into_iter().partition(|held| held.demand);
+        let slots = atlas.reserve(time, demand.len(), &mut evicted);
         for brick in evicted {
             if let Some(other) = tables.get_mut(brick.level).and_then(Option::as_mut)
                 && other.drop_record(arena, brick.index, brick.time)
@@ -356,7 +360,12 @@ impl Resources {
             }
             released.push((brick.time, brick.level, brick.index));
         }
-        for (held, slot) in missing.iter().zip(&slots) {
+        let prefetch_slots = atlas.reserve_vacant(prefetch.len());
+        for (held, slot) in demand
+            .iter()
+            .zip(&slots)
+            .chain(prefetch.iter().zip(&prefetch_slots))
+        {
             let (position, packed) = (held.position, &bricks[held.position].1);
             occupancy.reset(*slot);
             for (pack, block) in packed.packs() {
@@ -421,6 +430,7 @@ impl Resources {
         let content = residence.content();
         let mut generation = residence.generation();
         let mut released = Vec::new();
+        residence.discard(requests);
         for request in requests {
             let BrickRequest {
                 time: held,

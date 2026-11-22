@@ -454,13 +454,24 @@ fn compose(placement: Placement<'_>) -> Result<Dataset, Error> {
         }
     }
     if stored == 2 {
+        if let Some(row) = target_axes[2] {
+            for input in source_axes.iter().take(2).flatten() {
+                if total.linear(row, *input).abs() > DEPENDENCE_TOLERANCE {
+                    return Err(Error::Unsupported {
+                        path: path.to_string(),
+                        detail: format!(
+                            "the placement of `{name}` tilts its plane out of the plane"
+                        ),
+                    });
+                }
+            }
+        }
         let spacing = (0..3)
             .map(|component| columns[0][component].abs().max(columns[1][component].abs()))
             .filter(|value| *value > 0.0)
             .fold(f64::INFINITY, f64::min);
         let spacing = if spacing.is_finite() { spacing } else { 1.0 };
         columns[2] = [0.0, 0.0, spacing];
-        origin[2] = 0.0;
     }
     let determinant = determinant(&columns);
     let volume = length(&columns[0]) * length(&columns[1]) * length(&columns[2]);

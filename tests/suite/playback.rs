@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+﻿use std::time::{Duration, Instant};
 
 use glam::Vec3;
 use grana_display::Camera;
@@ -36,6 +36,7 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        256 << 20,
         gpu.pipelines(),
     );
     engine.set_dataset(

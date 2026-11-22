@@ -1676,7 +1676,109 @@ fn reads_ome_tiff_metadata_and_voxels() {
         Spacing::new(0.5, 0.5, 0.5)
     );
     assert_eq!(stack.pyramid().calibration(), Calibration::Assumed);
+    let late = temp.path().join("late.ome.tif");
+    support::ome_tiff(&late, LATE_PLANE, &[(2, 2, &[3u8; 4]), (2, 2, &[5u8; 4])]);
+    let late = grana_tiff::Image::open(&late, 0).expect("the late plane opens");
+    let placed = late.pyramid().placement();
+    assert!(
+        (placed[0] - 100.0).abs() <= 1.0e-4,
+        "the plane centre carries x"
+    );
+    assert!(
+        (placed[1] - 200.0).abs() <= 1.0e-4,
+        "the plane centre carries y"
+    );
+    assert!(
+        (placed[2] - 13.25).abs() <= 1.0e-4,
+        "a stack centred on a plane at z 1 sits half a step below its position: {}",
+        placed[2]
+    );
     reads_a_chunky_series(&temp.path().join("chunky.ome.tif"));
+}
+
+const LATE_PLANE: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",
+    " <Image Name=\"Late\">\n",
+    "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"2\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"µm\" PhysicalSizeZ=\"1.5\" PhysicalSizeZUnit=\"µm\">\n",
+    "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+    "   <TiffData IFD=\"0\" PlaneCount=\"2\"/>\n",
+    "   <Plane TheZ=\"1\" TheC=\"0\" TheT=\"0\" PositionX=\"100\" PositionXUnit=\"µm\" PositionY=\"200\" PositionYUnit=\"µm\" PositionZ=\"14\" PositionZUnit=\"µm\"/>\n",
+    "  </Pixels>\n",
+    " </Image>\n",
+    "</OME>\n"
+);
+
+#[test]
+fn reads_a_multi_file_ome_tiff_by_uuid() {
+    let temp = Temp::new("suite-ome-tiff-fileset");
+    let first = temp.path().join("first.ome.tif");
+    let second = temp.path().join("second.ome.tif");
+    let first_uuid = "urn:uuid:2b6f3d9f-2c11-4b34-9d1a-0b6f3d9f2c11";
+    let second_uuid = "urn:uuid:5f3e0f1c-6b8a-4b34-9d1a-0b6f3d9f2c11";
+    support::ome_tiff(
+        &first,
+        &split_xml(first_uuid, first_uuid, second_uuid),
+        &[(2, 1, &[1u8, 2])],
+    );
+    support::ome_tiff(
+        &second,
+        &split_xml(second_uuid, first_uuid, second_uuid),
+        &[(2, 1, &[3u8, 4])],
+    );
+    let expected = [1u8, 2, 3, 4];
+    for path in [&first, &second] {
+        let image = grana_tiff::Image::open(path, 0).expect("the split series opens");
+        assert_eq!(image.pyramid().level(0).extent(), Extent::new(2, 1, 2));
+        let VoxelData::U8(values) = image
+            .read_region(0, 0, 0, 0..2, 0..1, 0..2)
+            .expect("the split series reads")
+        else {
+            panic!("the split series stores bytes");
+        };
+        assert_eq!(
+            values, expected,
+            "each plane comes from the file its UUID names"
+        );
+    }
+    let orphan = Temp::new("suite-ome-tiff-orphan");
+    let path = orphan.path().join("orphan.ome.tif");
+    support::ome_tiff(
+        &path,
+        &split_xml(
+            first_uuid,
+            first_uuid,
+            "urn:uuid:9d1a0b6f-3d9f-2c11-4b34-2b6f3d9f2c11",
+        ),
+        &[(2, 1, &[1u8, 2])],
+    );
+    let detail = grana_tiff::Image::open(&path, 0)
+        .err()
+        .expect("a series cannot name a missing file");
+    assert!(
+        detail.to_string().contains("missing UUID"),
+        "an unresolved file signature is refused: {detail}"
+    );
+}
+
+fn split_xml(root: &str, first: &str, second: &str) -> String {
+    format!(
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\" UUID=\"{root}\">\n",
+            " <Image Name=\"Split\">\n",
+            "  <Pixels DimensionOrder=\"XYZCT\" Type=\"uint8\" SizeX=\"2\" SizeY=\"1\" SizeZ=\"2\" SizeC=\"1\" SizeT=\"1\" PhysicalSizeX=\"0.5\" PhysicalSizeXUnit=\"µm\" PhysicalSizeY=\"0.5\" PhysicalSizeYUnit=\"µm\">\n",
+            "   <Channel ID=\"Channel:0:0\" Name=\"GFP\" SamplesPerPixel=\"1\"/>\n",
+            "   <TiffData IFD=\"0\" PlaneCount=\"1\" FirstZ=\"0\"><UUID>{first}</UUID></TiffData>\n",
+            "   <TiffData IFD=\"0\" PlaneCount=\"1\" FirstZ=\"1\"><UUID>{second}</UUID></TiffData>\n",
+            "  </Pixels>\n",
+            " </Image>\n",
+            "</OME>\n"
+        ),
+        root = root,
+        first = first,
+        second = second
+    )
 }
 
 const TWO_SERIES: &str = concat!(
@@ -1976,6 +2078,190 @@ fn opens_a_scene_root_and_composites_its_images() {
     );
     let loaded = Image::open(&Source::file(path)).expect("the scene opens through the loader");
     assert_eq!(loaded.pyramid().level(0).extent(), Extent::new(12, 4, 1));
+}
+
+#[test]
+fn places_two_dimensional_slices_on_their_layers() {
+    let temp = Temp::new("suite-zarr-layers");
+    let path = temp.path().join("layers.ome.zarr");
+    write_plane_member(&path.join("lower"), 7.0);
+    write_plane_member(&path.join("upper"), 9.0);
+    write_plane_scene(&path, &[("lower", 0.0), ("upper", 5.0)]);
+    let scene = grana_zarr::Image::open(&path).expect("the layered scene opens");
+    assert_eq!(scene.pyramid().level(0).extent(), Extent::new(6, 4, 6));
+    let lower = scene
+        .read_region(0, 0, 0, 0..6, 0..4, 0..1)
+        .expect("the lower layer reads");
+    assert_eq!(lower.value(0), 7.0);
+    let upper = scene
+        .read_region(0, 0, 0, 0..6, 0..4, 5..6)
+        .expect("the upper layer reads");
+    assert_eq!(upper.value(0), 9.0);
+    let direct = temp.path().join("direct.ome.zarr");
+    write_plane_image(&direct, 7.0);
+    let direct = grana_zarr::Image::open(&direct).expect("the placed plane opens");
+    assert_eq!(direct.pyramid().level(0).extent(), Extent::new(6, 4, 1));
+    assert!(
+        (direct.pyramid().placement()[2] - 5.0).abs() <= 1.0e-4,
+        "a plane mapped into three dimensions keeps its translation: {}",
+        direct.pyramid().placement()[2]
+    );
+}
+
+fn plane_axes() -> serde_json::Value {
+    serde_json::json!([
+        { "name": "t", "type": "time", "unit": "second" },
+        { "name": "c", "type": "channel" },
+        { "name": "y", "type": "space", "unit": "micrometer" },
+        { "name": "x", "type": "space", "unit": "micrometer" },
+    ])
+}
+
+fn plane_translation(matrix: [[f64; 5]; 3]) -> serde_json::Value {
+    serde_json::json!({
+        "type": "affine",
+        "affine": matrix,
+    })
+}
+
+fn write_plane_array(path: &std::path::Path, value: f32) {
+    std::fs::create_dir_all(path).expect("the plane directory creates");
+    let store =
+        Arc::new(zarrs::filesystem::FilesystemStore::new(path).expect("the plane store opens"));
+    let array = zarrs::array::ArrayBuilder::new(
+        vec![1, 1, 4, 6],
+        vec![1, 1, 4, 6],
+        zarrs::array::data_type::float32(),
+        zarrs::array::FillValue::from(0.0f32),
+    )
+    .dimension_names(Some(
+        ["t", "c", "y", "x"]
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<String>>(),
+    ))
+    .build(store, "/0")
+    .expect("the plane array builds");
+    array
+        .store_metadata()
+        .expect("the plane array stores its metadata");
+    let mut bytes = Vec::new();
+    for _ in 0..24 {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    array
+        .store_chunk(&[0, 0, 0, 0], zarrs::array::ArrayBytes::new_flen(bytes))
+        .expect("the plane chunk stores");
+}
+
+fn plane_group(path: &std::path::Path, multiscale: serde_json::Value) {
+    std::fs::create_dir_all(path).expect("the plane group creates");
+    let attributes = serde_json::json!({
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": { "ome": { "version": "0.6", "multiscales": [multiscale] } }
+    });
+    std::fs::write(path.join("zarr.json"), attributes.to_string())
+        .expect("the plane group writes its metadata");
+}
+
+fn write_plane_member(path: &std::path::Path, value: f32) {
+    write_plane_array(path, value);
+    plane_group(
+        path,
+        serde_json::json!({
+            "name": "plane",
+            "coordinateSystems": [{ "name": "physical", "axes": plane_axes() }],
+            "datasets": [{
+                "path": "0",
+                "coordinateTransformations": [{
+                    "type": "sequence",
+                    "input": { "path": "0" },
+                    "output": { "name": "physical" },
+                    "transformations": [
+                        { "type": "scale", "scale": [1, 1, 1, 1] },
+                        { "type": "translation", "translation": [0, 0, 0, 0] },
+                    ],
+                }],
+            }],
+        }),
+    );
+}
+
+fn write_plane_image(path: &std::path::Path, value: f32) {
+    write_plane_array(path, value);
+    plane_group(
+        path,
+        serde_json::json!({
+            "name": "plane",
+            "coordinateSystems": [
+                { "name": "physical", "axes": plane_axes() },
+                { "name": "stage", "axes": [
+                    { "name": "x", "type": "space", "unit": "micrometer" },
+                    { "name": "y", "type": "space", "unit": "micrometer" },
+                    { "name": "z", "type": "space", "unit": "micrometer" },
+                ] },
+            ],
+            "datasets": [{
+                "path": "0",
+                "coordinateTransformations": [{
+                    "type": "sequence",
+                    "input": { "path": "0" },
+                    "output": { "name": "physical" },
+                    "transformations": [
+                        { "type": "scale", "scale": [1, 1, 1, 1] },
+                        { "type": "translation", "translation": [0, 0, 0, 0] },
+                    ],
+                }],
+            }],
+            "coordinateTransformations": [{
+                "type": "sequence",
+                "input": { "name": "physical" },
+                "output": { "name": "stage" },
+                "transformations": [plane_translation([
+                    [0.0, 0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0, 5.0],
+                ])],
+            }],
+        }),
+    );
+}
+
+fn write_plane_scene(path: &std::path::Path, members: &[(&str, f64)]) {
+    std::fs::create_dir_all(path).expect("the scene directory creates");
+    let transforms = members
+        .iter()
+        .map(|(group, layer)| {
+            let mut matrix = [[0.0; 5]; 3];
+            matrix[0][3] = 1.0;
+            matrix[1][2] = 1.0;
+            matrix[2][4] = *layer;
+            serde_json::json!({
+                "type": "affine",
+                "input": { "path": group, "name": "physical" },
+                "output": { "name": "world" },
+                "affine": matrix,
+            })
+        })
+        .collect::<Vec<_>>();
+    let attributes = serde_json::json!({
+        "zarr_format": 3,
+        "node_type": "group",
+        "attributes": { "ome": {
+            "version": "0.6",
+            "scene": {
+                "coordinateSystems": [{ "name": "world", "axes": [
+                    { "name": "x", "type": "space", "unit": "micrometer" },
+                    { "name": "y", "type": "space", "unit": "micrometer" },
+                    { "name": "z", "type": "space", "unit": "micrometer" },
+                ] }],
+                "coordinateTransformations": transforms,
+            },
+        } }
+    });
+    std::fs::write(path.join("zarr.json"), attributes.to_string())
+        .expect("the scene metadata writes");
 }
 
 fn write_scene_member(path: &std::path::Path, offset: f32, value: f32) {

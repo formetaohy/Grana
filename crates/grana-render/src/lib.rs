@@ -2,6 +2,7 @@ mod ao;
 mod atlas;
 mod bake;
 mod brick;
+mod budget;
 mod clear;
 mod culling;
 mod detail;
@@ -32,6 +33,7 @@ mod temporal;
 mod upload;
 mod volume;
 
+pub use budget::texture_budget;
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
 pub use fragment::{Fragment, fit as fragment_fit};
 pub use image::{Pixels, stride as picture_stride, target as picture_target};

@@ -13,5 +13,8 @@ grana-log = { workspace = true }
 pollster = { workspace = true }
 wgpu = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Dxgi"] }
+
 [lints]
 workspace = true

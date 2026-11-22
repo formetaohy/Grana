@@ -9,6 +9,7 @@ use wgpu::{
 
 use crate::Pipelines;
 use crate::REQUIRED_FEATURES;
+use crate::memory::Memory;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
@@ -20,6 +21,7 @@ pub struct Gpu {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub adapter: String,
+    memory: Option<Memory>,
     lost: Lost,
     pipelines: Pipelines,
 }
@@ -27,6 +29,7 @@ pub struct Gpu {
 pub struct Headless {
     pub device: Device,
     pub queue: Queue,
+    memory: Option<Memory>,
     lost: Lost,
     pipelines: Pipelines,
 }
@@ -97,6 +100,7 @@ impl Headless {
                 match acquire(&instance, None, fallback) {
                     Ok((adapter, device, queue)) => {
                         let info = adapter.get_info();
+                        let memory = Memory::of(&info);
                         grana_log::info!(
                             target: "grana::gpu",
                             adapter = %info.name,
@@ -108,6 +112,7 @@ impl Headless {
                         return Ok(Self {
                             device,
                             queue,
+                            memory,
                             lost,
                             pipelines,
                         });
@@ -130,6 +135,7 @@ impl Headless {
             .map(|headless| Self {
                 device: headless.device.clone(),
                 queue: headless.queue.clone(),
+                memory: headless.memory,
                 lost: headless.lost.clone(),
                 pipelines: headless.pipelines.clone(),
             })
@@ -138,6 +144,10 @@ impl Headless {
 
     pub fn format(&self) -> TextureFormat {
         HEADLESS_FORMAT
+    }
+
+    pub fn memory(&self) -> Option<&Memory> {
+        self.memory.as_ref()
     }
 
     pub fn lost(&self) -> Option<String> {
@@ -187,6 +197,7 @@ impl Gpu {
         size: [u32; 2],
     ) -> Self {
         let info = adapter.get_info();
+        let memory = Memory::of(&info);
         let description = format!("{} · {:?}", info.name, info.backend);
         grana_log::info!(target: "grana::gpu", adapter = %description, "graphics device ready");
         println!("grana: using {description}");
@@ -222,6 +233,7 @@ impl Gpu {
             queue,
             config,
             adapter: description,
+            memory,
             lost,
             pipelines,
         }
@@ -229,6 +241,10 @@ impl Gpu {
 
     pub fn format(&self) -> TextureFormat {
         self.config.format
+    }
+
+    pub fn memory(&self) -> Option<&Memory> {
+        self.memory.as_ref()
     }
 
     pub fn lost(&self) -> Option<String> {

@@ -58,6 +58,7 @@ sha2 = "0.10"
 semver = "1"
 self-replace = "1"
 ureq = "3"
+windows = "0.62"
 windows-sys = "0.61"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.13"

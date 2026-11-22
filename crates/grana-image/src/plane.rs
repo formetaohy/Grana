@@ -1,6 +1,5 @@
-use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use grana_volume::{Extent, VoxelData, VoxelFormat, VoxelSemantics};
 
@@ -40,14 +39,7 @@ impl Plane {
 }
 
 pub(crate) struct Caches {
-    levels: Vec<Mutex<Inner>>,
-    budgets: Vec<u64>,
-}
-
-struct Inner {
-    entries: HashMap<Key, Arc<Plane>>,
-    order: VecDeque<Key>,
-    bytes: u64,
+    levels: Vec<grana_store::LruCache<Key, Plane>>,
 }
 
 impl Caches {
@@ -75,54 +67,27 @@ impl Caches {
                 remaining = remaining.saturating_sub(budget);
                 budget
             })
-            .collect();
+            .collect::<Vec<_>>();
         Self {
-            levels: pyramid
-                .levels()
-                .iter()
-                .map(|_| {
-                    Mutex::new(Inner {
-                        entries: HashMap::new(),
-                        order: VecDeque::new(),
-                        bytes: 0,
-                    })
-                })
+            levels: budgets
+                .into_iter()
+                .map(|budget| grana_store::LruCache::single(budget, Plane::bytes))
                 .collect(),
-            budgets,
         }
     }
 
     pub(crate) fn fetch(&self, key: Key) -> Option<Arc<Plane>> {
-        let mut inner = self.lock(key.level as usize);
-        let plane = inner.entries.get(&key).cloned()?;
-        inner.order.retain(|held| *held != key);
-        inner.order.push_back(key);
-        Some(plane)
+        self.level(key.level).fetch(key)
     }
 
     pub(crate) fn insert(&self, key: Key, plane: Arc<Plane>) {
-        let budget = self.budgets[key.level as usize];
-        let mut inner = self.lock(key.level as usize);
-        if let Some(held) = inner.entries.insert(key, plane) {
-            inner.bytes = inner.bytes.saturating_sub(held.bytes());
-        }
-        inner.order.retain(|held| *held != key);
-        inner.order.push_back(key);
-        inner.bytes += inner.entries[&key].bytes();
-        while inner.bytes > budget {
-            let Some(victim) = inner.order.pop_front() else {
-                break;
-            };
-            if let Some(held) = inner.entries.remove(&victim) {
-                inner.bytes = inner.bytes.saturating_sub(held.bytes());
-            }
-        }
+        self.level(key.level).insert(key, plane);
     }
 
-    fn lock(&self, level: usize) -> MutexGuard<'_, Inner> {
-        self.levels[level]
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+    fn level(&self, level: u32) -> &grana_store::LruCache<Key, Plane> {
+        self.levels
+            .get(level as usize)
+            .expect("a cached plane names a level of the pyramid")
     }
 }
 

@@ -203,9 +203,7 @@ impl Member {
                     first[1] + step[2][1] * z as f64 + step[1][1] * y as f64,
                     first[2] + step[2][2] * z as f64 + step[1][2] * y as f64,
                 ];
-                let row = (ranges[2].start as usize + z) * stride[2]
-                    + (ranges[1].start as usize + y) * stride[1]
-                    + ranges[0].start as usize;
+                let row = z * stride[2] + y * stride[1];
                 for x in 0..width {
                     if let Some(value) = data.sample(dims, position, filter) {
                         output.set_value(row + x, value);

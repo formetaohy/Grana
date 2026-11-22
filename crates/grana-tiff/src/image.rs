@@ -1,7 +1,7 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use grana_volume::{
     Calibration, Census, ChannelInfo, Extent, Intensity, Level, Placement, Pyramid, Spacing,
@@ -11,17 +11,15 @@ use grana_volume::{
 use grana_ome::{Image as OmeImage, TiffData};
 
 use crate::Cache;
-use crate::directory::{self, Directory, Header};
+use crate::directory::{self, Directory};
 use crate::error::Error;
-use crate::layout::Layout;
+use crate::fileset::{File, Fileset};
 use crate::page::{Page, Plane, Source as PageSource};
 use crate::planes::Planes;
 use crate::store::Store;
 use crate::tag::{TAG_IMAGE_DESCRIPTION, TAG_RESOLUTION_UNIT, TAG_X_RESOLUTION, TAG_Y_RESOLUTION};
 
 const CACHE_BYTES: u64 = 128 << 20;
-const LAYOUT_BYTES: u64 = 32 << 20;
-const PAGE_BYTES: u64 = 8 << 20;
 
 const RED: [f32; 3] = [1.0, 0.0, 0.0];
 const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
@@ -30,9 +28,6 @@ const BLUE: [f32; 3] = [0.0, 0.0, 1.0];
 const MASK: u64 = 4;
 
 const MPP: &str = "MPP";
-
-type PageCache = grana_store::LruCache<(usize, usize), Page>;
-type LayoutCache = grana_store::LruCache<(usize, usize), Layout>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Series {
@@ -75,18 +70,8 @@ pub struct Image {
     pyramid: Pyramid,
     levels: Vec<LevelPages>,
     series: Vec<Series>,
-    files: Vec<Arc<File>>,
+    files: Fileset,
     cache: Cache,
-}
-
-struct File {
-    path: PathBuf,
-    store: Store,
-    header: Header,
-    ifds: Vec<u64>,
-    pages: Vec<Arc<Page>>,
-    reduced: PageCache,
-    layouts: LayoutCache,
 }
 
 struct LevelPages {
@@ -97,7 +82,7 @@ struct LevelPages {
     format: VoxelFormat,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Slot {
     file: usize,
     page: usize,
@@ -110,98 +95,6 @@ struct Request {
     x: Range<u32>,
     y: Range<u32>,
     z: Range<u32>,
-}
-
-impl File {
-    fn open(path: &Path) -> Result<Self, Error> {
-        let store = Store::open(path)?;
-        let header = directory::header(&store, path)?;
-        let ifds = Directory::chain(&store, &header, path)?;
-        let mut pages = Vec::with_capacity(ifds.len());
-        for offset in &ifds {
-            let held = Directory::read(&store, &header, *offset, path)?;
-            pages.push(Arc::new(Page::new(&held, &store, header.big_endian, path)?));
-        }
-        Ok(Self {
-            path: path.to_path_buf(),
-            store,
-            header,
-            ifds,
-            pages,
-            reduced: PageCache::new(PAGE_BYTES, |page| page.bytes()),
-            layouts: LayoutCache::new(LAYOUT_BYTES, |layout| layout.bytes()),
-        })
-    }
-
-    fn page(&self, page: usize, level: usize) -> Result<Arc<Page>, Error> {
-        if level == 0 {
-            return self
-                .pages
-                .get(page)
-                .cloned()
-                .ok_or_else(|| Error::read(&self.path, "the TIFF page is missing"));
-        }
-        if let Some(held) = self.reduced.fetch((page, level)) {
-            return Ok(held);
-        }
-        let offset = self
-            .pages
-            .get(page)
-            .and_then(|held| held.sub_ifds.get(level - 1))
-            .copied()
-            .ok_or_else(|| {
-                Error::metadata(
-                    &self.path,
-                    "a TIFF page carries no reduced resolution image",
-                )
-            })?;
-        let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
-        let held = Arc::new(Page::new(
-            &directory,
-            &self.store,
-            self.header.big_endian,
-            &self.path,
-        )?);
-        self.reduced.insert((page, level), Arc::clone(&held));
-        Ok(held)
-    }
-
-    fn layout(&self, page: usize, level: usize) -> Result<Arc<Layout>, Error> {
-        if let Some(held) = self.layouts.fetch((page, level)) {
-            return Ok(held);
-        }
-        let held = self.page(page, level)?;
-        let offset = if level == 0 {
-            self.ifds[page]
-        } else {
-            self.pages[page].sub_ifds[level - 1]
-        };
-        let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
-        let layout = Arc::new(Layout::new(
-            &directory,
-            &self.store,
-            held.width,
-            held.height,
-            held.samples,
-            held.planar,
-            &self.path,
-        )?);
-        self.layouts.insert((page, level), Arc::clone(&layout));
-        Ok(layout)
-    }
-
-    fn directory(&self) -> Result<Directory, Error> {
-        let offset = self
-            .ifds
-            .first()
-            .copied()
-            .ok_or_else(|| Error::metadata(&self.path, "the file holds no TIFF directory"))?;
-        Directory::read(&self.store, &self.header, offset, &self.path)
-    }
-
-    fn page_count(&self) -> usize {
-        self.pages.len()
-    }
 }
 
 impl Image {
@@ -235,29 +128,26 @@ impl Image {
                 "the OME-TIFF leaves its pixels in a companion file the metadata names",
             ));
         }
-        let mut files = vec![Arc::new(first)];
-        let positions = siblings(&mut files, path, ome)?;
-        let (base_file, base_page) = selected_page(&files, path, ome, &positions)?;
-        let page = files[base_file].page(base_page, 0)?;
+        let files = Fileset::open(first, described.uuid, ome)?;
+        let (base_file, base_page) = selected_page(&files, ome)?;
+        let page = files.file(base_file).page(base_page, 0)?;
         let chunky = page.channels() > 1;
         let format = page.format();
         let samples = page.channels();
-        let stacked = files[0]
+        let stacked = files
+            .root()
             .pages
             .iter()
             .take_while(|held| held.width == page.width && held.height == page.height)
             .count();
-        let declared = declared(&images, &page, stacked, chunky);
+        let declared = declared(&images, &page, stacked);
         let sizes = counts(ome, stacked, samples, chunky, path)?;
         let order = ome
             .and_then(|ome| ome.dimension_order.clone())
             .unwrap_or_else(|| "XYZCT".to_string());
         let planes = Planes::new(sizes[2], sizes[1], sizes[0], chunky, &order)
             .map_err(|detail| Error::metadata(path, detail))?;
-        let mut placed: HashMap<usize, Slot> = HashMap::new();
-        for (index, file) in files.iter().enumerate() {
-            assign(index, file, ome, &planes, format, &mut placed)?;
-        }
+        let placed = assign(&files, ome, &planes, format, path)?;
         if placed.len() != planes.count() as usize {
             return Err(Error::metadata(
                 path,
@@ -279,11 +169,11 @@ impl Image {
         }
         let deepest = placed
             .values()
-            .map(|slot| files[slot.file].pages[slot.page].sub_ifds.len())
+            .map(|slot| files.file(slot.file).pages[slot.page].sub_ifds.len())
             .min()
             .unwrap_or(0);
-        let chained = if ome.is_none() && files.len() == 1 && planes.count() == 1 {
-            chained_levels(&files[0], base_page, format, path)?
+        let chained = if ome.is_none() && files.count() == 1 && planes.count() == 1 {
+            chained_levels(files.root(), base_page, format, path)?
         } else {
             Vec::new()
         };
@@ -295,7 +185,7 @@ impl Image {
         }
         let mut levels = vec![gather(&files, &planes, &placed, format, 0, path)?];
         for page in &chained {
-            levels.push(level_page(&files[0], *page, &planes, format, path)?);
+            levels.push(level_page(files.root(), *page, &planes, format, path)?);
         }
         for level in 1..=deepest {
             let deeper = gather(&files, &planes, &placed, format, level, path)?;
@@ -316,7 +206,7 @@ impl Image {
                 ));
             }
         }
-        let (spacing, derived) = spacing(ome, &files[0], path, sizes[2])?;
+        let (spacing, derived) = spacing(ome, files.file(base_file), path, sizes[2])?;
         let extents = levels.iter().map(|level| level.extent).collect::<Vec<_>>();
         let lookup = |key: &str| ome.and_then(|ome| ome.annotation(key));
         let calibration = grana_archive::calibration_from(lookup)
@@ -482,53 +372,12 @@ impl Image {
     }
 }
 
-fn siblings(
-    files: &mut Vec<Arc<File>>,
-    path: &Path,
-    ome: Option<&OmeImage>,
-) -> Result<HashMap<String, usize>, Error> {
-    let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut positions = HashMap::new();
-    for block in ome.map_or(&[][..], |ome| ome.tiff_data.as_slice()) {
-        let Some(name) = block.file.as_deref() else {
-            continue;
-        };
-        if named(path, name) || positions.contains_key(name) {
-            continue;
-        }
-        let sibling = directory.join(name);
-        if !sibling.is_file() {
-            return Err(Error::metadata(
-                path,
-                format!("the OME-TIFF series names the missing file `{name}`"),
-            ));
-        }
-        positions.insert(name.to_string(), files.len());
-        files.push(Arc::new(File::open(&sibling)?));
-    }
-    Ok(positions)
-}
-
-fn selected_page(
-    files: &[Arc<File>],
-    path: &Path,
-    ome: Option<&OmeImage>,
-    positions: &HashMap<String, usize>,
-) -> Result<(usize, usize), Error> {
+fn selected_page(files: &Fileset, ome: Option<&OmeImage>) -> Result<(usize, usize), Error> {
     let Some(block) = ome.and_then(|ome| ome.tiff_data.first()) else {
         return Ok((0, 0));
     };
-    let index = match block.file.as_deref() {
-        None => 0,
-        Some(name) if named(path, name) => 0,
-        Some(name) => *positions.get(name).ok_or_else(|| {
-            Error::metadata(
-                path,
-                "the OME-TIFF series names a file that holds no planes",
-            )
-        })?,
-    };
-    files[index].page(block.ifd as usize, 0)?;
+    let index = files.resolve(block)?;
+    files.file(index).page(block.ifd as usize, 0)?;
     Ok((index, block.ifd as usize))
 }
 
@@ -604,39 +453,33 @@ fn level_page(
     })
 }
 
-fn named(path: &Path, file: &str) -> bool {
-    let held = path.file_name().and_then(|held| held.to_str());
-    if held == Some(file) {
-        return true;
-    }
-    let bare = Path::new(file).file_name().and_then(|name| name.to_str());
-    held.is_some() && held == bare
-}
-
 fn assign(
-    file: usize,
-    volume: &File,
+    files: &Fileset,
     ome: Option<&OmeImage>,
     planes: &Planes,
     format: VoxelFormat,
-    placed: &mut HashMap<usize, Slot>,
-) -> Result<(), Error> {
-    let path = &volume.path;
+    path: &Path,
+) -> Result<HashMap<usize, Slot>, Error> {
     let blocks = ome.map_or(&[][..], |ome| ome.tiff_data.as_slice());
-    let mut raster: Vec<(usize, usize)> = Vec::new();
+    let mut raster: Vec<(usize, usize, usize)> = Vec::new();
     for block in blocks {
-        if let Some(name) = block.file.as_deref()
-            && !named(path, name)
-        {
-            continue;
-        }
-        place(block, planes, volume.page_count(), &mut raster, path)?;
+        let file = files.resolve(block)?;
+        place(
+            block,
+            file,
+            planes,
+            files.file(file).page_count(),
+            &mut raster,
+            path,
+        )?;
     }
     if blocks.is_empty() {
-        let limit = volume.page_count().min(planes.count() as usize);
-        raster.extend((0..limit).map(|page| (page, page)));
+        let limit = files.root().page_count().min(planes.count() as usize);
+        raster.extend((0..limit).map(|page| (0, page, page)));
     }
-    for (index, page) in raster {
+    let mut placed: HashMap<usize, Slot> = HashMap::with_capacity(raster.len());
+    for (file, index, page) in raster {
+        let volume = files.file(file);
         if page >= volume.page_count() {
             return Err(Error::metadata(
                 path,
@@ -656,16 +499,30 @@ fn assign(
                 "the OME-TIFF metadata places a plane outside the declared pixels",
             ));
         }
-        placed.entry(index).or_insert(Slot { file, page });
+        let slot = Slot { file, page };
+        match placed.entry(index) {
+            Entry::Occupied(held) => {
+                if *held.get() != slot {
+                    return Err(Error::metadata(
+                        path,
+                        "the OME-TIFF metadata places two TIFF pages on one plane",
+                    ));
+                }
+            }
+            Entry::Vacant(held) => {
+                held.insert(slot);
+            }
+        }
     }
-    Ok(())
+    Ok(placed)
 }
 
 fn place(
     block: &TiffData,
+    file: usize,
     planes: &Planes,
     pages: usize,
-    raster: &mut Vec<(usize, usize)>,
+    raster: &mut Vec<(usize, usize, usize)>,
     path: &Path,
 ) -> Result<(), Error> {
     if block.z >= planes.depth() || block.c >= planes.channels() || block.t >= planes.frames() {
@@ -696,13 +553,13 @@ fn place(
                 "the OME-TIFF TiffData runs past the declared pixels",
             ));
         }
-        raster.push((index, block.ifd as usize + offset as usize));
+        raster.push((file, index, block.ifd as usize + offset as usize));
     }
     Ok(())
 }
 
 fn gather(
-    files: &[Arc<File>],
+    files: &Fileset,
     planes: &Planes,
     placed: &HashMap<usize, Slot>,
     format: VoxelFormat,
@@ -714,7 +571,7 @@ fn gather(
     let mut slots = Vec::with_capacity(ordered.len());
     let mut extent: Option<Extent> = None;
     for (_, slot) in ordered {
-        let page = files[slot.file].page(slot.page, level)?;
+        let page = files.file(slot.file).page(slot.page, level)?;
         if page.format() != format {
             return Err(Error::unsupported(
                 path,
@@ -863,7 +720,7 @@ fn placement(
         ));
     }
     let step = level.basis().column(2)[2];
-    let reach = 0.5 * (f64::from(depth) - 1.0 - f64::from(plane.z)) * f64::from(step);
+    let reach = 0.5 * (f64::from(depth) - 1.0 - 2.0 * f64::from(plane.z)) * f64::from(step);
     let mut placed = [0.0f32; 3];
     for (axis, (slot, position)) in placed.iter_mut().zip(plane.position).enumerate() {
         let Some(position) = position else {
@@ -939,12 +796,14 @@ fn parse_metadata(description: Option<&str>, path: &Path) -> Result<grana_ome::M
         return Ok(grana_ome::Metadata {
             images: Vec::new(),
             binary_only: false,
+            uuid: None,
         });
     };
     if !text.trim_start().starts_with('<') {
         return Ok(grana_ome::Metadata {
             images: Vec::new(),
             binary_only: false,
+            uuid: None,
         });
     }
     grana_ome::parse(text).map_err(|detail| Error::metadata(path, detail))
@@ -966,7 +825,7 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
         .collect())
 }
 
-fn declared(images: &[OmeImage], page: &Page, stacked: usize, _chunky: bool) -> Vec<Series> {
+fn declared(images: &[OmeImage], page: &Page, stacked: usize) -> Vec<Series> {
     if images.is_empty() {
         let depth = u32::try_from(stacked).unwrap_or(u32::MAX).max(1);
         return vec![Series::new(
@@ -1012,7 +871,7 @@ fn sample_tint(samples: u32, index: u32) -> [f32; 3] {
 }
 
 fn region(
-    files: &[Arc<File>],
+    files: &Fileset,
     cache: &Cache,
     levels: &[LevelPages],
     request: &Request,
@@ -1063,7 +922,7 @@ fn region(
             path: PathBuf::new(),
             detail: "the series holds no such plane".to_string(),
         })?;
-        let volume = &files[slot.file];
+        let volume = files.file(slot.file);
         let page = volume.page(slot.page, level.depth)?;
         let layout = volume.layout(slot.page, level.depth)?;
         let source = PageSource {
@@ -1096,7 +955,7 @@ fn region(
 }
 
 fn sample_range(
-    files: &[Arc<File>],
+    files: &Fileset,
     levels: &[LevelPages],
     cache: &Cache,
     channel: u32,

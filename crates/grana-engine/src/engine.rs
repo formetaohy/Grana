@@ -12,8 +12,6 @@ use crate::image::ViewportImage;
 use crate::splat::SplatMembers;
 use crate::view::{self, Cache, PickRows, RenderedScene};
 
-const TEXTURE_BUDGET: u64 = 512 << 20;
-
 const PLAN_BAND: f32 = 1.4;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -89,6 +87,7 @@ struct Failure {
 
 pub struct Engine {
     renderer: Renderer,
+    budget: u64,
     pending_pick: Option<Identities>,
     prepared: Option<Prepared>,
     plan: Option<Plan>,
@@ -106,10 +105,12 @@ impl Engine {
         device: &Device,
         queue: &Queue,
         format: TextureFormat,
+        budget: u64,
         pipelines: &Pipelines,
     ) -> Self {
         Self {
-            renderer: Renderer::new(device, queue, format, TEXTURE_BUDGET, pipelines),
+            renderer: Renderer::new(device, queue, format, budget, pipelines),
+            budget,
             pending_pick: None,
             prepared: None,
             plan: None,
@@ -124,7 +125,7 @@ impl Engine {
     }
 
     pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) {
-        self.renderer.set_budget(TEXTURE_BUDGET);
+        self.renderer.set_budget(self.budget);
         self.renderer.set_dataset(device, pyramid);
         self.pending_pick = None;
         self.prepared = None;

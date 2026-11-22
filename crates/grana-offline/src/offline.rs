@@ -15,8 +15,6 @@ use crate::export::{Export, Step};
 use crate::plan::{self, Destination};
 use crate::task::{Bricks, Task};
 
-const TEXTURE_BUDGET: u64 = 512 << 20;
-
 pub enum Outcome {
     Complete { path: PathBuf },
     Failed { detail: String },
@@ -27,19 +25,27 @@ pub struct Offline {
     device: Device,
     queue: Queue,
     format: TextureFormat,
+    budget: u64,
     renderer: Renderer,
     composer: Composer,
     pipelines: Pipelines,
 }
 
 impl Offline {
-    pub fn new(device: Device, queue: Queue, format: TextureFormat, pipelines: &Pipelines) -> Self {
-        let renderer = Renderer::new(&device, &queue, format, TEXTURE_BUDGET, pipelines);
+    pub fn new(
+        device: Device,
+        queue: Queue,
+        format: TextureFormat,
+        budget: u64,
+        pipelines: &Pipelines,
+    ) -> Self {
+        let renderer = Renderer::new(&device, &queue, format, budget, pipelines);
         let composer = Composer::new(&device, pipelines);
         Self {
             device,
             queue,
             format,
+            budget,
             renderer,
             composer,
             pipelines: pipelines.clone(),
@@ -48,11 +54,13 @@ impl Offline {
 
     pub fn headless() -> Result<Self, String> {
         let headless = Headless::shared()?;
+        let budget = grana_render::texture_budget(headless.memory());
         let pipelines = headless.pipelines().clone();
         Ok(Self::new(
             headless.device,
             headless.queue,
             grana_gpu::HEADLESS_FORMAT,
+            budget,
             &pipelines,
         ))
     }
@@ -106,7 +114,7 @@ impl Offline {
             Ok(needed) => needed,
             Err(detail) => return Outcome::Failed { detail },
         };
-        self.renderer.set_budget(TEXTURE_BUDGET);
+        self.renderer.set_budget(self.budget);
         self.renderer.set_dataset(&self.device, &pyramid);
         if let Err(detail) =
             self.renderer

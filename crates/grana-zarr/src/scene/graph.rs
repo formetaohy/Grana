@@ -318,6 +318,22 @@ pub(super) fn spatial(
             }
         }
     }
+    if stored[2].is_none()
+        && let Some(row) = displayed[2]
+    {
+        for column in stored.iter().take(2).flatten() {
+            if route.linear(row, *column).abs() > EPSILON {
+                return Err(Error::Unsupported {
+                    path: path.to_string(),
+                    detail: format!(
+                        "the placement of `{}` tilts its plane out of the plane",
+                        source.name
+                    ),
+                });
+            }
+        }
+        linear[2] = [0.0, 0.0, plane_spacing(linear)];
+    }
     if invert(linear).is_none() {
         return Err(Error::Unsupported {
             path: path.to_string(),
@@ -325,4 +341,12 @@ pub(super) fn spatial(
         });
     }
     Ok(Spatial { linear, offset })
+}
+
+fn plane_spacing(linear: [[f64; 3]; 3]) -> f64 {
+    let spacing = (0..3)
+        .map(|component| linear[0][component].abs().max(linear[1][component].abs()))
+        .filter(|value| *value > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    if spacing.is_finite() { spacing } else { 1.0 }
 }

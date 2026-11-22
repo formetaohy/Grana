@@ -16,11 +16,14 @@ const PREFETCH_LIMIT: usize = 1024;
 
 const RESTORE_BUCKET: u32 = 0;
 
-const PREFETCH_SHARE: usize = 4;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Passes {
     layers: u64,
+}
+
+struct Batch {
+    time: u32,
+    requests: Vec<BrickRequest>,
 }
 
 pub(crate) struct ResidencyDemand {
@@ -45,9 +48,12 @@ pub(crate) struct Residence {
     generation: u64,
     prefetched: HashSet<BrickRequest>,
     prefetch_key: Option<u64>,
-    prefetch_issued: Vec<BrickRequest>,
+    prefetch_stable: bool,
+    batches: Vec<Batch>,
     refreshes: HashSet<BrickRequest>,
     prefetch_rate: f32,
+    prefetch_sent: u64,
+    prefetch_hit: u64,
     settled: Option<ViewKey>,
     planned: Option<ViewKey>,
     demand: Option<ResidencyDemand>,
@@ -289,9 +295,12 @@ impl Residence {
             generation: 0,
             prefetched: HashSet::new(),
             prefetch_key: None,
-            prefetch_issued: Vec::new(),
+            prefetch_stable: false,
+            batches: Vec::new(),
             refreshes: HashSet::new(),
             prefetch_rate: 1.0,
+            prefetch_sent: 0,
+            prefetch_hit: 0,
             settled: None,
             planned: None,
             demand: None,
@@ -329,9 +338,12 @@ impl Residence {
         self.generation = 0;
         self.prefetched.clear();
         self.prefetch_key = None;
-        self.prefetch_issued.clear();
+        self.prefetch_stable = false;
+        self.batches.clear();
         self.refreshes.clear();
         self.prefetch_rate = 1.0;
+        self.prefetch_sent = 0;
+        self.prefetch_hit = 0;
         self.settled = None;
         self.planned = None;
         self.demand = None;
@@ -357,7 +369,8 @@ impl Residence {
         self.restaged = false;
         self.prefetched.clear();
         self.prefetch_key = None;
-        self.prefetch_issued.clear();
+        self.prefetch_stable = false;
+        self.batches.clear();
         self.refreshes.clear();
         self.measure.fill(None);
         self.rejection = None;
@@ -385,7 +398,8 @@ impl Residence {
         self.planned = None;
         self.prefetched.clear();
         self.prefetch_key = None;
-        self.prefetch_issued.clear();
+        self.prefetch_stable = false;
+        self.batches.clear();
         self.refreshes.clear();
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
@@ -424,11 +438,21 @@ impl Residence {
 
     pub(crate) fn clear_prefetch(&mut self) {
         self.prefetched.clear();
-        self.prefetch_issued.clear();
+        self.batches.clear();
     }
 
     pub(crate) fn refreshes(&mut self) -> &mut HashSet<BrickRequest> {
         &mut self.refreshes
+    }
+
+    pub(crate) fn prefetch_counts(&self) -> (u64, u64) {
+        (self.prefetch_sent, self.prefetch_hit)
+    }
+
+    pub(crate) fn discard(&mut self, requests: &[BrickRequest]) {
+        for request in requests {
+            self.prefetched.remove(request);
+        }
     }
 
     pub(crate) fn style_outdated(&self, style: u64) -> bool {
@@ -608,7 +632,7 @@ impl Residence {
         prefetch: bool,
     ) -> Result<Option<Requests>, String> {
         while let Some((key, pose, bands)) = self.decode(device, pyramid, planner)? {
-            self.accept(key, pose, bands, atlas);
+            self.accept(pyramid, key, pose, bands, atlas);
         }
         Ok(self.emit(pyramid, atlas, time, prefetch))
     }
@@ -637,7 +661,14 @@ impl Residence {
         Ok(decoded.flatten())
     }
 
-    fn accept(&mut self, key: ViewKey, pose: u64, bands: Vec<Demand>, atlas: &mut Atlas) {
+    fn accept(
+        &mut self,
+        pyramid: &Pyramid,
+        key: ViewKey,
+        pose: u64,
+        bands: Vec<Demand>,
+        atlas: &mut Atlas,
+    ) {
         if key.epoch != self.epoch {
             return;
         }
@@ -651,11 +682,6 @@ impl Residence {
             }
             atlas.touch(key.time, band.info.level, band.indices.iter().copied());
         }
-        let view = key.digest();
-        if self.prefetch_key != Some(view) {
-            self.prefetch_key = Some(view);
-            self.prefetched.clear();
-        }
         self.settled = bands
             .iter()
             .all(|band| demands_complete(band, key.assured))
@@ -663,32 +689,65 @@ impl Residence {
         let demand = ResidencyDemand { key, bands };
         self.missing.apply(&demand, atlas);
         self.demand = Some(demand);
+        self.measure_prefetch(pyramid, key.time);
+        let preview = key.prefetch_digest();
+        if self.prefetch_key == Some(preview) {
+            self.prefetch_stable = true;
+        } else {
+            self.prefetch_key = Some(preview);
+            self.prefetch_stable = false;
+            self.prefetched.clear();
+            self.batches.clear();
+        }
         self.restaged = false;
     }
 
-    fn observe(&mut self, pyramid: &Pyramid, time: u32) {
-        if !self.prefetch_issued.is_empty() {
-            let mut issued = 0;
-            let mut hit = 0;
-            for request in &self.prefetch_issued {
-                if request.time != time {
-                    continue;
-                }
-                issued += 1;
-                let grid = BrickGrid::new(pyramid.level(request.level).extent());
-                if self
-                    .missing
-                    .demanded(request.level, grid.index(request.coord) as u32)
-                {
-                    hit += 1;
-                }
+    fn measure_prefetch(&mut self, pyramid: &Pyramid, time: u32) {
+        let mut requests = Vec::new();
+        self.batches.retain_mut(|batch| {
+            if batch.time == time {
+                requests.append(&mut batch.requests);
+                false
+            } else {
+                batch.time > time
             }
-            if issued > 0 {
-                let rate = hit as f32 / issued as f32;
-                self.prefetch_rate = 0.7 * self.prefetch_rate + 0.3 * rate.clamp(0.25, 1.0);
-            }
-            self.prefetch_issued.clear();
+        });
+        let issued = requests.len();
+        if issued == 0 {
+            return;
         }
+        let mut hits = 0u64;
+        for request in &requests {
+            let grid = BrickGrid::new(pyramid.level(request.level).extent());
+            if self
+                .missing
+                .demanded(request.level, grid.index(request.coord) as u32)
+            {
+                hits += 1;
+            }
+        }
+        self.prefetch_sent += issued as u64;
+        self.prefetch_hit += hits;
+        let rate = hits as f32 / issued as f32;
+        self.prefetch_rate = (0.7 * self.prefetch_rate + 0.3 * rate).clamp(0.0, 1.0);
+    }
+
+    fn prefetch_budget(&self, atlas: &Atlas, demand: &ResidencyDemand) -> usize {
+        let wanted = demand
+            .bands
+            .iter()
+            .map(|band| band.indices.len())
+            .sum::<usize>();
+        let free = atlas.vacancies().saturating_sub(self.prefetched.len());
+        let budget = (free.min(wanted) as f32 * self.prefetch_rate) as usize;
+        budget.min(PREFETCH_LIMIT)
+    }
+
+    fn observe(&mut self, pyramid: &Pyramid, time: u32) {
+        let next = carried_frame(time, pyramid.frame_count());
+        self.prefetched
+            .retain(|request| request.time == time || request.time == next);
+        self.batches.retain(|batch| batch.time >= time);
         let Some(demand) = self.demand.as_ref() else {
             return;
         };
@@ -749,20 +808,36 @@ impl Residence {
         requests
             .volume
             .extend(self.missing.requests().iter().copied());
-        if requests.volume.is_empty() && prefetch {
-            let issued = {
-                let prefetch = Prefetch {
-                    rate: self.prefetch_rate,
-                    atlas,
-                    time: demand.key.time,
-                    ladder: demand.key.levels.ladder,
-                    demands: &demand.bands,
-                    pyramid,
+        if requests.volume.is_empty()
+            && prefetch
+            && self.prefetch_stable
+            && pyramid.frame_count() > 1
+        {
+            let next = carried_frame(demand.key.time, pyramid.frame_count());
+            let budget = self.prefetch_budget(atlas, demand);
+            if budget > 0 {
+                let issued = {
+                    let prefetch = Prefetch {
+                        budget,
+                        atlas,
+                        time: next,
+                        ladder: demand.key.levels.ladder,
+                        demands: &demand.bands,
+                        pyramid,
+                    };
+                    prefetch_requests(&prefetch, &mut self.prefetched)
                 };
-                prefetch_requests(&prefetch, &mut self.prefetched)
-            };
-            self.prefetch_issued.extend_from_slice(&issued);
-            requests.prefetch = issued;
+                if !issued.is_empty() {
+                    match self.batches.iter_mut().find(|batch| batch.time == next) {
+                        Some(batch) => batch.requests.extend(issued.iter().copied()),
+                        None => self.batches.push(Batch {
+                            time: next,
+                            requests: issued.clone(),
+                        }),
+                    }
+                    requests.prefetch = issued;
+                }
+            }
         }
         self.view = view;
         requests.view = view;
@@ -840,7 +915,7 @@ fn pose(camera: &Camera, size: [u32; 2], region: Region, time: u32, quantum: Res
 }
 
 struct Prefetch<'a> {
-    rate: f32,
+    budget: usize,
     atlas: &'a Atlas,
     time: u32,
     ladder: Ladder,
@@ -853,17 +928,14 @@ fn prefetch_requests(
     issued: &mut HashSet<BrickRequest>,
 ) -> Vec<BrickRequest> {
     let Prefetch {
-        rate,
+        budget,
         atlas,
         time,
         ladder,
         demands,
         pyramid,
     } = *prefetch;
-    let total = ((atlas.slots() as f32 / PREFETCH_SHARE as f32) * rate.clamp(0.25, 1.0))
-        .min(PREFETCH_LIMIT as f32) as usize;
-    let next = carried_frame(time, pyramid.frame_count());
-    let mut budget = total;
+    let mut budget = budget.min(PREFETCH_LIMIT);
     let mut requests = Vec::new();
     for (band, demand) in demands.iter().enumerate() {
         if budget == 0 {
@@ -872,7 +944,7 @@ fn prefetch_requests(
         carry(
             pyramid,
             atlas,
-            next,
+            time,
             ladder.level(band),
             &demand.indices,
             &mut requests,

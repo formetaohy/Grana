@@ -308,6 +308,11 @@ fn streams_and_shades_two_channels() {
     let mut renderer = build_renderer(&gpu, &pyramid);
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
+    assert_eq!(
+        renderer.slot_bytes(),
+        u64::from(grana_volume::PADDED_SIDE).pow(3) * (4 + 4),
+        "a two channel slot holds one packed source texel and one structure texel"
+    );
     let view = View {
         target: &view_texture,
         camera: &camera,
@@ -2485,4 +2490,145 @@ fn reveals_the_surface_behind_a_moving_occluder() {
         error < 6.0,
         "the revealed strip trails the occluder by {error:.3} levels ({red} red pixels)"
     );
+}
+
+#[test]
+fn prefetches_the_carried_frame_into_vacant_slots() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let base = volume.pyramid();
+    let pyramid = Pyramid::placed(
+        base.levels().to_vec(),
+        base.level_count(),
+        base.channels().to_vec(),
+        2,
+        1.0,
+        base.placement(),
+        base.calibration(),
+    );
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        8 << 20,
+        gpu.pipelines(),
+    );
+    renderer.set_dataset(gpu.device(), &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Awaited,
+    };
+    let mut issued = Vec::new();
+    settle_time(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &view,
+        0,
+        &mut Vec::new(),
+        &mut issued,
+    );
+    assert!(
+        !issued.is_empty(),
+        "a settled playback frame prefetches the frame it carries towards"
+    );
+    assert!(
+        issued.iter().all(|request| request.time == 1),
+        "the prefetch names the carried frame: {:?}",
+        issued
+            .iter()
+            .map(|request| request.time)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        renderer.statistics().evictions,
+        0,
+        "prefetching into vacant slots evicts nothing"
+    );
+    let mut demanded = Vec::new();
+    settle_time(
+        &gpu,
+        &mut renderer,
+        &volume,
+        &view,
+        1,
+        &mut demanded,
+        &mut Vec::new(),
+    );
+    assert!(
+        renderer.statistics().prefetch_hits > 0,
+        "the prefetched bricks arrive before the frame that needs them"
+    );
+    assert!(
+        demanded.iter().all(|request| !issued.contains(request)),
+        "the carried frame never demands a brick it prefetched"
+    );
+}
+
+fn timed<'a>(view: &'a View<'a>, time: u32) -> Frame<'a, 'a> {
+    Frame {
+        time,
+        delivery: grana_render::Delivery::Awaited,
+        ..frame(view)
+    }
+}
+
+fn settle_time(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    volume: &Volume,
+    view: &View<'_>,
+    time: u32,
+    demanded: &mut Vec<BrickRequest>,
+    prefetched: &mut Vec<BrickRequest>,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), timed(view, time))
+            .expect("the timed frame draws");
+        if renderer.requests_pending() {
+            if let Some(requests) = next_demand(gpu, renderer) {
+                demanded.extend(requests.volume.iter().copied());
+                prefetched.extend(requests.prefetch.iter().copied());
+                let mut bricks = pack(volume, &requests.volume);
+                bricks.extend(pack(volume, &requests.prefetch));
+                renderer.upload(&bricks);
+            }
+        } else if info.drawn && info.settled && info.age >= FRAMES && !info.fading {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the timed stream never settled: age {}, settled {}, pending {}",
+            info.age,
+            info.settled,
+            renderer.requests_pending()
+        );
+    }
 }
