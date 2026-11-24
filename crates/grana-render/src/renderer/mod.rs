@@ -13,6 +13,7 @@ use plan::Residence;
 use residency::{FrameTarget, LevelKey, Levels, TargetCache, ViewKey};
 use resources::Resources;
 use signature::Signature;
+use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -32,6 +33,7 @@ use wgpu::{
 use crate::atlas::Atlas;
 use crate::bake::{Bake, BakeQueue};
 use crate::brick::{BrickArena, BrickTable};
+use crate::budget;
 use crate::frame::{FrameData, VolumeView};
 use crate::layout::Layouts;
 use crate::mesh::MeshPasses;
@@ -56,8 +58,6 @@ use crate::volume::VolumePass;
 use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
 
 const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
-
-const FRAGMENT_BUDGET: u64 = 2 << 30;
 
 const RECORD_SHARE: u64 = 8;
 
@@ -104,6 +104,7 @@ impl FrameInfo {
 #[derive(Default)]
 pub struct Requests {
     pub time: u32,
+    pub epoch: u64,
     pub volume: Vec<BrickRequest>,
     pub prefetch: Vec<BrickRequest>,
     pub view: ViewInfo,
@@ -178,6 +179,8 @@ pub struct Renderer {
     time: u32,
     motion: Option<u64>,
     budget: u64,
+    total: u64,
+    frames: u64,
     residence: Residence,
     prefetch: bool,
     transparent: bool,
@@ -198,7 +201,6 @@ pub struct Renderer {
     pick_ranges: Option<Vec<crate::splat::Range>>,
     sequence: u64,
     info: FrameInfo,
-    fragments: u64,
     plans: u64,
     waits: u64,
     uploads: u64,
@@ -257,6 +259,8 @@ impl Renderer {
             time: 0,
             motion: None,
             budget,
+            total: budget,
+            frames: budget,
             residence: Residence::new(),
             prefetch: false,
             transparent: false,
@@ -277,7 +281,6 @@ impl Renderer {
             pick_ranges: None,
             sequence: 0,
             info: FrameInfo::default(),
-            fragments: FRAGMENT_BUDGET,
             plans: 0,
             waits: 0,
             uploads: 0,
@@ -290,6 +293,10 @@ impl Renderer {
 
     pub fn budget(&self) -> u64 {
         self.budget
+    }
+
+    pub fn frames(&self) -> u64 {
+        self.frames
     }
 
     pub fn slot_bytes(&self) -> u64 {
@@ -308,11 +315,6 @@ impl Renderer {
         self.resources.as_ref().map_or(0, Resources::first_level)
     }
 
-    pub fn set_budget(&mut self, budget: u64) {
-        assert!(budget > 0, "a renderer needs a residency budget");
-        self.budget = budget;
-    }
-
     pub fn reserve(
         &mut self,
         device: &Device,
@@ -327,17 +329,77 @@ impl Renderer {
                 .map(|held| held.slot_bytes)
                 .filter(|bytes| *bytes > 0)
                 .expect("the dataset is resident before a reserve");
-            let budget = crate::detail::residency_budget(
+            let residency = crate::detail::residency_budget(
                 slots,
                 slot_bytes,
                 device.limits().max_texture_dimension_3d,
                 ceiling,
             )?;
-            self.set_budget(budget);
-            self.set_dataset(device, pyramid)?;
+            self.install(device, pyramid, residency)?;
         }
-        self.fragments = ceiling.saturating_sub(self.budget);
+        self.frames = ceiling.saturating_sub(self.budget);
+        assert!(
+            self.frames > 0,
+            "an export holds room for its frame targets"
+        );
         Ok(())
+    }
+
+    fn install(
+        &mut self,
+        device: &Device,
+        pyramid: &Pyramid,
+        residency: u64,
+    ) -> Result<(), String> {
+        assert!(residency > 0, "a renderer keeps a positive residency");
+        self.resources = None;
+        self.targets.clear();
+        let resources = Resources::new(
+            device,
+            &self.layouts,
+            &self.pipelines,
+            &self.atlas_sampler,
+            &self.dummy,
+            residency,
+            pyramid,
+        )?;
+        self.budget = residency;
+        self.residence.setup(device, resources.slots(), pyramid);
+        self.resources = Some(resources);
+        self.time = 0;
+        if let Some(meshes) = self.meshes.as_mut() {
+            meshes.clear();
+        }
+        self.sections.clear();
+        self.sliced = false;
+        self.viewport = None;
+        self.present_region = None;
+        self.pick_readback = None;
+        self.pick_pending = false;
+        self.exporting = false;
+        self.fade = None;
+        self.motion = None;
+        self.info = FrameInfo::default();
+        Ok(())
+    }
+
+    fn fit(&mut self, device: &Device, size: [u32; 2]) -> Result<(), String> {
+        if self.exporting {
+            return Ok(());
+        }
+        let split = budget::split(self.total, size);
+        self.frames = split.frames;
+        if split.residency.abs_diff(self.budget).saturating_mul(4) > self.total {
+            let pyramid = self.resources.as_ref().map(|held| held.pyramid.clone());
+            if let Some(pyramid) = pyramid {
+                self.install(device, &pyramid, split.residency)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn fragment_allowance(&self, size: [u32; 2]) -> u64 {
+        budget::fragment_allowance(self.frames, size)
     }
 
     pub fn set_transparent(&mut self, transparent: bool) {
@@ -399,33 +461,18 @@ impl Renderer {
         self.exporting = exporting;
     }
 
-    pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) -> Result<(), String> {
-        let resources = Resources::new(
-            device,
-            &self.layouts,
-            &self.pipelines,
-            &self.atlas_sampler,
-            &self.dummy,
-            self.budget,
-            pyramid,
-        )?;
-        self.residence.setup(device, resources.slots(), pyramid);
-        self.resources = Some(resources);
-        self.time = 0;
-        if let Some(meshes) = self.meshes.as_mut() {
-            meshes.clear();
-        }
-        self.sections.clear();
-        self.sliced = false;
-        self.targets.clear();
-        self.viewport = None;
-        self.present_region = None;
-        self.pick_readback = None;
-        self.pick_pending = false;
-        self.exporting = false;
-        self.fade = None;
-        self.motion = None;
-        self.info = FrameInfo::default();
+    pub fn set_dataset(
+        &mut self,
+        device: &Device,
+        pyramid: &Pyramid,
+        budget: u64,
+        size: [u32; 2],
+    ) -> Result<(), String> {
+        assert!(budget > 0, "a renderer needs a texture budget");
+        let split = budget::split(budget, size);
+        self.total = budget;
+        self.install(device, pyramid, split.residency)?;
+        self.frames = split.frames;
         Ok(())
     }
 
@@ -444,9 +491,11 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         let size = frame.size;
-        let (mut target, created) = self
-            .targets
-            .take(device, &self.layouts, &self.present, size);
+        self.fit(device, size)?;
+        let frames = self.frames();
+        let (mut target, created) =
+            self.targets
+                .take(device, &self.layouts, &self.present, size, frames);
         if created {
             self.residence.forget_settled();
         }
@@ -456,20 +505,25 @@ impl Renderer {
         info
     }
 
-    pub fn poll_requests(&mut self, device: &Device) -> Result<Option<Requests>, String> {
+    pub fn poll_requests(
+        &mut self,
+        device: &Device,
+        pending: &HashSet<BrickRequest>,
+    ) -> Result<Option<Requests>, String> {
         let time = self.time;
         let prefetch = self.prefetch;
         let Some(resources) = self.resources.as_mut() else {
             return Ok(None);
         };
-        let requests = self.residence.poll(
+        let requests = self.residence.poll(plan::Poll {
             device,
-            &resources.pyramid,
-            &resources.planner,
-            &mut resources.atlas,
+            pyramid: &resources.pyramid,
+            planner: &resources.planner,
+            atlas: &mut resources.atlas,
             time,
             prefetch,
-        )?;
+            pending,
+        })?;
         let Some(requests) = requests else {
             return Ok(None);
         };
@@ -522,6 +576,8 @@ impl Renderer {
             payload,
             prefetched,
             prefetch_hits,
+            frames: self.targets.bytes(),
+            residency: self.budget,
         }
     }
 

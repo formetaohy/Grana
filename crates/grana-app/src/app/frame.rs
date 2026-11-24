@@ -56,12 +56,15 @@ impl App {
             engine.abandon(&abandoned);
         }
         let time = session.scene().map_or(0, |scene| scene.time());
-        if let Some(requests) = engine.poll_requests(surface.device(), time)? {
+        if let Some(requests) =
+            engine.poll_requests(surface.device(), time, session.pending_requests())?
+        {
             let current = session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time);
             session.request(
                 time,
+                requests.epoch,
                 if current { &requests.volume } else { &[] },
                 &requests.prefetch,
             );
@@ -74,6 +77,8 @@ impl App {
     }
 
     pub(super) fn sync_dataset(&mut self, replaced: bool) -> Result<(), String> {
+        let viewport = self.viewport();
+        let size = [viewport.region[2], viewport.region[3]];
         let App {
             surface,
             engine,
@@ -88,8 +93,7 @@ impl App {
             return Ok(());
         };
         if replaced || !engine.holds(&pyramid) {
-            engine.set_budget(surface.budget());
-            engine.set_dataset(surface.device(), &pyramid)?;
+            engine.set_dataset(surface.device(), &pyramid, surface.budget(), size)?;
         } else {
             engine.invalidate(&pyramid);
         }

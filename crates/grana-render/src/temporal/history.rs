@@ -3,13 +3,16 @@ use wgpu::{Device, Texture, TextureFormat, TextureUsages, TextureView};
 
 use crate::target::{SCENE_FORMAT, image, view};
 
-pub(crate) const STATISTICS_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
+pub(crate) const STATISTICS_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+
+pub(crate) const COLOR_BYTES: u64 = 8;
+
+pub(crate) const STATISTICS_BYTES: u64 = 8;
 
 const HELD: TextureUsages = TextureUsages::RENDER_ATTACHMENT.union(TextureUsages::TEXTURE_BINDING);
 
 pub(crate) struct History {
     color: [TextureView; 2],
-    odd: [TextureView; 2],
     statistics: [TextureView; 2],
     resolved: Texture,
     resolved_view: TextureView,
@@ -17,6 +20,7 @@ pub(crate) struct History {
     intact: bool,
     camera: Option<Mat4>,
     eye: Option<Vec3>,
+    reach: f32,
 }
 
 impl History {
@@ -29,15 +33,6 @@ impl History {
             view(&image(
                 device,
                 "grana.temporal.history",
-                size,
-                SCENE_FORMAT,
-                HELD,
-            ))
-        });
-        let odd = [0, 1].map(|_| {
-            view(&image(
-                device,
-                "grana.temporal.odd",
                 size,
                 SCENE_FORMAT,
                 HELD,
@@ -62,7 +57,6 @@ impl History {
         let resolved_view = view(&resolved);
         Self {
             color,
-            odd,
             statistics,
             resolved,
             resolved_view,
@@ -70,7 +64,13 @@ impl History {
             intact: false,
             camera: None,
             eye: None,
+            reach: 0.0,
         }
+    }
+
+    pub(crate) fn size(size: [u32; 2]) -> u64 {
+        let pixels = u64::from(size[0]) * u64::from(size[1]);
+        pixels * (2 * COLOR_BYTES + 2 * STATISTICS_BYTES + COLOR_BYTES)
     }
 
     pub(crate) fn intact(&self) -> bool {
@@ -79,6 +79,7 @@ impl History {
 
     pub(crate) fn invalidate(&mut self) {
         self.intact = false;
+        self.reach = 0.0;
     }
 
     pub(crate) fn camera(&self) -> Option<Mat4> {
@@ -89,20 +90,16 @@ impl History {
         self.eye
     }
 
+    pub(crate) fn reach(&self) -> f32 {
+        self.reach
+    }
+
     pub(crate) fn read_color(&self) -> &TextureView {
         &self.color[self.read]
     }
 
     pub(crate) fn write_color(&self) -> &TextureView {
         &self.color[1 - self.read]
-    }
-
-    pub(crate) fn read_odd(&self) -> &TextureView {
-        &self.odd[self.read]
-    }
-
-    pub(crate) fn write_odd(&self) -> &TextureView {
-        &self.odd[1 - self.read]
     }
 
     pub(crate) fn read_statistics(&self) -> &TextureView {
@@ -121,10 +118,15 @@ impl History {
         &self.resolved
     }
 
-    pub(crate) fn advance(&mut self, camera: Mat4, eye: Vec3) {
+    pub(crate) fn advance(&mut self, camera: Mat4, eye: Vec3, reach: f32) {
+        assert!(
+            reach > 0.0 && reach.is_finite(),
+            "a temporal history names a positive depth reach"
+        );
         self.read = 1 - self.read;
         self.intact = true;
         self.camera = Some(camera);
         self.eye = Some(eye);
+        self.reach = reach;
     }
 }

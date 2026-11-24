@@ -49,6 +49,7 @@ pub(crate) struct Target {
     _texture: Texture,
     view: TextureView,
     read: BindGroup,
+    bytes: u64,
 }
 
 impl Target {
@@ -81,11 +82,16 @@ impl Target {
             _texture: texture,
             view,
             read,
+            bytes: crate::target::bytes(FORMAT, extent),
         }
     }
 
     pub fn read(&self) -> &BindGroup {
         &self.read
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 }
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use grana_display::CameraState;
@@ -124,15 +125,16 @@ impl Engine {
         }
     }
 
-    pub fn set_budget(&mut self, budget: u64) {
-        assert!(budget > 0, "the engine keeps a positive residency budget");
+    pub fn set_dataset(
+        &mut self,
+        device: &Device,
+        pyramid: &Pyramid,
+        budget: u64,
+        size: [u32; 2],
+    ) -> Result<(), String> {
+        assert!(budget > 0, "the engine keeps a positive texture budget");
         self.budget = budget;
-        self.renderer.set_budget(budget);
-    }
-
-    pub fn set_dataset(&mut self, device: &Device, pyramid: &Pyramid) -> Result<(), String> {
-        self.renderer.set_budget(self.budget);
-        self.renderer.set_dataset(device, pyramid)?;
+        self.renderer.set_dataset(device, pyramid, budget, size)?;
         self.pending_pick = None;
         self.prepared = None;
         self.plan = None;
@@ -169,8 +171,9 @@ impl Engine {
         &mut self,
         device: &Device,
         time: u32,
+        pending: &HashSet<BrickRequest>,
     ) -> Result<Option<Requests>, String> {
-        let Some(requests) = self.renderer.poll_requests(device)? else {
+        let Some(requests) = self.renderer.poll_requests(device, pending)? else {
             return Ok(None);
         };
         if requests.time == time {

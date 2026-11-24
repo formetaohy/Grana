@@ -16,6 +16,7 @@ pub(crate) struct SceneTarget {
     color: TextureView,
     depth: TextureView,
     depth_group: BindGroup,
+    bytes: u64,
 }
 
 impl SceneTarget {
@@ -50,7 +51,12 @@ impl SceneTarget {
             color,
             depth,
             depth_group,
+            bytes: bytes(SCENE_FORMAT, size) + bytes(DEPTH_FORMAT, size),
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn color(&self) -> &TextureView {
@@ -68,6 +74,7 @@ impl SceneTarget {
 
 pub(crate) struct NormalTarget {
     view: TextureView,
+    bytes: u64,
 }
 
 impl NormalTarget {
@@ -83,11 +90,18 @@ impl NormalTarget {
             NORMAL_FORMAT,
             TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         );
-        Self { view }
+        Self {
+            view,
+            bytes: bytes(NORMAL_FORMAT, size),
+        }
     }
 
     pub fn view(&self) -> &TextureView {
         &self.view
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 }
 
@@ -96,6 +110,7 @@ pub(crate) struct Volume {
     surface: TextureView,
     normal: TextureView,
     group: BindGroup,
+    bytes: u64,
 }
 
 impl Volume {
@@ -149,7 +164,14 @@ impl Volume {
             surface,
             normal,
             group,
+            bytes: bytes(VOLUME_FORMAT, extent)
+                + bytes(VOLUME_SURFACE_FORMAT, extent)
+                + bytes(VOLUME_NORMAL_FORMAT, extent),
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn radiance(&self) -> &TextureView {
@@ -247,6 +269,13 @@ fn write(queue: &Queue, texture: &Texture, bytes: &[impl bytemuck::Pod], row: u3
             depth_or_array_layers: 1,
         },
     );
+}
+
+pub(crate) fn bytes(format: TextureFormat, size: [u32; 2]) -> u64 {
+    let block = format
+        .block_copy_size(None)
+        .expect("a render target names its block size");
+    u64::from(size[0]) * u64::from(size[1]) * u64::from(block)
 }
 
 pub(crate) fn image(

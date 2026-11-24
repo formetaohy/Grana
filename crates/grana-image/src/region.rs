@@ -84,36 +84,3 @@ fn copy<T: Copy>(
         }
     }
 }
-
-pub(crate) fn copy_rows(
-    out: &mut VoxelData,
-    out_width: usize,
-    out_row: usize,
-    source: &VoxelData,
-    source_width: usize,
-    x: Range<u32>,
-    rows: Range<u32>,
-) {
-    let width = (x.end - x.start) as usize;
-    assert!(
-        out_row + (rows.end - rows.start) as usize <= out.voxel_count() / out_width.max(1),
-        "the copied rows land inside the destination"
-    );
-    macro_rules! copy_arms {
-        ($($variant:ident),*) => {
-            match (out, source) {
-                $(
-                    (VoxelData::$variant(out), VoxelData::$variant(source)) => {
-                        for (offset, row) in rows.enumerate() {
-                            let from = row as usize * source_width + x.start as usize;
-                            let to = (out_row + offset) * out_width;
-                            out[to..to + width].copy_from_slice(&source[from..from + width]);
-                        }
-                    }
-                )*
-                _ => panic!("a resolved plane carries the voxel format of its level"),
-            }
-        };
-    }
-    copy_arms!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
-}

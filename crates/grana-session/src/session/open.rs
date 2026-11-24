@@ -701,6 +701,7 @@ impl Session {
                     bytes,
                     data,
                 } => {
+                    self.in_flight.remove(&request);
                     if !self.stale(generation) {
                         self.failed.remove(&request);
                         self.reads_delivered += 1;

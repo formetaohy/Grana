@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Placement, Pyramid, VolumeSeries, VoxelData,
-    VoxelFormat, VoxelSemantics, pad_brick,
+    BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
+    VoxelSemantics, pad_brick,
 };
 use grana_warp::{Warp, Warps};
 use grana_zarr::{Labels, Plate};
@@ -15,7 +15,7 @@ use rayon::prelude::*;
 use crate::align;
 use crate::cache::{self, Cache, Key, Shape, Store};
 use crate::level::Scale;
-use crate::plane;
+use crate::reduce;
 use crate::region;
 use crate::{Error, Series, Source};
 
@@ -44,7 +44,6 @@ pub struct Image {
     selected: usize,
     identity: Option<u64>,
     bricks: Cache,
-    planes: plane::Caches,
     store: Option<Store>,
 }
 
@@ -79,6 +78,7 @@ impl Image {
         let pyramid = crate::level::extended(declared);
         let dataset = match &inner {
             Inner::Zarr(image) => image.identity(),
+            Inner::Tiff(image) => Some(image.stamp()),
             _ => None,
         };
         let identity = cache::identity(source, &geometry(&pyramid), dataset);
@@ -90,7 +90,6 @@ impl Image {
         };
         Ok(Self {
             inner,
-            planes: plane::Caches::of(&pyramid),
             pyramid,
             series,
             selected: source.series(),
@@ -206,22 +205,59 @@ impl Image {
         coord: BrickCoord,
         warp: &Warp,
     ) -> Result<Arc<VoxelData>, Error> {
+        if warp.identity() {
+            return self.brick(time, level, channel, coord);
+        }
         let extent = self.level_extent(level)?;
         let grid = BrickGrid::new(extent);
         let spatial = grid.padded_range(coord);
         let covered = covered_extent(&spatial);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        let pad = |data: &VoxelData| pad_brick(data, origin, covered, grid.origin(coord), extent);
-        if !warp.identity() {
-            let data = self.aligned_region(time, level, channel, &spatial, warp)?;
-            return Ok(Arc::new(pad(&data)));
-        }
+        let data = self.aligned_region(time, level, channel, &spatial, warp)?;
+        Ok(Arc::new(pad_brick(
+            &data,
+            origin,
+            covered,
+            grid.origin(coord),
+            extent,
+        )))
+    }
+
+    fn brick(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        coord: BrickCoord,
+    ) -> Result<Arc<VoxelData>, Error> {
+        let extent = self.level_extent(level)?;
+        let grid = BrickGrid::new(extent);
+        let spatial = grid.padded_range(coord);
+        let covered = covered_extent(&spatial);
+        let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
         if let Some(data) = self.bricks.fetch(key) {
             return Ok(data);
         }
-        let region = Arc::new(self.stored_region(time, level, channel, &spatial)?);
-        let data = Arc::new(pad(&region));
+        let data = if level < self.pyramid.stored() {
+            let region = self.stored_region(time, level, channel, &spatial)?;
+            Arc::new(pad_brick(
+                &region,
+                origin,
+                covered,
+                grid.origin(coord),
+                extent,
+            ))
+        } else {
+            let (region, _) = self.covered_channel(time, level, channel, coord)?;
+            Arc::new(pad_brick(
+                &region,
+                origin,
+                covered,
+                grid.origin(coord),
+                extent,
+            ))
+        };
         self.bricks.insert(key, Arc::clone(&data));
         Ok(data)
     }
@@ -250,35 +286,22 @@ impl Image {
         coord: BrickCoord,
         warp: &Warp,
     ) -> Result<Arc<VoxelData>, Error> {
+        if warp.identity() {
+            return self.brick(time, level, channel, coord);
+        }
         let extent = self.level_extent(level)?;
         let grid = BrickGrid::new(extent);
         let spatial = grid.padded_range(coord);
         let covered = covered_extent(&spatial);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
-        if !warp.identity() {
-            let data = self.aligned_region(time, level, channel, &spatial, warp)?;
-            return Ok(Arc::new(pad_brick(
-                &data,
-                origin,
-                covered,
-                grid.origin(coord),
-                extent,
-            )));
-        }
-        let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
-        if let Some(data) = self.bricks.fetch(key) {
-            return Ok(data);
-        }
-        let (region, _) = self.covered_channel(time, level, channel, coord)?;
-        let data = Arc::new(pad_brick(
-            &region,
+        let data = self.aligned_region(time, level, channel, &spatial, warp)?;
+        Ok(Arc::new(pad_brick(
+            &data,
             origin,
             covered,
             grid.origin(coord),
             extent,
-        ));
-        self.bricks.insert(key, Arc::clone(&data));
-        Ok(data)
+        )))
     }
 
     fn covered_channel(
@@ -441,87 +464,6 @@ impl Image {
         Ok(output)
     }
 
-    fn plane(&self, time: u32, level: usize, z: u32) -> Result<Arc<plane::Plane>, Error> {
-        let key = plane::Key {
-            level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
-            time,
-            z,
-        };
-        let cache = &self.planes;
-        if let Some(held) = cache.fetch(key) {
-            return Ok(held);
-        }
-        let built = Arc::new(self.build_plane(time, level, z)?);
-        cache.insert(key, Arc::clone(&built));
-        Ok(built)
-    }
-
-    fn build_plane(&self, time: u32, level: usize, z: u32) -> Result<plane::Plane, Error> {
-        let extent = self.level_extent(level)?;
-        if time >= self.pyramid.frame_count() {
-            return Err(Error::Resolved {
-                detail: "the requested frame does not exist".to_string(),
-            });
-        }
-        if z >= extent.z() {
-            return Err(Error::Resolved {
-                detail: "the requested plane lies outside the level".to_string(),
-            });
-        }
-        let channels = self.pyramid.channel_count();
-        if level < self.pyramid.stored() {
-            let mut planes = Vec::with_capacity(channels);
-            for channel in 0..channels {
-                planes.push(self.stored_region(
-                    time,
-                    level,
-                    channel,
-                    &[0..extent.x(), 0..extent.y(), z..z + 1],
-                )?);
-            }
-            return Ok(plane::Plane::new(planes));
-        }
-        let parent = level - 1;
-        let source = self.level_extent(parent)?;
-        let width = extent.x() as usize;
-        let height = extent.y() as usize;
-        let start = z * 2;
-        let end = ((z + 1) * 2).min(source.z());
-        let mut held = Vec::with_capacity((end - start) as usize);
-        for source_z in start..end {
-            held.push(self.plane(time, parent, source_z)?);
-        }
-        let mut planes = Vec::with_capacity(channels);
-        for channel in 0..channels {
-            let format = self.channel_format(channel)?;
-            let semantics = self
-                .pyramid
-                .channels()
-                .get(channel)
-                .map_or(VoxelSemantics::Scalar, |info| info.semantics());
-            let sources = held
-                .iter()
-                .map(|plane| plane.channel(channel))
-                .collect::<Vec<_>>();
-            let mut output = VoxelData::blank(format, width * height);
-            let mut row = 0;
-            while row < height {
-                let next = (row + plane::STRIP_ROWS).min(height);
-                let strip = plane::reduce(format, semantics, source, width, row..next, &sources);
-                output.blit(
-                    &strip,
-                    Placement::new(width as u32, [0, 0]),
-                    Placement::new(width as u32, [0, row as u32]),
-                    width as u32,
-                    (next - row) as u32,
-                );
-                row = next;
-            }
-            planes.push(output);
-        }
-        Ok(plane::Plane::new(planes))
-    }
-
     fn compose(
         &self,
         time: u32,
@@ -529,25 +471,36 @@ impl Image {
         channel: usize,
         ranges: &[Range<u32>; 3],
     ) -> Result<VoxelData, Error> {
-        let extent = self.level_extent(level)?;
-        let width = extent.x() as usize;
-        let rows = (ranges[1].end - ranges[1].start) as usize;
-        let span = (ranges[0].end - ranges[0].start) as usize;
-        let mut output = region::allocate(self.channel_format(channel)?, ranges);
-        for z in ranges[2].clone() {
-            let held = self.plane(time, level, z)?;
-            let row = ((z - ranges[2].start) as usize) * rows;
-            region::copy_rows(
-                &mut output,
-                span,
-                row,
-                held.channel(channel),
-                width,
-                ranges[0].clone(),
-                ranges[1].clone(),
-            );
+        assert!(
+            level >= self.pyramid.stored(),
+            "a composed region names a resolved level"
+        );
+        let parent = level - 1;
+        let source_extent = self.level_extent(parent)?;
+        let source_ranges = [0, 1, 2].map(|axis| {
+            let limit = [source_extent.x(), source_extent.y(), source_extent.z()][axis];
+            (reduce::STEP * ranges[axis].start).min(limit)
+                ..(reduce::STEP * ranges[axis].end).min(limit)
+        });
+        let source = reduce::Source::new(source_extent, &source_ranges);
+        let format = self.channel_format(channel)?;
+        let mut data = VoxelData::blank(format, source.count());
+        let grid = BrickGrid::new(source_extent);
+        let (first, last) = grid.cover(&source_ranges);
+        for z in first[2]..=last[2] {
+            for y in first[1]..=last[1] {
+                for x in first[0]..=last[0] {
+                    let brick = self.brick(time, parent, channel, BrickCoord::new(x, y, z))?;
+                    source.stash(&mut data, &brick, [x, y, z]);
+                }
+            }
         }
-        Ok(output)
+        let semantics = self
+            .pyramid
+            .channels()
+            .get(channel)
+            .map_or(VoxelSemantics::Scalar, |info| info.semantics());
+        Ok(reduce::region(format, semantics, &source, &data, ranges))
     }
 
     fn held(
@@ -607,7 +560,8 @@ impl Image {
                 source[2].clone(),
             )?),
             Inner::Memory(_) => Ok(None),
-            Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => Ok(Some(0)),
+            Inner::Tiff(image) => Ok(Some(image.stamp())),
+            Inner::Czi(_) | Inner::Readout(_) => Ok(Some(0)),
         }
     }
 

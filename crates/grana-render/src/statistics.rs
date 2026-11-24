@@ -9,4 +9,6 @@ pub struct Statistics {
     pub payload: u64,
     pub prefetched: u64,
     pub prefetch_hits: u64,
+    pub frames: u64,
+    pub residency: u64,
 }

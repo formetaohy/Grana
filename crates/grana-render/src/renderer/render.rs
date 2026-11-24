@@ -64,6 +64,7 @@ struct Prepared {
     rebuilt: bool,
     ready: bool,
     stride: u32,
+    reach: f32,
 }
 
 enum Halt {
@@ -172,6 +173,7 @@ impl Renderer {
         self.sequence = self.sequence.wrapping_add(1);
         self.motion = Some(view.motion);
         let stride = self.convergence.stride(target.age);
+        let fragments = self.fragment_allowance(frame.size);
         let Self {
             layouts,
             present,
@@ -186,7 +188,6 @@ impl Renderer {
             info,
             residence,
             budget,
-            fragments,
             pipelines,
             ..
         } = self;
@@ -258,6 +259,7 @@ impl Renderer {
         });
         resources.upload.encode(device, queue, encoder);
         let tables = plan::tables(&resources.bricks, outlook.levels);
+        let reach = crate::frame::reach(frame.camera, &tables);
         let (step, ray_bounds) =
             match plan::ray(frame.camera, tables[0], scene.step_scale, view.height) {
                 Ok(ray) => ray,
@@ -275,7 +277,7 @@ impl Renderer {
                 slice: shot.slice,
                 volume: shot.volume,
                 layers,
-                fragments: *fragments,
+                fragments,
             },
         ) {
             return Err(Halt::Fail(detail));
@@ -401,6 +403,7 @@ impl Renderer {
             rebuilt: stale,
             ready: outlook.ready,
             stride,
+            reach,
         })
     }
 
@@ -642,6 +645,7 @@ impl Renderer {
             volume: prepared.shot.volume,
             reset: prepared.started.refresh,
             clamp: prepared.started.clamps_history(),
+            reach: prepared.reach,
             dummy_normal,
             dummy_volume,
         });

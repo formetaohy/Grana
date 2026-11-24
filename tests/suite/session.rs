@@ -53,7 +53,12 @@ fn detects_surfaces_masks_a_channel_and_captures() {
         assert_eq!(scene.derived()[0].spec().source(), 0);
     }
 
-    session.request(0, &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))], &[]);
+    session.request(
+        0,
+        0,
+        &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))],
+        &[],
+    );
     let deadline = Instant::now() + Duration::from_secs(30);
     let bricks = loop {
         session.poll();
@@ -1574,6 +1579,8 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
         .set_dataset(
             gpu.device(),
             session.scene().expect("the series opens").dataset.pyramid(),
+            support::budget(256 << 20, [160, 160]),
+            [160, 160],
         )
         .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
@@ -1598,11 +1605,16 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                 session.poll();
                 let time = session.scene().expect("the series opens").time();
                 if let Some(requests) = engine
-                    .poll_requests(gpu.device(), time)
+                    .poll_requests(gpu.device(), time, session.pending_requests())
                     .expect("the demand polls")
                 {
                     *streamed += requests.volume.len();
-                    session.request(requests.time, &requests.volume, &requests.prefetch);
+                    session.request(
+                        requests.time,
+                        requests.epoch,
+                        &requests.volume,
+                        &requests.prefetch,
+                    );
                 }
                 let bricks = session.take_bricks();
                 if !bricks.is_empty() {
@@ -1688,7 +1700,12 @@ fn reads_each_streamed_brick_once() {
         .pyramid()
         .clone();
     engine
-        .set_dataset(gpu.device(), &pyramid)
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            support::budget(256 << 20, [160, 160]),
+            [160, 160],
+        )
         .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
     camera.fit(
@@ -1710,7 +1727,7 @@ fn reads_each_streamed_brick_once() {
             engine.upload(&bricks);
         }
         if let Some(requests) = engine
-            .poll_requests(gpu.device(), time)
+            .poll_requests(gpu.device(), time, session.pending_requests())
             .expect("the demand polls")
         {
             for request in &requests.volume {
@@ -1719,7 +1736,12 @@ fn reads_each_streamed_brick_once() {
                     "the stream asked again for a brick it had already read"
                 );
             }
-            session.request(requests.time, &requests.volume, &requests.prefetch);
+            session.request(
+                requests.time,
+                requests.epoch,
+                &requests.volume,
+                &requests.prefetch,
+            );
         }
         engine
             .draw(
@@ -1821,7 +1843,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
     let bricks = (0..64)
         .map(|_| BrickRequest::new(0, 0, BrickCoord::new(0, 0, 0)))
         .collect::<Vec<_>>();
-    session.request(0, &bricks, &[]);
+    session.request(0, 0, &bricks, &[]);
     assert!(session.pending() > 0, "the brick reads are in flight");
     session.execute(Command::Undo);
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -1833,7 +1855,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    session.request(0, &bricks[..1], &[]);
+    session.request(0, 0, &bricks[..1], &[]);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         session.poll();

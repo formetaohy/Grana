@@ -3,16 +3,15 @@ use glam::{Mat4, Vec3};
 use grana_gpu::Pipelines;
 use grana_gpu::layout::{sampler, texture, uniform};
 use wgpu::{
-    AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
-    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferDescriptor, BufferUsages,
-    ColorTargetState, ColorWrites, CommandEncoder, Device, FilterMode, FragmentState, LoadOp,
-    Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerDescriptor,
-    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, TextureSampleType, TextureView,
-    TextureViewDimension, VertexState,
+    AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindingResource,
+    Buffer, BufferDescriptor, BufferUsages, ColorTargetState, ColorWrites, CommandEncoder, Device,
+    FilterMode, FragmentState, LoadOp, Operations, PipelineLayoutDescriptor, PrimitiveState, Queue,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    Sampler, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp,
+    TextureView, VertexState,
 };
 
-use super::{History, STATISTICS_FORMAT};
+use super::History;
 use crate::layout::Layouts;
 use crate::target::{SCENE_FORMAT, viewport};
 
@@ -34,6 +33,8 @@ const SHADER: &str = concat!(
     include_str!("../shader/temporal.wgsl")
 );
 
+const DEPTH_QUANTUM: f32 = 4.0e-4;
+
 #[derive(Clone, Copy)]
 pub(crate) struct State {
     pub(crate) previous: Mat4,
@@ -42,6 +43,8 @@ pub(crate) struct State {
     pub(crate) clamp: bool,
     pub(crate) ceiling: f32,
     pub(crate) exposure: f32,
+    pub(crate) reach: f32,
+    pub(crate) history: f32,
 }
 
 #[repr(C)]
@@ -50,6 +53,8 @@ struct Uniforms {
     previous: [[f32; 4]; 4],
     eye: [f32; 4],
     flags: [f32; 4],
+    depth: [f32; 4],
+    quantum: [f32; 4],
 }
 
 pub(crate) struct Resolve {
@@ -67,18 +72,8 @@ impl Resolve {
                 uniform(0, ShaderStages::FRAGMENT),
                 texture(1, ShaderStages::FRAGMENT),
                 texture(2, ShaderStages::FRAGMENT),
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture(3, ShaderStages::FRAGMENT),
                 sampler(4, ShaderStages::FRAGMENT),
-                texture(5, ShaderStages::FRAGMENT),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -118,12 +113,7 @@ impl Resolve {
                         write_mask: ColorWrites::ALL,
                     }),
                     Some(ColorTargetState {
-                        format: SCENE_FORMAT,
-                        blend: None,
-                        write_mask: ColorWrites::ALL,
-                    }),
-                    Some(ColorTargetState {
-                        format: STATISTICS_FORMAT,
+                        format: super::STATISTICS_FORMAT,
                         blend: None,
                         write_mask: ColorWrites::ALL,
                     }),
@@ -184,15 +174,24 @@ impl Resolve {
                     binding: 4,
                     resource: BindingResource::Sampler(&self.sampler),
                 },
-                BindGroupEntry {
-                    binding: 5,
-                    resource: BindingResource::TextureView(history.read_odd()),
-                },
             ],
         })
     }
 
     pub(crate) fn write(&self, queue: &Queue, state: State) {
+        assert!(
+            state.reach > 0.0 && state.reach.is_finite(),
+            "a temporal resolve names a positive depth reach"
+        );
+        assert!(
+            !state.intact || (state.history > 0.0 && state.history.is_finite()),
+            "a kept history names the depth reach it was written with"
+        );
+        let history = if state.intact {
+            state.history
+        } else {
+            state.reach
+        };
         let uniforms = Uniforms {
             previous: state.previous.to_cols_array_2d(),
             eye: state.eye.extend(0.0).to_array(),
@@ -202,6 +201,8 @@ impl Resolve {
                 state.ceiling,
                 state.exposure,
             ],
+            depth: [1.0 / history, 1.0 / state.reach, history, state.reach],
+            quantum: [history * DEPTH_QUANTUM, 0.0, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -218,7 +219,6 @@ impl Resolve {
             color_attachments: &[
                 Some(loaded(history.write_color())),
                 Some(loaded(history.resolved())),
-                Some(loaded(history.write_odd())),
                 Some(loaded(history.write_statistics())),
             ],
             ..Default::default()

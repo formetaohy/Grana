@@ -88,6 +88,7 @@ pub(crate) struct Ao {
     pipeline: RenderPipeline,
     filter_pipeline: RenderPipeline,
     uniform: Buffer,
+    bytes: u64,
 }
 
 pub(crate) struct AoPipeline {
@@ -175,7 +176,13 @@ impl Ao {
             pipeline: pipeline.gtao.clone(),
             filter_pipeline: pipeline.filter.clone(),
             uniform,
+            bytes: (crate::target::bytes(OUTPUT_FORMAT, half)
+                + crate::target::bytes(OUTPUT_FORMAT, size)),
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn group(&self) -> &BindGroup {

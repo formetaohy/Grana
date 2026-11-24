@@ -62,7 +62,6 @@ impl Convergence {
                     count: None,
                 },
                 storage(3, ShaderStages::COMPUTE, false),
-                texture(4, ShaderStages::COMPUTE),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -198,10 +197,6 @@ impl Convergence {
                 BindGroupEntry {
                     binding: 3,
                     resource: self.bins.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::TextureView(history.read_odd()),
                 },
             ],
         });

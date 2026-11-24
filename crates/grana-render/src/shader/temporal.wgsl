@@ -2,6 +2,8 @@ struct TemporalData {
     previous: mat4x4<f32>,
     eye: vec4<f32>,
     flags: vec4<f32>,
+    depth: vec4<f32>,
+    quantum: vec4<f32>,
 }
 
 @group(2) @binding(0) var<uniform> temporal: TemporalData;
@@ -9,13 +11,20 @@ struct TemporalData {
 @group(2) @binding(2) var history_color: texture_2d<f32>;
 @group(2) @binding(3) var history_statistics: texture_2d<f32>;
 @group(2) @binding(4) var history_sampler: sampler;
-@group(2) @binding(5) var history_odd: texture_2d<f32>;
 
 const UNREACHED: f32 = 1.0e19;
 
 const UNKNOWN: f32 = 1.0e18;
 
 const DEPTH_MARGIN: f32 = 6.0;
+
+const NO_SURFACE: f32 = 1.0;
+
+const NO_SURFACE_EDGE: f32 = 0.995;
+
+const ENCODED_CEILING: f32 = 0.99;
+
+const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 struct VertexOutput {
     @builtin(position) clip: vec4<f32>,
@@ -36,13 +45,13 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 struct TemporalOutput {
     @location(0) retained: vec4<f32>,
     @location(1) resolved: vec4<f32>,
-    @location(2) odd: vec4<f32>,
-    @location(3) statistics: vec4<f32>,
+    @location(2) statistics: vec4<f32>,
 }
 
 struct Range {
     low: vec4<f32>,
     high: vec4<f32>,
+    luma: vec2<f32>,
 }
 
 struct Reprojection {
@@ -70,13 +79,15 @@ fn from_ycocg(value: vec3<f32>) -> vec3<f32> {
 }
 
 fn neighbourhood(at: vec2<i32>, low: vec2<i32>, high: vec2<i32>) -> Range {
-    var range = Range(vec4<f32>(1.0e20), vec4<f32>(-1.0e20));
+    var range = Range(vec4<f32>(1.0e20), vec4<f32>(-1.0e20), vec2<f32>(1.0e20, -1.0e20));
     for (var y = -1; y <= 1; y += 1) {
         for (var x = -1; x <= 1; x += 1) {
             let value = textureLoad(current, clamp(at + vec2<i32>(x, y), low, high), 0);
             let chroma = to_ycocg(value.rgb);
             range.low = min(range.low, vec4<f32>(chroma, value.a));
             range.high = max(range.high, vec4<f32>(chroma, value.a));
+            let luma = dot(value.rgb, LUMA);
+            range.luma = vec2<f32>(min(range.luma.x, luma), max(range.luma.y, luma));
         }
     }
     return range;
@@ -94,14 +105,23 @@ fn specimen(pixel: vec2<i32>, ndc: vec2<f32>) -> Specimen {
     return Specimen(world, surface.known, reach);
 }
 
-fn survives(held: f32, world: Specimen) -> bool {
-    if (!world.known) {
-        return held >= UNKNOWN;
+fn encode_reach(held: Specimen) -> f32 {
+    if (!held.known) {
+        return NO_SURFACE;
     }
-    if (held >= UNKNOWN) {
+    return clamp(0.5 * held.reach * temporal.depth.y, 0.0, ENCODED_CEILING);
+}
+
+fn survives(encoded: f32, world: Specimen) -> bool {
+    if (!world.known) {
+        return encoded >= NO_SURFACE_EDGE;
+    }
+    if (encoded >= NO_SURFACE_EDGE) {
         return false;
     }
-    return abs(held - world.reach) <= DEPTH_MARGIN * pixel_world(world.reach);
+    let held = encoded * 2.0 * temporal.depth.z;
+    let margin = max(DEPTH_MARGIN * pixel_world(world.reach), temporal.quantum.x);
+    return abs(held - world.reach) <= margin;
 }
 
 fn reproject(world: vec3<f32>, extent: vec2<f32>) -> Reprojection {
@@ -117,12 +137,11 @@ fn reproject(world: vec3<f32>, extent: vec2<f32>) -> Reprojection {
     return Reprojection(uv, valid);
 }
 
-fn fresh(color: vec4<f32>, reach: f32) -> TemporalOutput {
+fn fresh(color: vec4<f32>, world: Specimen) -> TemporalOutput {
     return TemporalOutput(
         color,
         color,
-        color,
-        vec4<f32>(2.0, 1.0, 0.0, reach),
+        vec4<f32>(2.0, 1.0, dot(color.rgb, LUMA), encode_reach(world)),
     );
 }
 
@@ -137,23 +156,23 @@ fn fs_main(input: VertexOutput) -> TemporalOutput {
     let colour = textureLoad(current, pixel, 0);
     let world = specimen(pixel, ndc);
     if (temporal.flags.x <= 0.5) {
-        return fresh(colour, world.reach);
+        return fresh(colour, world);
     }
     let projection = reproject(world.world, extent);
     if (!projection.valid) {
-        return fresh(colour, world.reach);
+        return fresh(colour, world);
     }
     let at = clamp(vec2<i32>(projection.uv * extent), origin, last);
     let stored = textureLoad(history_statistics, pixel, 0);
     if (temporal.flags.y > 0.5 && !survives(textureLoad(history_statistics, at, 0).w, world)) {
-        return fresh(colour, world.reach);
+        return fresh(colour, world);
     }
     var held = textureSampleLevel(history_color, history_sampler, projection.uv, 0.0);
-    var odd = textureSampleLevel(history_odd, history_sampler, projection.uv, 0.0);
+    var odd = stored.z;
     if (temporal.flags.y > 0.5) {
         let range = neighbourhood(pixel, origin, last);
         held = clamp_history(held, range);
-        odd = clamp_history(odd, range);
+        odd = clamp(odd, range.luma.x, range.luma.y);
     }
     let carried = clamp(stored.x, 2.0, temporal.flags.z - 1.0);
     let odd_carried = clamp(stored.y, 1.0, carried);
@@ -163,13 +182,12 @@ fn fs_main(input: VertexOutput) -> TemporalOutput {
     var next_odd = odd;
     var odd_count = odd_carried;
     if (sample_odd) {
-        next_odd = mix(odd, colour, 1.0 / (odd_carried + 1.0));
+        next_odd = mix(odd, dot(colour.rgb, LUMA), 1.0 / (odd_carried + 1.0));
         odd_count = odd_carried + 1.0;
     }
     return TemporalOutput(
         resolved,
         resolved,
-        next_odd,
-        vec4<f32>(index, odd_count, 0.0, world.reach),
+        vec4<f32>(index, odd_count, next_odd, encode_reach(world)),
     );
 }

@@ -165,6 +165,10 @@ impl Oit {
         self.fragment.layers()
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.fragment.bytes()
+    }
+
     pub fn write_group(&self) -> &BindGroup {
         &self.write_group
     }

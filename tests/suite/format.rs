@@ -1750,9 +1750,17 @@ fn reads_a_multi_file_ome_tiff_by_uuid() {
         &[(2, 1, &[3u8, 4])],
     );
     let expected = [1u8, 2, 3, 4];
+    let stamp = grana_tiff::Image::open(&first, 0)
+        .expect("the split series opens")
+        .stamp();
     for path in [&first, &second] {
         let image = grana_tiff::Image::open(path, 0).expect("the split series opens");
         assert_eq!(image.pyramid().level(0).extent(), Extent::new(2, 1, 2));
+        assert_eq!(
+            image.stamp(),
+            stamp,
+            "both members of a split series name one dataset"
+        );
         let VoxelData::U8(values) = image
             .read_region(0, 0, 0, 0..2, 0..1, 0..2)
             .expect("the split series reads")
@@ -1764,6 +1772,18 @@ fn reads_a_multi_file_ome_tiff_by_uuid() {
             "each plane comes from the file its UUID names"
         );
     }
+    support::ome_tiff(
+        &second,
+        &format!("{}\n", split_xml(second_uuid, first_uuid, second_uuid)),
+        &[(2, 1, &[5u8, 6])],
+    );
+    assert!(
+        grana_tiff::Image::open(&first, 0)
+            .expect("the split series opens")
+            .stamp()
+            != stamp,
+        "a changed member changes the identity the derived cache keys on"
+    );
     let orphan = Temp::new("suite-ome-tiff-orphan");
     let path = orphan.path().join("orphan.ome.tif");
     support::ome_tiff(

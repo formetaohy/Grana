@@ -255,6 +255,30 @@ pub(crate) fn lens(camera: &Camera, index: u32, samples: u32, aspect: f32) -> [f
     ]
 }
 
+pub(super) fn reach(camera: &Camera, tables: &[&BrickTable]) -> f32 {
+    let eye = camera.eye();
+    let mut far = (camera.pivot() - eye).length();
+    for table in tables {
+        let (low, high) = table.bounds;
+        for corner in 0..8 {
+            let point = Vec3::new(
+                if corner & 1 == 0 { low.x } else { high.x },
+                if corner & 2 == 0 { low.y } else { high.y },
+                if corner & 4 == 0 { low.z } else { high.z },
+            );
+            far = far.max((point - eye).length());
+        }
+    }
+    let far = far.max(1.0e-3);
+    assert!(
+        far > 0.0 && far.is_finite(),
+        "a frame names a positive depth reach"
+    );
+    far * REACH_MARGIN
+}
+
+pub(super) const REACH_MARGIN: f32 = 1.25;
+
 pub(super) fn step_length(camera: &Camera, table: &BrickTable, step_scale: f32) -> f32 {
     let direction = camera.forward();
     let mut voxel_world = f32::INFINITY;

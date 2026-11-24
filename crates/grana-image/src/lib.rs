@@ -5,7 +5,7 @@ mod fingerprint;
 mod image;
 mod level;
 mod metric;
-mod plane;
+mod reduce;
 mod region;
 mod series;
 mod source;

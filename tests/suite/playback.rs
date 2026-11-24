@@ -12,7 +12,7 @@ use grana_volume::{
     VoxelSemantics,
 };
 
-use crate::support::gpu;
+use crate::support::{budget, gpu};
 
 const PLAYBACK: Duration = Duration::from_millis(90);
 
@@ -43,6 +43,8 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
         .set_dataset(
             gpu.device(),
             session.scene().expect("a scene").dataset.pyramid(),
+            budget(256 << 20, [320, 320]),
+            [320, 320],
         )
         .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
@@ -56,13 +58,18 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
         session.poll();
         let current = session.scene().expect("a scene").time();
         if let Some(requests) = engine
-            .poll_requests(gpu.device(), current)
+            .poll_requests(gpu.device(), current, session.pending_requests())
             .expect("the demand polls")
             && session
                 .scene()
                 .is_some_and(|scene| scene.time() == requests.time)
         {
-            session.request(requests.time, &requests.volume, &requests.prefetch);
+            session.request(
+                requests.time,
+                requests.epoch,
+                &requests.volume,
+                &requests.prefetch,
+            );
         }
         let bricks = session.take_bricks();
         if !bricks.is_empty() {

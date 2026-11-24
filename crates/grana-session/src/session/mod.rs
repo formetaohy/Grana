@@ -47,7 +47,9 @@ use grana_scene::{
 };
 use grana_store::DEFAULT_BUDGET;
 use grana_store::SpillStore;
-use grana_volume::{BrickRequest, Calibration, Damage, Fingerprint, PackedBrick, Spacing};
+use grana_volume::{
+    BrickRequest, Calibration, Damage, Fingerprint, PackedBrick, Spacing, packed_bytes,
+};
 
 use crate::access::Access;
 use crate::command::{Edit, Export};
@@ -80,6 +82,8 @@ use stitch::Stitch;
 use tasks::Tasks;
 
 const MAX_IN_FLIGHT: usize = 8192;
+
+const READ_BYTES: u64 = 256 << 20;
 
 const DRAIN: Duration = Duration::from_millis(2);
 
@@ -144,6 +148,7 @@ pub struct Session {
     analysis: Vec<Analysis>,
     progress: Vec<Progress>,
     in_flight: HashSet<BrickRequest>,
+    plan: u64,
     abandoned: Vec<BrickRequest>,
     reads_started: u64,
     reads_delivered: u64,
@@ -243,6 +248,7 @@ impl Session {
             analysis: Vec::new(),
             progress: Vec::new(),
             in_flight: HashSet::new(),
+            plan: 0,
             abandoned: Vec::new(),
             reads_started: 0,
             reads_delivered: 0,
@@ -419,6 +425,10 @@ impl Session {
 
     pub fn pending(&self) -> usize {
         self.in_flight.len()
+    }
+
+    pub fn pending_requests(&self) -> &HashSet<BrickRequest> {
+        &self.in_flight
     }
 
     pub fn working(&self) -> bool {
@@ -792,14 +802,25 @@ impl Session {
     pub fn write_progress(&self) -> Option<(&str, usize, usize)> {
         self.tasks.progress()
     }
-    pub fn request(&mut self, time: u32, demand: &[BrickRequest], prefetch: &[BrickRequest]) {
+    pub fn request(
+        &mut self,
+        time: u32,
+        plan: u64,
+        demand: &[BrickRequest],
+        prefetch: &[BrickRequest],
+    ) {
         if self.loading.is_some() {
             return;
         }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            return;
+        };
+        let count = channels.pyramid().channel_count();
         let now = Instant::now();
         let Self {
             source,
             in_flight,
+            plan: plan_state,
             failed,
             message,
             reads_started,
@@ -808,9 +829,16 @@ impl Session {
         let Some(loader) = source.as_ref() else {
             return;
         };
+        loader.set_plan(plan);
+        if plan != *plan_state {
+            *plan_state = plan;
+            in_flight.clear();
+        }
+        let bytes = |request: &BrickRequest| packed_bytes(count, request.channels);
+        let mut used = in_flight.iter().map(bytes).sum::<u64>();
+        let mut held = in_flight.len();
         let mut demand_batch = Vec::with_capacity(demand.len().min(MAX_IN_FLIGHT));
         let mut prefetch_batch = Vec::with_capacity(prefetch.len().min(MAX_IN_FLIGHT));
-        let mut budget = MAX_IN_FLIGHT;
         for (bricks, batch) in [(demand, &mut demand_batch), (prefetch, &mut prefetch_batch)] {
             for request in bricks {
                 if request.time < time || in_flight.contains(request) {
@@ -821,10 +849,12 @@ impl Session {
                 {
                     continue;
                 }
-                if budget == 0 {
-                    break;
+                let cost = bytes(request);
+                if held >= MAX_IN_FLIGHT || used.saturating_add(cost) > READ_BYTES {
+                    continue;
                 }
-                budget -= 1;
+                held += 1;
+                used += cost;
                 batch.push(*request);
             }
         }

@@ -71,6 +71,7 @@ pub struct Image {
     levels: Vec<LevelPages>,
     series: Vec<Series>,
     files: Fileset,
+    stamp: u64,
     cache: Cache,
 }
 
@@ -99,7 +100,7 @@ struct Request {
 
 impl Image {
     pub fn open(path: &Path, series: usize) -> Result<Self, Error> {
-        let first = File::open(path)?;
+        let first = File::open(path, crate::fileset::Caches::new())?;
         let described = metadata(&first, path)?;
         if described.binary_only {
             return Err(Error::unsupported(
@@ -134,12 +135,11 @@ impl Image {
         let chunky = page.channels() > 1;
         let format = page.format();
         let samples = page.channels();
-        let stacked = files
-            .root()
-            .pages
-            .iter()
-            .take_while(|held| held.width == page.width && held.height == page.height)
-            .count();
+        let stacked = if images.is_empty() {
+            stacked(files.root(), &page)?
+        } else {
+            0
+        };
         let declared = declared(&images, &page, stacked);
         let sizes = counts(ome, stacked, samples, chunky, path)?;
         let order = ome
@@ -167,11 +167,11 @@ impl Image {
                 ));
             }
         }
-        let deepest = placed
-            .values()
-            .map(|slot| files.file(slot.file).pages[slot.page].sub_ifds.len())
-            .min()
-            .unwrap_or(0);
+        let mut deepest = usize::MAX;
+        for slot in placed.values() {
+            deepest = deepest.min(files.file(slot.file).page(slot.page, 0)?.sub_ifds.len());
+        }
+        let deepest = if placed.is_empty() { 0 } else { deepest };
         let chained = if ome.is_none() && files.count() == 1 && planes.count() == 1 {
             chained_levels(files.root(), base_page, format, path)?
         } else {
@@ -314,6 +314,7 @@ impl Image {
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| dataset_name(path));
         let stored = pyramid_levels.len();
+        let stamp = files.stamp();
         Ok(Self {
             path: path.to_path_buf(),
             name,
@@ -329,8 +330,13 @@ impl Image {
             levels,
             series: declared,
             files,
+            stamp,
             cache,
         })
+    }
+
+    pub fn stamp(&self) -> u64 {
+        self.stamp
     }
 
     pub fn name(&self) -> &str {
@@ -381,21 +387,35 @@ fn selected_page(files: &Fileset, ome: Option<&OmeImage>) -> Result<(usize, usiz
     Ok((index, block.ifd as usize))
 }
 
+fn stacked(volume: &File, base: &Page) -> Result<usize, Error> {
+    let mut count = 0;
+    for index in 0..volume.page_count() {
+        let held = volume.page(index, 0)?;
+        if held.width != base.width || held.height != base.height {
+            break;
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+
 fn chained_levels(
     volume: &File,
     base: usize,
     format: VoxelFormat,
     path: &Path,
 ) -> Result<Vec<usize>, Error> {
-    let Some(first) = volume.pages.get(base) else {
+    if base >= volume.page_count() {
         return Err(Error::metadata(path, "the TIFF series holds no page"));
-    };
+    }
+    let first = volume.page(base, 0)?;
     if !first.tiled {
         return Ok(Vec::new());
     }
     let mut levels = Vec::new();
     let mut previous = first;
-    for (index, page) in volume.pages.iter().enumerate().skip(base + 1) {
+    for index in base + 1..volume.page_count() {
+        let page = volume.page(index, 0)?;
         if page.subfile & MASK != 0 || !page.tiled {
             continue;
         }
@@ -744,7 +764,7 @@ fn scale(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
 
 fn mpp(volume: &File, path: &Path) -> Result<Option<f32>, Error> {
     let Some(text) = volume
-        .directory()?
+        .directory()
         .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?
     else {
         return Ok(None);
@@ -766,7 +786,7 @@ fn mpp(volume: &File, path: &Path) -> Result<Option<f32>, Error> {
 }
 
 fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
-    let directory = volume.directory()?;
+    let directory = volume.directory();
     let Some(value) = directory
         .rational(&volume.store, tag, path)?
         .filter(|value| *value > 0.0)
@@ -786,7 +806,7 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
 
 fn metadata(volume: &File, path: &Path) -> Result<grana_ome::Metadata, Error> {
     let description = volume
-        .directory()?
+        .directory()
         .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?;
     parse_metadata(description.as_deref(), path)
 }

@@ -41,6 +41,17 @@ fn covers(channels: usize, scope: ChannelSet, pack: usize) -> bool {
     (pack * PACK..(pack + 1) * PACK).all(|channel| channel >= channels || scope.contains(channel))
 }
 
+pub fn packed_bytes(channels: usize, scope: ChannelSet) -> u64 {
+    let side = PADDED_SIDE as u64;
+    (0..pack_count(channels))
+        .filter(|pack| covers(channels, scope, *pack))
+        .map(|pack| {
+            side.pow(3) * texels(components(channels, pack)) as u64 * 2
+                + CELL_COUNT as u64 * size_of::<f32>() as u64
+        })
+        .sum()
+}
+
 pub struct Pack {
     components: usize,
     maximum: f32,

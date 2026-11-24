@@ -109,6 +109,10 @@ pub fn gpu() -> Option<Gpu> {
     })
 }
 
+pub fn budget(residency: u64, size: [u32; 2]) -> u64 {
+    residency + grana_render::target_bytes(size)
+}
+
 pub fn revision() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)

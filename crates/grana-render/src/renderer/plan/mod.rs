@@ -365,4 +365,4 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
 
 mod residence;
 
-pub(crate) use residence::{Adapt, Residence};
+pub(crate) use residence::{Adapt, Poll, Residence};

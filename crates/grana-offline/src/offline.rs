@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,12 +111,15 @@ impl Offline {
             return outcome;
         }
         let pyramid = scene.dataset.pyramid().clone();
+        let size = plan.size.to_array();
         let needed = match plan::residency(&plan, &pyramid) {
             Ok(needed) => needed,
             Err(detail) => return Outcome::Failed { detail },
         };
-        self.renderer.set_budget(self.budget);
-        if let Err(detail) = self.renderer.set_dataset(&self.device, &pyramid) {
+        if let Err(detail) = self
+            .renderer
+            .set_dataset(&self.device, &pyramid, self.budget, size)
+        {
             return Outcome::Failed { detail };
         }
         if let Err(detail) =
@@ -193,7 +197,7 @@ impl Offline {
     }
 
     fn pump(&mut self, bricks: &Arc<dyn Bricks>, scene: &Scene) -> Result<(), String> {
-        let Some(requests) = self.renderer.poll_requests(&self.device)? else {
+        let Some(requests) = self.renderer.poll_requests(&self.device, &HashSet::new())? else {
             return Ok(());
         };
         if requests.time != scene.time() {

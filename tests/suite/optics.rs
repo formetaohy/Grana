@@ -3,7 +3,7 @@ use grana_display::{Camera, CameraProjection, Shading, TransferFunction, VolumeS
 use grana_render::{ChannelRow, Frame, Renderer, Requests, SceneFrame, SplatChunk, Splats};
 use grana_volume::{BrickGrid, Clip, Extent, PackedBrick, Pyramid, Region, Spacing, Volume};
 
-use crate::support::{Gpu, gpu, read_pixels, spheres, splat, versions};
+use crate::support::{Gpu, budget, gpu, read_pixels, spheres, splat, versions};
 
 const SIDE: u32 = 384;
 const FRAMES: u32 = 32;
@@ -25,7 +25,12 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         gpu.pipelines(),
     );
     renderer
-        .set_dataset(gpu.device(), &pyramid)
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            budget(256 << 20, [SIDE, SIDE]),
+            [SIDE, SIDE],
+        )
         .expect("the test budget holds the volume");
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("grana.optics.target"),
@@ -221,7 +226,7 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
 fn demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
     for _ in 0..4 {
         match renderer
-            .poll_requests(gpu.device())
+            .poll_requests(gpu.device(), &std::collections::HashSet::new())
             .expect("the demand polls")
         {
             Some(requests) => return Some(requests),

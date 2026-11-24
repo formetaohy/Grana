@@ -33,7 +33,7 @@ mod temporal;
 mod upload;
 mod volume;
 
-pub use budget::texture_budget;
+pub use budget::{target_bytes, texture_budget};
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency, residency_budget};
 pub use fragment::{Fragment, fit as fragment_fit};
 pub use image::{Pixels, stride as picture_stride, target as picture_target};

@@ -18,6 +18,7 @@ pub(super) struct Accumulate<'a> {
     pub(super) volume: bool,
     pub(super) reset: bool,
     pub(super) clamp: bool,
+    pub(super) reach: f32,
     pub(super) dummy_normal: &'a TextureView,
     pub(super) dummy_volume: &'a crate::target::Unreached,
 }
@@ -53,6 +54,7 @@ pub(super) fn accumulate(stage: Accumulate<'_>) -> bool {
         volume,
         reset,
         clamp,
+        reach,
         dummy_normal,
         dummy_volume,
     } = stage;
@@ -71,6 +73,8 @@ pub(super) fn accumulate(stage: Accumulate<'_>) -> bool {
             clamp,
             ceiling: temporal::SAMPLE_BUDGET as f32,
             exposure,
+            reach,
+            history: target.temporal.reach(),
         },
     );
     let geometry = target.geometry(device, layouts, dummy_normal, dummy_volume, volume);
@@ -81,7 +85,7 @@ pub(super) fn accumulate(stage: Accumulate<'_>) -> bool {
         &target.temporal,
         region,
     );
-    target.temporal.advance(current, eye);
+    target.temporal.advance(current, eye, reach);
     intact
 }
 

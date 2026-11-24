@@ -56,6 +56,7 @@ pub struct Loader {
 
 struct Shared {
     time: AtomicU32,
+    plan: AtomicU64,
     drifts: RwLock<Drifts>,
     channels: RwLock<Option<Arc<Channels>>>,
     generation: AtomicU64,
@@ -93,6 +94,7 @@ impl Loader {
                 reader: Executor::lane(Role::Read),
                 shared: Arc::new(Shared {
                     time: AtomicU32::new(0),
+                    plan: AtomicU64::new(0),
                     drifts: RwLock::new(Drifts::new()),
                     channels: RwLock::new(Some(channels)),
                     generation: AtomicU64::new(0),
@@ -125,6 +127,7 @@ impl Loader {
         let (sender, events) = Pipe::new(INBOX);
         let shared = Arc::new(Shared {
             time: AtomicU32::new(0),
+            plan: AtomicU64::new(0),
             drifts: RwLock::new(Drifts::new()),
             channels: RwLock::new(None),
             generation: AtomicU64::new(0),
@@ -169,12 +172,17 @@ impl Loader {
         self.shared.generation.fetch_add(1, AtomicOrdering::Relaxed);
     }
 
+    pub fn set_plan(&self, plan: u64) {
+        self.shared.plan.store(plan, AtomicOrdering::Relaxed);
+    }
+
     pub fn request(&self, demand: &[BrickRequest], prefetch: &[BrickRequest]) -> bool {
         if self.shared.closed.load(AtomicOrdering::Relaxed) {
             return false;
         }
         let current = self.shared.time.load(AtomicOrdering::Relaxed);
         let generation = self.generation();
+        let plan = self.shared.plan.load(AtomicOrdering::Relaxed);
         for (priority, requests) in [(Priority::Demand, demand), (Priority::Background, prefetch)] {
             let batch = requests
                 .iter()
@@ -188,8 +196,9 @@ impl Loader {
             let events = self.sender.clone();
             self.reader
                 .submit_batch(priority, batch, BATCH, move |cancel, request| {
-                    let outcome =
-                        grana_exec::contain(|| read(request, generation, &shared, cancel, &events));
+                    let outcome = grana_exec::contain(|| {
+                        read(request, plan, generation, &shared, cancel, &events);
+                    });
                     if let Err(fault) = outcome {
                         events.send_until(
                             Event::ReadFailed {
@@ -338,14 +347,16 @@ fn open(source: Source, remote: bool, shared: &Shared, cancel: &Cancel, sender: 
 
 fn read(
     request: BrickRequest,
+    plan: u64,
     generation: u64,
     shared: &Shared,
     cancel: &Cancel,
     events: &Sender<Event>,
 ) {
+    let shut = || shared.closed.load(AtomicOrdering::Relaxed) || cancel.cancelled();
     let stopped = || {
-        shared.closed.load(AtomicOrdering::Relaxed)
-            || cancel.cancelled()
+        shut()
+            || shared.plan.load(AtomicOrdering::Relaxed) != plan
             || shared.generation.load(AtomicOrdering::Relaxed) != generation
             || request.time < shared.time.load(AtomicOrdering::Relaxed)
     };
@@ -374,6 +385,9 @@ fn read(
         request.channels,
     ) {
         Ok(data) => {
+            if stopped() {
+                return;
+            }
             let bytes = data.bytes();
             let packed = PackedBrick::of(&data, channels.pyramid(), request.channels);
             events.send_until(
@@ -387,6 +401,9 @@ fn read(
             );
         }
         Err(error) => {
+            if stopped() {
+                return;
+            }
             events.send_until(
                 Event::ReadFailed {
                     generation,

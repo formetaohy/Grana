@@ -11,7 +11,9 @@ use grana_volume::{
     Pyramid, Region, Spacing, Volume, VoxelData,
 };
 
-use crate::support::{Gpu, Hue, Snapshot, gpu, read_pixels, revision, spheres, splat, versions};
+use crate::support::{
+    Gpu, Hue, Snapshot, budget, gpu, read_pixels, revision, spheres, splat, versions,
+};
 
 const SIDE: u32 = 128;
 const CAP: usize = 0;
@@ -91,7 +93,12 @@ fn build_renderer(gpu: &Gpu, pyramid: &Pyramid) -> Renderer {
         gpu.pipelines(),
     );
     renderer
-        .set_dataset(gpu.device(), pyramid)
+        .set_dataset(
+            gpu.device(),
+            pyramid,
+            budget(BUDGET, [SIDE, SIDE]),
+            [SIDE, SIDE],
+        )
         .expect("the test budget holds the volume");
     renderer
 }
@@ -211,7 +218,7 @@ fn settle_with<'a, 'b: 'a>(
 fn next_demand(gpu: &Gpu, renderer: &mut Renderer) -> Option<Requests> {
     for _ in 0..4 {
         match renderer
-            .poll_requests(gpu.device())
+            .poll_requests(gpu.device(), &std::collections::HashSet::new())
             .expect("the demand polls")
         {
             Some(requests) => return Some(requests),
@@ -1252,7 +1259,12 @@ fn fits_the_volume_level_to_the_residency_budget() {
             gpu.pipelines(),
         );
         renderer
-            .set_dataset(gpu.device(), &pyramid)
+            .set_dataset(
+                gpu.device(),
+                &pyramid,
+                budget(16 << 20, [SIDE, SIDE]),
+                [SIDE, SIDE],
+            )
             .expect("the test budget holds the volume");
         let target = texture(&gpu, SIDE);
         let view_texture = target.create_view(&Default::default());
@@ -1276,7 +1288,12 @@ fn fits_the_volume_level_to_the_residency_budget() {
         gpu.pipelines(),
     );
     renderer
-        .set_dataset(gpu.device(), &pyramid)
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            budget(200 << 10, [SIDE, SIDE]),
+            [SIDE, SIDE],
+        )
         .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
@@ -1323,7 +1340,12 @@ fn restarts_accumulation_when_the_band_ladder_changes() {
         gpu.pipelines(),
     );
     renderer
-        .set_dataset(gpu.device(), &pyramid)
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            budget(16 << 20, [SIDE, SIDE]),
+            [SIDE, SIDE],
+        )
         .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());
@@ -2560,7 +2582,12 @@ fn prefetches_the_carried_frame_into_vacant_slots() {
         gpu.pipelines(),
     );
     renderer
-        .set_dataset(gpu.device(), &pyramid)
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            budget(8 << 20, [SIDE, SIDE]),
+            [SIDE, SIDE],
+        )
         .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
     let view_texture = target.create_view(&Default::default());

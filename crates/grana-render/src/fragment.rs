@@ -46,17 +46,28 @@ impl Fragment {
         self.capacity * COUNT_BYTES
     }
 
-    pub fn residual(&self) -> u64 {
-        self.pixels() * RESIDUAL_BYTES
-    }
-
     pub fn bytes(&self) -> u64 {
-        self.keys() + self.colors() + self.counts() + self.residual()
+        layered(self.size, self.layers)
     }
+}
 
-    fn pixels(&self) -> u64 {
-        u64::from(self.size[0]) * u64::from(self.size[1])
-    }
+fn capacity(size: [u32; 2]) -> u64 {
+    let pixels = u64::from(size[0]) * u64::from(size[1]);
+    pixels.div_ceil(PIXEL_STEP) * PIXEL_STEP
+}
+
+pub(crate) fn layered(size: [u32; 2], layers: u64) -> u64 {
+    assert!(
+        (1..=LAYER_LIMIT).contains(&layers),
+        "a fragment store holds one to {LAYER_LIMIT} layers"
+    );
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a fragment store covers a non empty view"
+    );
+    let capacity = capacity(size);
+    let pixels = u64::from(size[0]) * u64::from(size[1]);
+    capacity * layers * SLOT_BYTES + capacity * COUNT_BYTES + pixels * RESIDUAL_BYTES
 }
 
 pub fn fit(
@@ -104,7 +115,7 @@ fn plan(
         ));
     }
     let pixels = u64::from(size[0]) * u64::from(size[1]);
-    let capacity = pixels.div_ceil(PIXEL_STEP) * PIXEL_STEP;
+    let capacity = capacity(size);
     let fixed = capacity * COUNT_BYTES + pixels * RESIDUAL_BYTES;
     let slot = capacity * SLOT_BYTES;
     let budgeted = allowance.saturating_sub(fixed) / slot;

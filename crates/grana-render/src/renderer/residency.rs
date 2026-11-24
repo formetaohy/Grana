@@ -162,6 +162,14 @@ impl ViewKey {
             && self.slice == other.slice
     }
 
+    pub(super) fn same_plan(&self, other: &Self) -> bool {
+        self.epoch == other.epoch
+            && self.time == other.time
+            && self.size == other.size
+            && self.levels == other.levels
+            && self.slice == other.slice
+    }
+
     pub(super) fn prefetch_digest(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.epoch.hash(&mut hasher);
@@ -226,12 +234,21 @@ impl TargetCache {
         self.slots.iter_mut().flatten()
     }
 
+    pub(super) fn bytes(&self) -> u64 {
+        self.slots
+            .iter()
+            .flatten()
+            .map(FrameTarget::bytes)
+            .sum::<u64>()
+    }
+
     pub(super) fn take(
         &mut self,
         device: &Device,
         layouts: &Layouts,
         present: &Present,
         size: [u32; 2],
+        allowance: u64,
     ) -> (FrameTarget, bool) {
         let held = (0..self.slots.len()).find(|index| {
             self.slots[*index]
@@ -244,6 +261,11 @@ impl TargetCache {
                 let index = (0..self.slots.len())
                     .find(|index| *index != self.current)
                     .unwrap_or(0);
+                let cost = crate::budget::Frames::of(size).bytes();
+                let retained = self.slots[index].as_ref().map_or(0, FrameTarget::bytes);
+                if cost.saturating_add(retained) > allowance {
+                    self.slots[index] = None;
+                }
                 self.slots[index] = Some(FrameTarget::new(device, layouts, present, size));
                 (index, true)
             }
@@ -294,6 +316,13 @@ pub(super) struct GeometryKey {
 pub(super) struct FadeTarget {
     texture: Texture,
     group: BindGroup,
+    bytes: u64,
+}
+
+impl FadeTarget {
+    fn bytes(&self) -> u64 {
+        self.bytes
+    }
 }
 
 impl FrameTarget {
@@ -433,13 +462,36 @@ impl FrameTarget {
             );
             let view = crate::target::view(&texture);
             let group = present.bind(device, temporal.resolved(), &view);
-            FadeTarget { texture, group }
+            FadeTarget {
+                texture,
+                group,
+                bytes: crate::target::bytes(crate::target::SCENE_FORMAT, size),
+            }
         });
         &held.group
     }
 
     pub(super) fn drop_fade(&mut self) {
         self.fade = None;
+    }
+
+    pub(super) fn bytes(&self) -> u64 {
+        let mut total = self.scene.bytes() + crate::temporal::History::size(self.size);
+        if let Some(fade) = self.fade.as_ref() {
+            total += fade.bytes();
+        }
+        total
+            + self.oit.as_ref().map_or(0, Oit::bytes)
+            + self
+                .normal
+                .as_ref()
+                .map_or(0, crate::target::NormalTarget::bytes)
+            + self.ao.as_ref().map_or(0, crate::ao::Ao::bytes)
+            + self
+                .surface
+                .as_ref()
+                .map_or(0, crate::surface::Target::bytes)
+            + self.volume.as_ref().map_or(0, crate::target::Volume::bytes)
     }
 
     pub(super) fn snapshot(&mut self, encoder: &mut CommandEncoder, region: [u32; 4]) {
