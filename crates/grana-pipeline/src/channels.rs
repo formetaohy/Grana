@@ -213,6 +213,10 @@ impl Channels {
         &self.pyramid
     }
 
+    pub fn decode(&self) -> Option<grana_image::Decode> {
+        self.reader.decode()
+    }
+
     pub fn layout(&self) -> Layout {
         Layout {
             stored: self.stored_channels(),

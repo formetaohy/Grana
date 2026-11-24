@@ -34,6 +34,7 @@ impl Scene {
         root: Root,
         group: &str,
         attributes: &Map<String, Value>,
+        bytes: u64,
     ) -> Result<Self, Error> {
         let tag = root.tag(group);
         let fields = hcs::fields(attributes);
@@ -53,7 +54,7 @@ impl Scene {
             })?;
         let endpoints = endpoints(&tag, group, transforms)?;
         let groups = groups_of(&endpoints);
-        let cache_bytes = crate::cache::per_level(groups.len());
+        let cache_bytes = (bytes / groups.len().max(1) as u64).max(1 << 20);
         let mut images = Vec::with_capacity(groups.len());
         for member in &groups {
             images.push(GroupImage::open_member(&root, member, cache_bytes)?);
@@ -116,6 +117,14 @@ impl Scene {
 
     pub(crate) fn pyramid(&self) -> &Pyramid {
         &self.pyramid
+    }
+
+    pub(crate) fn decode(&self) -> crate::tile::Decode {
+        self.members
+            .iter()
+            .fold(crate::tile::Decode::default(), |held, member| {
+                held.merged(member.image.decode())
+            })
     }
 
     pub(crate) fn transfer(&self) -> Option<std::sync::Arc<grana_net::Transfer>> {

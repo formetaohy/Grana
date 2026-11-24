@@ -187,7 +187,6 @@ impl Renderer {
             exporting,
             info,
             residence,
-            budget,
             pipelines,
             ..
         } = self;
@@ -215,7 +214,8 @@ impl Renderer {
                 .slice()
                 .map(|slice| slice.plane(frame.camera.pivot())),
         );
-        resources.atlas.remember(frame.time);
+        let forgotten = resources.atlas.remember(frame.time);
+        resources.drop_hollows(&forgotten);
         let outlook = residence.adapt(Adapt {
             pyramid: &resources.pyramid,
             camera: frame.camera,
@@ -362,7 +362,9 @@ impl Renderer {
         if stale || started.restaged || started.restyled {
             if shot.surfaces {
                 meshes
-                    .get_or_insert_with(|| MeshPasses::new(device, layouts, *budget / 2, pipelines))
+                    .get_or_insert_with(|| {
+                        MeshPasses::new(device, layouts, resources.surface_bytes(), pipelines)
+                    })
                     .set(device, queue, layouts, scene);
             } else if let Some(passes) = meshes.as_mut() {
                 passes.clear();

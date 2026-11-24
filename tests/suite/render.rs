@@ -361,6 +361,21 @@ fn streams_and_shades_two_channels() {
     let region = brick_region(&pyramid, 0, BrickCoord::new(1, 1, 0));
     let damage = Damage::new(region, ChannelSet::of(0)).expect("the damage names a channel");
     renderer.damage(&[damage]);
+    let mut nudged = camera.clone();
+    nudged.orbit(Vec2::new(9.0, 4.0));
+    for held in [&nudged, &camera] {
+        let moved = View {
+            target: view.target,
+            camera: held,
+            region: view.region,
+            scene: view.scene,
+            viewport: view.viewport,
+            delivery: view.delivery,
+        };
+        renderer
+            .draw(gpu.device(), gpu.queue(), capped(&moved, CAP))
+            .expect("the moved frame draws");
+    }
     refresh(&gpu, &mut renderer, &view, &occluder, CAP);
     settle_with(&gpu, &mut renderer, || capped(&view, CAP), &occluder);
     let streamed = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, SAMPLES);

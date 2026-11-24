@@ -5,12 +5,11 @@ use std::sync::Arc;
 use grana_volume::Level;
 use serde_json::{Map, Value};
 use zarrs::array::data_type::{int8, int16, int32, uint8, uint16, uint32, uint64};
-use zarrs::array::{Array, ArraySubset, CodecOptions, DataType};
+use zarrs::array::{Array, ArraySubset, DataType};
 use zarrs::group::Group;
 use zarrs::storage::{ReadableStorageTraits, StoreKey};
 
 use crate::axes::{self, Layout};
-use crate::cache::{self, Cache};
 use crate::error::Error;
 use crate::metadata;
 use crate::root::Root;
@@ -56,7 +55,7 @@ enum Kind {
 
 struct LevelArray {
     path: String,
-    cache: Cache,
+    array: Arc<Array<dyn ReadableStorageTraits>>,
     layout: Layout,
     kind: Kind,
 }
@@ -143,7 +142,7 @@ impl Label {
             source[1].clone(),
             source[2].clone(),
         ));
-        let data = retrieve(&level.cache, &subset, &level.path, level.kind)?;
+        let data = retrieve(&level.array, &subset, &level.path, level.kind)?;
         let widths = [
             (source[0].end - source[0].start) as usize,
             (source[1].end - source[1].start) as usize,
@@ -204,17 +203,9 @@ pub fn read_at(root: &Root, group: &str, parent: &[Layout]) -> Result<Labels, Er
         detail: error.to_string(),
     })?;
     let names = names(&root.tag(&labels_group), opened.attributes())?;
-    let cache_bytes = cache::per_level(names.len());
     let mut images = Vec::with_capacity(names.len());
     for name in names {
-        images.push(image(
-            root,
-            &labels_group,
-            &name,
-            readable.clone(),
-            cache_bytes,
-            parent,
-        )?);
+        images.push(image(root, &labels_group, &name, readable.clone(), parent)?);
     }
     Ok(Labels { images })
 }
@@ -294,7 +285,6 @@ fn image(
     labels_group: &str,
     name: &str,
     store: Arc<dyn ReadableStorageTraits>,
-    cache_bytes: u64,
     parent: &[Layout],
 ) -> Result<Label, Error> {
     let group_path = crate::hcs::join(labels_group, name);
@@ -345,7 +335,7 @@ fn image(
         }
         levels.push(LevelArray {
             path: opened,
-            cache: Cache::open(Arc::new(array), cache_bytes),
+            array: Arc::new(array),
             layout,
             kind,
         });
@@ -429,7 +419,7 @@ fn kind(origin: &str, array: &Array<dyn ReadableStorageTraits>) -> Result<Kind, 
 }
 
 fn retrieve(
-    cache: &Cache,
+    array: &Array<dyn ReadableStorageTraits>,
     subset: &ArraySubset,
     path: &str,
     kind: Kind,
@@ -438,23 +428,24 @@ fn retrieve(
         array: path.to_string(),
         detail: error.to_string(),
     };
-    let options = CodecOptions::default();
     match kind {
-        Kind::U8 => Ok(cache
-            .retrieve::<u8>(subset, &options)
+        Kind::U8 => Ok(array
+            .retrieve_array_subset::<Vec<u8>>(subset)
             .map_err(&mut read)?
             .into_iter()
             .map(u32::from)
             .collect()),
-        Kind::U16 => Ok(cache
-            .retrieve::<u16>(subset, &options)
+        Kind::U16 => Ok(array
+            .retrieve_array_subset::<Vec<u16>>(subset)
             .map_err(&mut read)?
             .into_iter()
             .map(u32::from)
             .collect()),
-        Kind::U32 => Ok(cache.retrieve::<u32>(subset, &options).map_err(&mut read)?),
-        Kind::U64 => cache
-            .retrieve::<u64>(subset, &options)
+        Kind::U32 => Ok(array
+            .retrieve_array_subset::<Vec<u32>>(subset)
+            .map_err(&mut read)?),
+        Kind::U64 => array
+            .retrieve_array_subset::<Vec<u64>>(subset)
             .map_err(&mut read)?
             .into_iter()
             .map(|value| {
@@ -464,20 +455,20 @@ fn retrieve(
                 })
             })
             .collect(),
-        Kind::I8 => Ok(cache
-            .retrieve::<i8>(subset, &options)
+        Kind::I8 => Ok(array
+            .retrieve_array_subset::<Vec<i8>>(subset)
             .map_err(&mut read)?
             .into_iter()
             .map(|value| u32::from(value.max(0) as u8))
             .collect()),
-        Kind::I16 => Ok(cache
-            .retrieve::<i16>(subset, &options)
+        Kind::I16 => Ok(array
+            .retrieve_array_subset::<Vec<i16>>(subset)
             .map_err(&mut read)?
             .into_iter()
             .map(|value| u32::from(value.max(0) as u16))
             .collect()),
-        Kind::I32 => Ok(cache
-            .retrieve::<i32>(subset, &options)
+        Kind::I32 => Ok(array
+            .retrieve_array_subset::<Vec<i32>>(subset)
             .map_err(&mut read)?
             .into_iter()
             .map(|value| value.max(0) as u32)

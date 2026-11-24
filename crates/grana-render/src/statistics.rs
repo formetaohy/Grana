@@ -11,4 +11,7 @@ pub struct Statistics {
     pub prefetch_hits: u64,
     pub frames: u64,
     pub residency: u64,
+    pub atlas: u64,
+    pub records: u64,
+    pub surfaces: u64,
 }

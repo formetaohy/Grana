@@ -47,6 +47,7 @@ use crate::planner::{
     volume_ladder,
 };
 use crate::present::Present;
+use crate::reserve;
 use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
@@ -58,8 +59,6 @@ use crate::volume::VolumePass;
 use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
 
 const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
-
-const RECORD_SHARE: u64 = 8;
 
 const FADE_DRAWS: f32 = 10.0;
 
@@ -181,6 +180,7 @@ pub struct Renderer {
     budget: u64,
     total: u64,
     frames: u64,
+    requested: u64,
     residence: Residence,
     prefetch: bool,
     transparent: bool,
@@ -261,6 +261,7 @@ impl Renderer {
             budget,
             total: budget,
             frames: budget,
+            requested: budget,
             residence: Residence::new(),
             prefetch: false,
             transparent: false,
@@ -323,19 +324,11 @@ impl Renderer {
         ceiling: u64,
     ) -> Result<(), String> {
         if self.slots() < slots {
-            let slot_bytes = self
-                .resources
-                .as_ref()
-                .map(|held| held.slot_bytes)
-                .filter(|bytes| *bytes > 0)
-                .expect("the dataset is resident before a reserve");
-            let residency = crate::detail::residency_budget(
-                slots,
-                slot_bytes,
-                device.limits().max_texture_dimension_3d,
-                ceiling,
+            self.install(
+                device,
+                pyramid,
+                reserve::Allocation::Export { slots, ceiling },
             )?;
-            self.install(device, pyramid, residency)?;
         }
         self.frames = ceiling.saturating_sub(self.budget);
         assert!(
@@ -349,9 +342,8 @@ impl Renderer {
         &mut self,
         device: &Device,
         pyramid: &Pyramid,
-        residency: u64,
+        allocation: reserve::Allocation,
     ) -> Result<(), String> {
-        assert!(residency > 0, "a renderer keeps a positive residency");
         self.resources = None;
         self.targets.clear();
         let resources = Resources::new(
@@ -360,10 +352,11 @@ impl Renderer {
             &self.pipelines,
             &self.atlas_sampler,
             &self.dummy,
-            residency,
+            allocation,
             pyramid,
         )?;
-        self.budget = residency;
+        self.requested = resources.requested();
+        self.budget = resources.reserved();
         self.residence.setup(device, resources.slots(), pyramid);
         self.resources = Some(resources);
         self.time = 0;
@@ -389,10 +382,14 @@ impl Renderer {
         }
         let split = budget::split(self.total, size);
         self.frames = split.frames;
-        if split.residency.abs_diff(self.budget).saturating_mul(4) > self.total {
+        if split.residency.abs_diff(self.requested).saturating_mul(4) > self.total {
             let pyramid = self.resources.as_ref().map(|held| held.pyramid.clone());
             if let Some(pyramid) = pyramid {
-                self.install(device, &pyramid, split.residency)?;
+                self.install(
+                    device,
+                    &pyramid,
+                    reserve::Allocation::Display(split.residency),
+                )?;
             }
         }
         Ok(())
@@ -471,7 +468,11 @@ impl Renderer {
         assert!(budget > 0, "a renderer needs a texture budget");
         let split = budget::split(budget, size);
         self.total = budget;
-        self.install(device, pyramid, split.residency)?;
+        self.install(
+            device,
+            pyramid,
+            reserve::Allocation::Display(split.residency),
+        )?;
         self.frames = split.frames;
         Ok(())
     }
@@ -492,10 +493,9 @@ impl Renderer {
         );
         let size = frame.size;
         self.fit(device, size)?;
-        let frames = self.frames();
-        let (mut target, created) =
-            self.targets
-                .take(device, &self.layouts, &self.present, size, frames);
+        let (mut target, created) = self
+            .targets
+            .take(device, &self.layouts, &self.present, size);
         if created {
             self.residence.forget_settled();
         }
@@ -566,6 +566,17 @@ impl Renderer {
             .as_ref()
             .map_or(0, |resources| resources.atlas.evictions());
         let (prefetched, prefetch_hits) = self.residence.prefetch_counts();
+        let (residency, atlas, records, surfaces) =
+            self.resources
+                .as_ref()
+                .map_or((self.budget, 0, 0, 0), |resources| {
+                    (
+                        resources.reserved(),
+                        resources.reservation.atlas(),
+                        resources.reservation.records(),
+                        resources.reservation.surface(),
+                    )
+                });
         Statistics {
             plans: self.plans,
             waits: self.waits,
@@ -577,7 +588,10 @@ impl Renderer {
             prefetched,
             prefetch_hits,
             frames: self.targets.bytes(),
-            residency: self.budget,
+            residency,
+            atlas,
+            records,
+            surfaces,
         }
     }
 

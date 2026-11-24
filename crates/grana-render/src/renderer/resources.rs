@@ -5,14 +5,13 @@ use grana_volume::{
 };
 
 use crate::atlas::ResidentBrick;
-use crate::brick::{BrickRecord, RECORD_BYTES};
+use crate::brick::BrickRecord;
 use crate::occupancy::{CELL_WORDS, Occupancy};
+use crate::reserve::{Allocation, Reservation};
 
 use super::*;
 
 const APRON: u32 = 1;
-
-const MINIMUM_SLOTS: u64 = 2;
 
 pub(super) struct Resources {
     pub(super) pyramid: Pyramid,
@@ -31,6 +30,7 @@ pub(super) struct Resources {
     pub(super) scene: crate::table::SceneTable,
     pub(super) channels: usize,
     pub(super) slot_bytes: u64,
+    pub(super) reservation: Reservation,
     pub(super) summary: Option<signature::SceneSummary>,
 }
 
@@ -41,30 +41,41 @@ impl Resources {
         pipelines: &Pipelines,
         sampler: &Sampler,
         dummy: &TextureView,
-        budget: u64,
+        allocation: Allocation,
         pyramid: &Pyramid,
     ) -> Result<Self, String> {
-        let least = least_budget(pyramid);
-        let mut budget = budget;
+        let least = crate::reserve::least(pyramid, slot_bytes(pyramid));
+        let mut allocation = allocation;
         loop {
             let attempt = grana_gpu::scoped(device, || {
-                Self::allocate(device, layouts, pipelines, sampler, dummy, budget, pyramid)
+                Self::allocate(
+                    device, layouts, pipelines, sampler, dummy, allocation, pyramid,
+                )
             });
             match attempt {
-                Ok(resources) => return Ok(resources),
-                Err(wgpu::Error::OutOfMemory { .. }) if budget > least => {
-                    budget = (budget / 2).max(least);
-                    grana_log::warn!(
-                        target: "grana::render",
-                        budget,
-                        "the graphics device is short of memory, so the brick residency shrinks"
-                    );
-                }
+                Ok(Ok(resources)) => return Ok(resources),
+                Ok(Err(detail)) => return Err(detail),
                 Err(wgpu::Error::OutOfMemory { .. }) => {
-                    return Err(format!(
-                        "the graphics device cannot hold the smallest brick residency of {:.1} MiB",
-                        least as f64 / (1u64 << 20) as f64
-                    ));
+                    let Some(next) = allocation.shrink(least) else {
+                        return Err(match allocation {
+                            Allocation::Display(_) => format!(
+                                "the graphics device cannot hold the smallest brick residency of {:.1} MiB",
+                                least as f64 / (1u64 << 20) as f64
+                            ),
+                            Allocation::Export { .. } => {
+                                "the graphics device cannot hold the brick residency this export needs"
+                                    .to_string()
+                            }
+                        });
+                    };
+                    allocation = next;
+                    if let Allocation::Display(budget) = allocation {
+                        grana_log::warn!(
+                            target: "grana::render",
+                            budget,
+                            "the graphics device is short of memory, so the brick residency shrinks"
+                        );
+                    }
                 }
                 Err(error) => {
                     return Err(format!(
@@ -81,9 +92,9 @@ impl Resources {
         pipelines: &Pipelines,
         sampler: &Sampler,
         dummy: &TextureView,
-        budget: u64,
+        allocation: Allocation,
         pyramid: &Pyramid,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let channels = pyramid.channel_count();
         assert!(
             (1..=CHANNEL_LIMIT).contains(&channels),
@@ -93,13 +104,13 @@ impl Resources {
             !pyramid.levels().is_empty(),
             "a pyramid holds at least one level"
         );
-        let holdable = pyramid
-            .levels()
-            .iter()
-            .map(|level| BrickGrid::new(level.extent()).count() as u64)
-            .sum::<u64>();
         let slot_bytes = slot_bytes(pyramid);
-        let requested = (budget / slot_bytes).max(1).min(holdable);
+        let reservation = Reservation::of(
+            pyramid,
+            allocation,
+            slot_bytes,
+            device.limits().max_texture_dimension_3d,
+        )?;
         let atlas = Atlas::new(
             device,
             crate::atlas::AtlasBinding {
@@ -109,15 +120,13 @@ impl Resources {
                 sampler,
             },
             channels,
-            requested,
-            device.limits().max_texture_dimension_3d,
+            reservation.slots(),
         );
         let slots = atlas.slots();
         let occupancy = Occupancy::new(device, slots);
         let bake = Bake::new(device, layouts, atlas.structure(), slots, pipelines);
-        let limit = (budget / RECORD_SHARE / crate::brick::RECORD_BYTES) as usize;
-        let arena = BrickArena::new(device, pyramid, limit)
-            .expect("the record budget holds the coarsest level");
+        let arena = BrickArena::new(device, pyramid, reservation.record_limit())
+            .expect("the record share holds the coarsest level");
         let level_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.level.group"),
             layout: &layouts.level,
@@ -143,7 +152,7 @@ impl Resources {
             .collect();
         let shadow = Shadow::new(device, layouts, pipelines, counts);
         let scene = crate::table::SceneTable::new(device, layouts, channels);
-        Self {
+        Ok(Self {
             pyramid: pyramid.clone(),
             atlas,
             arena,
@@ -160,12 +169,35 @@ impl Resources {
             scene,
             channels,
             slot_bytes,
+            reservation,
             summary: None,
-        }
+        })
     }
 
     pub(super) fn slots(&self) -> usize {
         self.atlas.slots()
+    }
+
+    pub(super) fn reserved(&self) -> u64 {
+        self.reservation.bytes()
+    }
+
+    pub(super) fn requested(&self) -> u64 {
+        self.reservation.requested()
+    }
+
+    pub(super) fn surface_bytes(&self) -> u64 {
+        self.reservation.surface()
+    }
+
+    pub(super) fn drop_hollows(&mut self, forgotten: &[u32]) {
+        let Self {
+            bricks,
+            arena,
+            upload,
+            ..
+        } = self;
+        forget_hollows(bricks, arena, upload, forgotten);
     }
 
     pub(super) fn first_level(&self) -> usize {
@@ -298,6 +330,7 @@ impl Resources {
         let mut released = Vec::new();
         let mut missing = Vec::new();
         let mut dropped = Vec::new();
+        let mut forgotten = Vec::new();
         let total = *channels;
         let mut values = [0.0f32; CELL_WORDS];
         {
@@ -358,7 +391,7 @@ impl Resources {
                         .as_ref()
                         .is_some_and(|table| table.time() == Some(held));
                 if maximum <= 0.0 {
-                    atlas.assign_hollow(held, level, index);
+                    forgotten.extend(atlas.assign_hollow(held, level, index));
                     if publish {
                         if let Some(table) = tables[level].as_mut() {
                             table.set_record(arena, index, BrickRecord::hollow(held, content));
@@ -453,6 +486,7 @@ impl Resources {
         for (held, level, index) in released {
             residence.release(pyramid, held, level, index);
         }
+        forget_hollows(tables, arena, upload, &forgotten);
         for table in tables.iter_mut().flatten() {
             table.flush(upload, arena);
         }
@@ -481,6 +515,7 @@ impl Resources {
         let content = residence.content();
         let mut generation = residence.generation();
         let mut settled = Vec::new();
+        let mut forgotten = Vec::new();
         residence.discard(requests);
         for request in requests {
             let BrickRequest {
@@ -508,7 +543,7 @@ impl Resources {
                 settled.push(*request);
                 continue;
             }
-            atlas.assign_hollow(held, level, index);
+            forgotten.extend(atlas.assign_hollow(held, level, index));
             if let Some(table) = tables[level]
                 .as_mut()
                 .filter(|table| table.time() == Some(held))
@@ -519,6 +554,7 @@ impl Resources {
             generation += 1;
             settled.push(*request);
         }
+        forget_hollows(tables, arena, upload, &forgotten);
         for table in tables.iter_mut().flatten() {
             table.flush(upload, arena);
         }
@@ -587,10 +623,19 @@ fn slot_bytes(pyramid: &Pyramid) -> u64 {
     source + crate::atlas::STRUCTURE_BYTES
 }
 
-fn least_budget(pyramid: &Pyramid) -> u64 {
-    let coarsest = pyramid.level_count().saturating_sub(1);
-    let records = BrickGrid::new(pyramid.level(coarsest).extent()).count() as u64;
-    (slot_bytes(pyramid) * MINIMUM_SLOTS).max(records * RECORD_BYTES * RECORD_SHARE)
+fn forget_hollows(
+    tables: &mut [Option<BrickTable>],
+    arena: &BrickArena,
+    upload: &mut crate::upload::Upload,
+    forgotten: &[u32],
+) {
+    for time in forgotten {
+        for table in tables.iter_mut().flatten() {
+            if table.drop_hollows(arena, *time) {
+                table.flush(upload, arena);
+            }
+        }
+    }
 }
 
 fn occupy(values: &mut [f32], occupancy: &mut Occupancy, slot: u32, pack: usize, block: &Pack) {

@@ -47,18 +47,27 @@ impl Scale {
         self.source
     }
 
-    pub(crate) fn source_ranges(&self, ranges: &[Range<u32>; 3]) -> [Range<u32>; 3] {
+    pub(crate) fn stamp_ranges(&self, ranges: &[Range<u32>; 3]) -> [Range<u32>; 3] {
         let ratio = 1u32 << self.shift;
+        let reach = ratio - 1;
         [
-            clamped(&ranges[0], ratio, self.source_extent.x()),
-            clamped(&ranges[1], ratio, self.source_extent.y()),
-            clamped(&ranges[2], ratio, self.source_extent.z()),
+            spanned(&ranges[0], ratio, reach, self.source_extent.x()),
+            spanned(&ranges[1], ratio, reach, self.source_extent.y()),
+            spanned(&ranges[2], ratio, reach, self.source_extent.z()),
         ]
     }
 }
 
-fn clamped(range: &Range<u32>, ratio: u32, limit: u32) -> Range<u32> {
-    let start = (range.start * ratio).min(limit);
-    let end = (range.end * ratio).min(limit);
+fn spanned(range: &Range<u32>, ratio: u32, reach: u32, limit: u32) -> Range<u32> {
+    let start = range
+        .start
+        .saturating_mul(ratio)
+        .saturating_sub(reach)
+        .min(limit);
+    let end = range
+        .end
+        .saturating_mul(ratio)
+        .saturating_add(reach)
+        .min(limit);
     start..end.max(start)
 }

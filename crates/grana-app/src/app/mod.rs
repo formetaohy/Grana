@@ -279,11 +279,13 @@ impl App {
         self.dialog = Some(Service::spawn(window.clone(), move || {
             let _ = repaint.send_event(Wake::Redraw);
         }));
+        let budget = grana_render::texture_budget(gpu.memory());
+        grana_image::set_decode_budget(budget / 2);
         self.pending_engine = Some(spawn_engine(
             gpu.device.clone(),
             gpu.queue.clone(),
             gpu.format(),
-            grana_render::texture_budget(gpu.memory()),
+            budget,
             gpu.pipelines().clone(),
         ));
         let mut ui: Ui<grana_editor::Message> =

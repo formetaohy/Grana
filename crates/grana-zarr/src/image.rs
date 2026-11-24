@@ -1,33 +1,34 @@
 use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use grana_volume::{
     Calibration, Census, ChannelInfo, Intensity, Pyramid, Statistics, VoxelData, VoxelFormat,
     VoxelSemantics, name_of, tint_of,
 };
 use serde_json::{Map, Value};
+use zarrs::array::chunk_grid::api::ChunkShapeTraits;
 use zarrs::array::data_type::{
     float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
 };
-use zarrs::array::{Array, ArraySubset, CodecOptions};
+use zarrs::array::{Array, ArrayShardedExt, ArraySubset};
 use zarrs::group::Group;
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::Error;
 use crate::axes::{self, Layout};
-use crate::cache::{self, Cache};
 use crate::metadata::{self, ChannelMetadata};
 use crate::outline::Outline;
-use crate::root::{Root, Witness};
+use crate::root::Root;
 use crate::scene::Scene;
+use crate::tile::{self, Decode, Tiles};
 
 struct LevelArray {
     path: String,
-    cache: Cache,
+    array: Arc<Array<dyn ReadableStorageTraits>>,
     layout: Layout,
-    witness: OnceLock<Result<Witness, String>>,
+    unit: [u32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,37 +58,45 @@ pub struct GroupImage {
     datasets: Vec<metadata::Dataset>,
     systems: Vec<metadata::System>,
     intrinsic: Option<String>,
+    tiles: Tiles,
 }
 
 impl Image {
     pub fn open(path: &Path) -> Result<Self, Error> {
-        Self::open_root(Root::local(path)?, "/")
+        Self::open_root(Root::local(path)?, "/", tile::DEFAULT_BYTES)
     }
 
     pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
-        Self::open_root(Root::local(path)?, group)
+        Self::open_root(Root::local(path)?, group, tile::DEFAULT_BYTES)
     }
 
     pub fn outline(root: &Root, group: &str) -> Result<Outline, Error> {
         GroupImage::outline(root, group)
     }
 
-    pub fn open_root(root: Root, group: &str) -> Result<Self, Error> {
+    pub fn open_root(root: Root, group: &str, bytes: u64) -> Result<Self, Error> {
         let attributes = crate::hcs::attributes(&root, group)?;
         let fields = crate::hcs::fields(&attributes);
         if fields.contains_key("multiscales") {
-            let image = GroupImage::open(&root, group, attributes, Footprint::Display, None)?;
+            let image = GroupImage::open(&root, group, attributes, Footprint::Display, bytes)?;
             return Ok(Self {
                 kind: Kind::Group(image),
             });
         }
         if fields.contains_key("scene") {
-            let scene = Scene::open(root, group, &attributes)?;
+            let scene = Scene::open(root, group, &attributes, bytes)?;
             return Ok(Self {
                 kind: Kind::Scene(scene),
             });
         }
         Err(metadata::absent(&root.tag(group), &attributes, fields))
+    }
+
+    pub fn decode(&self) -> Decode {
+        match &self.kind {
+            Kind::Group(image) => image.decode(),
+            Kind::Scene(scene) => scene.decode(),
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -160,18 +169,18 @@ impl GroupImage {
     pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
         let root = Root::local(path)?;
         let attributes = crate::hcs::attributes(&root, group)?;
-        Self::open(&root, group, attributes, Footprint::Display, None)
-    }
-
-    pub(crate) fn open_member(root: &Root, group: &str, cache_bytes: u64) -> Result<Self, Error> {
-        let attributes = crate::hcs::attributes(root, group)?;
         Self::open(
-            root,
+            &root,
             group,
             attributes,
-            Footprint::Source,
-            Some(cache_bytes),
+            Footprint::Display,
+            tile::DEFAULT_BYTES,
         )
+    }
+
+    pub(crate) fn open_member(root: &Root, group: &str, bytes: u64) -> Result<Self, Error> {
+        let attributes = crate::hcs::attributes(root, group)?;
+        Self::open(root, group, attributes, Footprint::Source, bytes)
     }
 
     pub(crate) fn open(
@@ -179,7 +188,7 @@ impl GroupImage {
         group: &str,
         attributes: Map<String, Value>,
         footprint: Footprint,
-        cache_bytes: Option<u64>,
+        bytes: u64,
     ) -> Result<Self, Error> {
         let tag = root.tag(group);
         let metadata = metadata::parse(&tag, &attributes)?;
@@ -188,7 +197,7 @@ impl GroupImage {
             Footprint::Source => &metadata.source.datasets,
         };
         let readable: Arc<dyn ReadableStorageTraits> = root.readable();
-        let cache_bytes = cache_bytes.unwrap_or_else(|| cache::per_level(datasets.len()));
+        let tiles = Tiles::new(bytes);
         let mut levels = Vec::with_capacity(datasets.len());
         let mut channel_count = None;
         let mut frames = None;
@@ -251,12 +260,15 @@ impl GroupImage {
             }
             levels.push(LevelArray {
                 path: array_path,
-                cache: Cache::open(array, cache_bytes),
+                unit: unit_shape(&array, &layout),
+                array,
                 layout,
-                witness: OnceLock::new(),
             });
         }
-        let channel_count = channel_count.expect("a multiscale image has at least one dataset");
+        assert!(
+            !levels.is_empty(),
+            "a multiscale image has at least one dataset"
+        );
         let frames = frames.expect("a multiscale image has at least one dataset");
         let interval = interval.expect("a multiscale image has at least one dataset");
         if !levels_ordered(&levels) {
@@ -272,12 +284,11 @@ impl GroupImage {
             VoxelSemantics::Scalar
         };
         let channels = channels(
+            &tiles,
             &root.tag(group),
             &metadata.channels,
-            channel_count,
             format,
             &levels,
-            frames,
             semantics,
         )?;
         let name = metadata
@@ -323,7 +334,12 @@ impl GroupImage {
             datasets: datasets.clone(),
             systems: metadata.systems,
             intrinsic: metadata.source.name,
+            tiles,
         })
+    }
+
+    pub(crate) fn decode(&self) -> Decode {
+        self.tiles.stats()
     }
 
     fn outline(root: &Root, group: &str) -> Result<Outline, Error> {
@@ -385,7 +401,7 @@ impl GroupImage {
             .levels
             .iter()
             .map(|level| {
-                let metadata = serde_json::to_vec(level.cache.array().metadata()).ok()?;
+                let metadata = serde_json::to_vec(level.array.metadata()).ok()?;
                 Some((level.path.clone(), metadata))
             })
             .collect::<Option<Vec<_>>>()?;
@@ -407,11 +423,26 @@ impl GroupImage {
                 detail: "the requested resolution level does not exist".to_string(),
             });
         };
+        if time >= self.pyramid.frame_count() {
+            return Err(Error::Region {
+                array: level.path.clone(),
+                detail: "the requested frame does not exist".to_string(),
+            });
+        }
+        if channel >= self.pyramid.channel_count() {
+            return Err(Error::Region {
+                array: level.path.clone(),
+                detail: format!(
+                    "the channel {channel} lies outside the {} available channels",
+                    self.pyramid.channel_count()
+                ),
+            });
+        }
         let ranges = level
             .layout
             .ranges(u64::from(time), channel as u64, x, y, z);
         let subset = ArraySubset::new_with_ranges(&ranges);
-        let array = level.cache.array();
+        let array = &level.array;
         let Some(chunks) = array
             .chunks_in_array_subset(&subset)
             .map_err(|error| Error::Read {
@@ -421,20 +452,8 @@ impl GroupImage {
         else {
             return Ok(None);
         };
-        let keys = chunk_keys(&array, chunks.start(), chunks.shape());
-        let witness = level
-            .witness
-            .get_or_init(|| {
-                self.root
-                    .witness(&level.path)
-                    .map_err(|error| error.to_string())
-            })
-            .as_ref()
-            .map_err(|detail| Error::Read {
-                array: level.path.clone(),
-                detail: detail.clone(),
-            })?;
-        witness.stamp(keys.into_iter())
+        let keys = chunk_keys(array, chunks.start(), chunks.shape());
+        self.root.witness(&level.path).stamp(keys.into_iter())
     }
 
     pub fn labels(&self) -> Result<crate::Labels, Error> {
@@ -459,7 +478,8 @@ impl GroupImage {
         y: Range<u32>,
         z: Range<u32>,
     ) -> Result<VoxelData, Error> {
-        let Some(level) = self.levels.get(level) else {
+        let index = level;
+        let Some(level) = self.levels.get(index) else {
             return Err(Error::Region {
                 array: self.root.tag(&self.group),
                 detail: "the requested resolution level does not exist".to_string(),
@@ -493,15 +513,15 @@ impl GroupImage {
                 detail: "the region lies outside the array extent".to_string(),
             });
         }
-        let ranges = level.layout.ranges(
-            u64::from(time),
-            channel as u64,
-            x.clone(),
-            y.clone(),
-            z.clone(),
-        );
-        let subset = ArraySubset::new_with_ranges(&ranges);
-        let data = retrieve(&level.cache, &subset, &level.path)?;
+        let ranges = [x.clone(), y.clone(), z.clone()];
+        let unit = crate::tile::Unit {
+            level: index,
+            array: &level.array,
+            layout: &level.layout,
+            path: &level.path,
+            shape: level.unit,
+        };
+        let data = self.tiles.read(&unit, time, channel as u32, &ranges)?;
         let expected =
             u64::from(x.end - x.start) * u64::from(y.end - y.start) * u64::from(z.end - z.start);
         if data.voxel_count() as u64 != expected {
@@ -621,7 +641,7 @@ fn open_array(
     })
 }
 
-fn supported_format(
+pub(crate) fn supported_format(
     path: &str,
     array: &Array<dyn ReadableStorageTraits>,
 ) -> Result<VoxelFormat, Error> {
@@ -647,19 +667,36 @@ fn supported_format(
         })
 }
 
-fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData, Error> {
+fn unit_shape(array: &Array<dyn ReadableStorageTraits>, layout: &Layout) -> [u32; 3] {
+    let shape = if array.is_sharded() {
+        array
+            .effective_subchunk_shape()
+            .map(|shape| shape.to_array_shape())
+    } else {
+        let indices = vec![0u64; array.chunk_grid_shape().len()];
+        array
+            .chunk_shape(&indices)
+            .ok()
+            .map(|shape| shape.to_array_shape())
+    };
+    layout.spatial(shape.as_deref().unwrap_or(array.shape()))
+}
+
+pub(crate) fn retrieve(
+    array: &Array<dyn ReadableStorageTraits>,
+    subset: &ArraySubset,
+    path: &str,
+) -> Result<VoxelData, Error> {
     let mut read = |error: zarrs::array::ArrayError| Error::Read {
         array: path.to_string(),
         detail: error.to_string(),
     };
-    let options = CodecOptions::default();
-    let array = cache.array();
     let data_type = array.data_type();
     macro_rules! held {
         ($variant:ident, $type:ty) => {
             Ok(VoxelData::$variant(
-                cache
-                    .retrieve::<$type>(subset, &options)
+                array
+                    .retrieve_array_subset::<Vec<$type>>(subset)
                     .map_err(&mut read)?,
             ))
         };
@@ -693,14 +730,22 @@ fn retrieve(cache: &Cache, subset: &ArraySubset, path: &str) -> Result<VoxelData
 }
 
 fn channels(
+    tiles: &Tiles,
     origin: &str,
     metadata: &[ChannelMetadata],
-    count: u32,
     format: VoxelFormat,
     levels: &[LevelArray],
-    frames: u32,
     semantics: VoxelSemantics,
 ) -> Result<Vec<ChannelInfo>, Error> {
+    let count = levels
+        .first()
+        .map(|level| level.layout.channel_count())
+        .and_then(|count| u32::try_from(count).ok())
+        .expect("a multiscale image holds one to 4G channels");
+    let frames = levels
+        .first()
+        .map(|level| level.layout.frame_count())
+        .expect("a multiscale image holds at least one level");
     if !metadata.is_empty() && metadata.len() != count as usize {
         return Err(Error::Metadata {
             path: origin.to_string(),
@@ -727,7 +772,7 @@ fn channels(
             let statistics = match data_range {
                 Some(data) => Statistics::declared(data, semantics),
                 None => {
-                    let sampled = sample_range(levels, index as usize, frames)?;
+                    let sampled = sample_range(tiles, levels, index as usize, frames)?;
                     let sampled = sampled.ok_or_else(|| Error::Metadata {
                         path: origin.to_string(),
                         detail: format!("the channel {index} exposes no voxel to census"),
@@ -745,23 +790,23 @@ fn channels(
 }
 
 fn sample_range(
+    tiles: &Tiles,
     levels: &[LevelArray],
     channel: usize,
     frames: u32,
 ) -> Result<Option<Statistics>, Error> {
+    let index = levels.len() - 1;
     let level = levels.last().expect("a multiscale image has a level");
+    let unit = crate::tile::Unit {
+        level: index,
+        array: &level.array,
+        layout: &level.layout,
+        path: &level.path,
+        shape: level.unit,
+    };
     let mut census = Census::of(level.layout.extent, frames);
-    let measured = census.measure(|time, ranges| {
-        let ranges = level.layout.ranges(
-            u64::from(time),
-            channel as u64,
-            ranges[0].clone(),
-            ranges[1].clone(),
-            ranges[2].clone(),
-        );
-        let subset = ArraySubset::new_with_ranges(&ranges);
-        retrieve(&level.cache, &subset, &level.path)
-    })?;
+    let measured =
+        census.measure(|time, ranges| tiles.read(&unit, time, channel as u32, &ranges))?;
     Ok(Some(measured))
 }
 

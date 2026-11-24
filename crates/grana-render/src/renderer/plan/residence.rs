@@ -481,6 +481,7 @@ impl Residence {
     pub(crate) fn discard(&mut self, requests: &[BrickRequest]) {
         for request in requests {
             self.prefetched.remove(request);
+            self.refreshes.remove(request);
         }
     }
 
@@ -730,7 +731,6 @@ impl Residence {
             .is_none_or(|held| !held.key.same_plan(&key))
         {
             self.plan = self.plan.wrapping_add(1);
-            self.refreshes.clear();
         }
         let demand = ResidencyDemand { key, bands };
         self.missing.apply(&demand, atlas);
@@ -854,12 +854,8 @@ impl Residence {
         let mut room = atlas.available().saturating_sub(pending.len());
         let mut emitted = pending.clone();
         for request in self.refreshes.iter().copied() {
-            if room == 0 {
-                break;
-            }
             if emitted.insert(request) {
                 requests.volume.push(request);
-                room -= 1;
             }
         }
         for request in self.missing.requests() {

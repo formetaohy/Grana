@@ -123,20 +123,16 @@ impl Root {
         }
     }
 
-    pub(crate) fn witness(&self, directory: &str) -> Result<Witness, Error> {
+    pub(crate) fn witness(&self, directory: &str) -> Witness {
         match &self.store {
             Store::Local(_) => {
                 let root = self.path().expect("a local root names its directory");
-                let local = Local::of(root, directory).map_err(|error| Error::Read {
-                    array: directory.to_string(),
-                    detail: error.to_string(),
-                })?;
-                Ok(Witness::Local(local))
+                Witness::Local(Local::new(root))
             }
-            Store::Remote(store) => Ok(Witness::Remote {
+            Store::Remote(store) => Witness::Remote {
                 store: Arc::clone(store),
                 tag: self.tag(directory),
-            }),
+            },
         }
     }
 
@@ -166,9 +162,12 @@ pub(crate) enum Witness {
 impl Witness {
     pub(crate) fn stamp(&self, keys: impl Iterator<Item = String>) -> Result<Option<u64>, Error> {
         match self {
-            Self::Local(local) => Ok(Some(crate::identity::chunks(keys, |key| {
-                local.metadata(key)
-            }))),
+            Self::Local(local) => crate::identity::chunks(keys, |key| local.metadata(key))
+                .map(Some)
+                .map_err(|error| Error::Read {
+                    array: local.root().display().to_string(),
+                    detail: error.to_string(),
+                }),
             Self::Remote { store, tag } => {
                 let mut hash = witness::START;
                 for key in keys {

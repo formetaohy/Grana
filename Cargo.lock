@@ -4188,6 +4188,7 @@ dependencies = [
  "grana-file",
  "grana-net",
  "grana-ome",
+ "grana-store",
  "grana-volume",
  "rayon",
  "serde_json",

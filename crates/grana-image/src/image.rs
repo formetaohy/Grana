@@ -128,6 +128,13 @@ impl Image {
         &self.pyramid
     }
 
+    pub fn decode(&self) -> Option<grana_zarr::Decode> {
+        match &self.inner {
+            Inner::Zarr(image) => Some(image.decode()),
+            Inner::Memory(_) | Inner::Tiff(_) | Inner::Czi(_) | Inner::Readout(_) => None,
+        }
+    }
+
     pub fn labels(&self) -> Result<Labels, Error> {
         match &self.inner {
             Inner::Zarr(image) => Ok(image.labels()?),
@@ -236,7 +243,8 @@ impl Image {
         let covered = covered_extent(&spatial);
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
-        if let Some(data) = self.bricks.fetch(key) {
+        let memoised = !matches!(self.inner, Inner::Zarr(_));
+        if memoised && let Some(data) = self.bricks.fetch(key) {
             return Ok(data);
         }
         let data = if level < self.pyramid.stored() {
@@ -258,7 +266,9 @@ impl Image {
                 extent,
             ))
         };
-        self.bricks.insert(key, Arc::clone(&data));
+        if memoised {
+            self.bricks.insert(key, Arc::clone(&data));
+        }
         Ok(data)
     }
 
@@ -546,7 +556,7 @@ impl Image {
         ranges: &[Range<u32>; 3],
     ) -> Result<Option<u64>, Error> {
         let scale = Scale::of(&self.pyramid, level);
-        let source = scale.source_ranges(ranges);
+        let source = scale.stamp_ranges(ranges);
         if source.iter().any(|range| range.start >= range.end) {
             return Ok(Some(0));
         }
@@ -946,7 +956,7 @@ fn open_zarr(
 ) -> Result<(grana_zarr::Image, Vec<Series>), Error> {
     let plate = grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate;
     if let Some(group) = group {
-        let image = grana_zarr::Image::open_root(root.clone(), group)?;
+        let image = grana_zarr::Image::open_root(root.clone(), group, cache::decode_budget())?;
         let listed = if plate {
             vec![Series::of(image.pyramid())]
         } else if let Some(collection) = collection_of_root(&root)? {
@@ -963,7 +973,7 @@ fn open_zarr(
         });
     }
     let Some(collection) = collection_of_root(&root)? else {
-        let image = grana_zarr::Image::open_root(root, "/")?;
+        let image = grana_zarr::Image::open_root(root, "/", cache::decode_budget())?;
         let listed = single_series(image.pyramid(), location, series)?;
         return Ok((image, listed));
     };
@@ -976,7 +986,7 @@ fn open_zarr(
                 collection.series().len()
             ),
         })?;
-    let image = grana_zarr::Image::open_root(root.clone(), entry.path())?;
+    let image = grana_zarr::Image::open_root(root.clone(), entry.path(), cache::decode_budget())?;
     let listed = collection_series(&root, &collection, series, &image)?;
     Ok((image, listed))
 }

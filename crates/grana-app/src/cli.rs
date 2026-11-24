@@ -71,6 +71,12 @@ pub fn clear_cache() -> ExitCode {
     }
 }
 
+fn tune_decode() {
+    if let Ok(headless) = grana_gpu::Headless::shared() {
+        grana_image::set_decode_budget(grana_render::texture_budget(headless.memory()) / 2);
+    }
+}
+
 pub fn batch(
     protocol: &Path,
     datasets: &Path,
@@ -79,6 +85,7 @@ pub fn batch(
     project: bool,
     channels: bool,
 ) -> ExitCode {
+    tune_decode();
     let protocol = match Protocol::read(protocol) {
         Ok(protocol) => protocol,
         Err(error) => {
@@ -184,6 +191,7 @@ pub fn batch(
 }
 
 pub fn render(arguments: &[String]) -> Option<ExitCode> {
+    tune_decode();
     let mut paths = Vec::new();
     let mut width = None;
     let mut height = None;

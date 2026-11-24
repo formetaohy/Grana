@@ -1,5 +1,5 @@
 use grana_display::Camera;
-use grana_volume::{PADDED_SIDE, Pyramid, Region};
+use grana_volume::{Pyramid, Region};
 
 use crate::planner::{Counts, FitView, LadderView, Limits, volume_ladder};
 
@@ -60,34 +60,4 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Reg
         },
         slots: (bricks + 1).max(1),
     }
-}
-
-pub fn residency_budget(
-    slots: usize,
-    slot_bytes: u64,
-    max_dimension: u32,
-    ceiling: u64,
-) -> Result<u64, String> {
-    assert!(slots > 0, "an export reserves at least one brick slot");
-    assert!(slot_bytes > 0, "a brick slot holds at least one byte");
-    let mut axis = 1u32;
-    while (axis as u64).pow(3) < slots as u64 {
-        axis += 1;
-    }
-    let limit = max_dimension / PADDED_SIDE;
-    let held = (limit as u64).pow(3);
-    if axis as u64 > limit as u64 {
-        return Err(format!(
-            "an export at this size needs {slots} brick slots at full detail, but this device holds at most {held}"
-        ));
-    }
-    let bytes = (axis as u64).pow(3) * slot_bytes;
-    if bytes > ceiling {
-        return Err(format!(
-            "an export at this size needs {:.1} GiB of brick residency at full detail, above the {:.1} GiB export ceiling",
-            bytes as f64 / (1u64 << 30) as f64,
-            ceiling as f64 / (1u64 << 30) as f64
-        ));
-    }
-    Ok(bytes)
 }

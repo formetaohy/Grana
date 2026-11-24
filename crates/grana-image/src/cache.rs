@@ -18,6 +18,7 @@ const STAGING: &str = "staging";
 const BUDGET: u64 = 4 << 30;
 const RETAIN: u64 = 3 << 30;
 const MEMORY_BUDGET: u64 = 256 << 20;
+const DECODE_BUDGET: u64 = 512 << 20;
 const OVERRIDE: &str = "GRANA_PYRAMID_CACHE";
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -25,6 +26,17 @@ const CRC_SEED: u32 = 0xffff_ffff;
 const CRC_POLYNOMIAL: u32 = 0xedb8_8320;
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
+
+static DECODE: AtomicU64 = AtomicU64::new(DECODE_BUDGET);
+
+pub fn decode_budget() -> u64 {
+    DECODE.load(Ordering::Relaxed)
+}
+
+pub fn set_decode_budget(bytes: u64) {
+    assert!(bytes > 0, "a decode cache holds at least one byte");
+    DECODE.store(bytes, Ordering::Relaxed);
+}
 
 type Accounting = Arc<Mutex<Option<u64>>>;
 

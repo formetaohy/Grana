@@ -154,15 +154,16 @@ impl Hollows {
         self.positions.contains_key(&(time, level, index))
     }
 
-    fn assign(&mut self, time: u32, level: usize, index: usize) {
+    fn assign(&mut self, time: u32, level: usize, index: usize) -> Vec<u32> {
         if self.positions.contains_key(&(time, level, index)) {
-            return;
+            return Vec::new();
         }
-        self.remember(time);
+        let forgotten = self.remember(time);
         let positions = &mut self.positions;
         let frame = self.frames.entry((time, level)).or_default();
         positions.insert((time, level, index), frame.indices.len() as u32);
         frame.indices.push(index as u32);
+        forgotten
     }
 
     fn release(&mut self, time: u32, level: usize, index: usize) -> bool {
@@ -188,16 +189,19 @@ impl Hollows {
         true
     }
 
-    fn remember(&mut self, time: u32) {
+    fn remember(&mut self, time: u32) -> Vec<u32> {
         if self.remembered.contains(&time) {
-            return;
+            return Vec::new();
         }
         self.remembered.push(time);
+        let mut forgotten = Vec::new();
         while self.remembered.len() > HOLLOW_FRAMES {
             let dropped = self.remembered.remove(0);
             self.frames.retain(|(held, _), _| *held != dropped);
             self.positions.retain(|(held, _, _), _| *held != dropped);
+            forgotten.push(dropped);
         }
+        forgotten
     }
 
     fn indices(&self, time: u32, level: usize) -> Option<&[u32]> {
@@ -238,8 +242,7 @@ impl Atlas {
         device: &Device,
         binding: AtlasBinding<'_>,
         channel_count: usize,
-        requested: u64,
-        max_dimension: u32,
+        slots: crate::slots::Slots,
     ) -> Self {
         let AtlasBinding {
             layout,
@@ -253,16 +256,8 @@ impl Atlas {
             "an atlas binds one to {} channels",
             CHANNEL_LIMIT
         );
-        assert!(
-            max_dimension >= slot_side,
-            "the adapter cannot hold a padded brick"
-        );
-        let limit = (max_dimension / slot_side) as usize;
-        let requested = requested.max(1) as usize;
-        let span = ((requested as f64).cbrt().ceil() as usize).clamp(1, limit);
-        let depth = requested.div_ceil(span * span).clamp(1, limit);
-        let slot_grid = [span as u32, span as u32, depth as u32];
-        let capacity = span * span * depth;
+        let slot_grid = slots.grid();
+        let capacity = slots.capacity();
         let dims = slot_grid.map(|count| count * slot_side);
         let packs = grana_volume::pack_count(channel_count);
         let widths = (0..packs)
@@ -484,12 +479,12 @@ impl Atlas {
         self.hollow.holds(time, level, index)
     }
 
-    pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) {
-        self.hollow.assign(time, level, index);
+    pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) -> Vec<u32> {
+        self.hollow.assign(time, level, index)
     }
 
-    pub fn remember(&mut self, time: u32) {
-        self.hollow.remember(time);
+    pub fn remember(&mut self, time: u32) -> Vec<u32> {
+        self.hollow.remember(time)
     }
 
     pub fn reset(&mut self) {

@@ -248,7 +248,6 @@ impl TargetCache {
         layouts: &Layouts,
         present: &Present,
         size: [u32; 2],
-        allowance: u64,
     ) -> (FrameTarget, bool) {
         let held = (0..self.slots.len()).find(|index| {
             self.slots[*index]
@@ -261,11 +260,6 @@ impl TargetCache {
                 let index = (0..self.slots.len())
                     .find(|index| *index != self.current)
                     .unwrap_or(0);
-                let cost = crate::budget::Frames::of(size).bytes();
-                let retained = self.slots[index].as_ref().map_or(0, FrameTarget::bytes);
-                if cost.saturating_add(retained) > allowance {
-                    self.slots[index] = None;
-                }
                 self.slots[index] = Some(FrameTarget::new(device, layouts, present, size));
                 (index, true)
             }
@@ -278,6 +272,12 @@ impl TargetCache {
     }
 
     pub(super) fn put(&mut self, target: FrameTarget) {
+        let size = target.size;
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if index != self.current && slot.as_ref().is_some_and(|held| held.size != size) {
+                *slot = None;
+            }
+        }
         self.slots[self.current] = Some(target);
     }
 }

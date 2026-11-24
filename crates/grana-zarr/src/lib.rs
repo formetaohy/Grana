@@ -1,6 +1,5 @@
 mod archive;
 mod axes;
-mod cache;
 mod chunk;
 mod collection;
 mod error;
@@ -18,6 +17,7 @@ mod scene;
 mod schema;
 mod shape;
 mod space;
+mod tile;
 mod transform;
 mod witness;
 mod write;
@@ -37,4 +37,5 @@ pub use label::{
 pub use outline::Outline;
 pub use root::Root;
 pub use space::{image_space, label_space};
+pub use tile::Decode;
 pub use write::write_image;

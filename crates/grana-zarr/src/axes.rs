@@ -70,6 +70,17 @@ impl Layout {
             })
             .collect()
     }
+
+    pub(crate) fn spatial(&self, shape: &[u64]) -> [u32; 3] {
+        [0, 1, 2].map(|component| match self.space[component] {
+            Some(axis) => shape
+                .get(axis)
+                .and_then(|side| u32::try_from(*side).ok())
+                .unwrap_or(1)
+                .max(1),
+            None => 1,
+        })
+    }
 }
 
 pub fn layout(axes: &[Axis], shape: &[u64], dataset: &Dataset) -> Result<Layout, String> {

@@ -93,6 +93,8 @@ const RETRY_CEILING: Duration = Duration::from_secs(8);
 
 const RETRY_LIMIT: u32 = 6;
 
+const DECODE_REPORT: Duration = Duration::from_secs(1);
+
 struct Failure {
     attempts: u32,
     retry_at: Instant,
@@ -152,6 +154,7 @@ pub struct Session {
     abandoned: Vec<BrickRequest>,
     reads_started: u64,
     reads_delivered: u64,
+    decode_reported: Option<Instant>,
     failed: HashMap<BrickRequest, Failure>,
     bricks: Vec<(BrickRequest, PackedBrick)>,
     pending: Option<Pending>,
@@ -252,6 +255,7 @@ impl Session {
             abandoned: Vec::new(),
             reads_started: 0,
             reads_delivered: 0,
+            decode_reported: None,
             failed: HashMap::new(),
             bricks: Vec::new(),
             pending: None,
@@ -664,7 +668,35 @@ impl Session {
         for (request, _) in &bricks {
             self.in_flight.remove(request);
         }
+        if !bricks.is_empty() && self.in_flight.is_empty() {
+            self.report_decode();
+        }
         bricks
+    }
+
+    fn report_decode(&mut self) {
+        let now = Instant::now();
+        if self
+            .decode_reported
+            .is_some_and(|held| now.duration_since(held) < DECODE_REPORT)
+        {
+            return;
+        }
+        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
+            return;
+        };
+        let Some(decode) = channels.decode() else {
+            return;
+        };
+        self.decode_reported = Some(now);
+        grana_log::info!(
+            target: "grana::stream",
+            hits = decode.hits(),
+            misses = decode.misses(),
+            hit_rate = decode.hit_rate(),
+            amplification = decode.amplification(),
+            "the decode cache reports its reuse"
+        );
     }
     pub fn take_abandoned(&mut self) -> Vec<BrickRequest> {
         std::mem::take(&mut self.abandoned)

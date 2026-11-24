@@ -53,6 +53,10 @@ impl BrickRecord {
     pub fn time(&self) -> u32 {
         self.time
     }
+
+    pub fn is_hollow(&self) -> bool {
+        self.flags & HOLLOW_FLAG != 0
+    }
 }
 
 pub(crate) struct BrickArena {
@@ -63,22 +67,25 @@ pub(crate) struct BrickArena {
 }
 
 impl BrickArena {
+    pub(crate) fn plan(pyramid: &Pyramid, limit: usize) -> Option<(usize, usize)> {
+        let mut first = pyramid.level_count();
+        let mut records = 0usize;
+        for level in (0..pyramid.level_count()).rev() {
+            let count = BrickGrid::new(pyramid.level(level).extent()).count();
+            if records + count > limit {
+                break;
+            }
+            records += count;
+            first = level;
+        }
+        (first < pyramid.level_count()).then_some((first, records))
+    }
+
     pub fn new(device: &Device, pyramid: &Pyramid, limit: usize) -> Option<Self> {
         let counts = (0..pyramid.level_count())
             .map(|level| BrickGrid::new(pyramid.level(level).extent()).count())
             .collect::<Vec<_>>();
-        let mut first = counts.len();
-        let mut records = 0usize;
-        for level in (0..counts.len()).rev() {
-            if records + counts[level] > limit {
-                break;
-            }
-            records += counts[level];
-            first = level;
-        }
-        if first == counts.len() {
-            return None;
-        }
+        let (first, records) = Self::plan(pyramid, limit)?;
         assert!(records > 0, "a brick arena holds at least one record");
         let mut bases = vec![0u32; counts.len()];
         let mut base = 0usize;
@@ -258,6 +265,20 @@ impl BrickTable {
         }
         self.set_record(arena, index, BrickRecord::MISSING);
         true
+    }
+
+    pub fn drop_hollows(&mut self, arena: &BrickArena, time: u32) -> bool {
+        let held = self
+            .records
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| record.time() == time && record.is_hollow())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        for index in &held {
+            self.set_record(arena, *index, BrickRecord::MISSING);
+        }
+        !held.is_empty()
     }
 
     pub fn time(&self) -> Option<u32> {

@@ -22,12 +22,12 @@ pub(crate) fn dataset(directory: Option<&Path>, levels: &[(String, Vec<u8>)]) ->
 
 pub(crate) fn chunks(
     keys: impl Iterator<Item = String>,
-    metadata: impl Fn(&str) -> Option<(u64, u128)>,
-) -> u64 {
+    metadata: impl Fn(&str) -> std::io::Result<Option<(u64, u128)>>,
+) -> std::io::Result<u64> {
     let mut hash = FNV_BASE;
     for key in keys {
         hash = witness::mix(hash, key.as_bytes());
-        match metadata(&key) {
+        match metadata(&key)? {
             Some((length, modified)) => {
                 hash = witness::mix(hash, &[1]);
                 hash = witness::mix(hash, &length.to_le_bytes());
@@ -36,7 +36,7 @@ pub(crate) fn chunks(
             None => hash = witness::mix(hash, &[0]),
         }
     }
-    hash
+    Ok(hash)
 }
 
 fn modified(metadata: &std::fs::Metadata) -> u128 {
