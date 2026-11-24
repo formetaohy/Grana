@@ -270,6 +270,13 @@ impl Tile<'_> {
                         + measured_dims[0]
                             * ((y - span[1].start) + measured_dims[1] * (z - span[2].start));
                     for (channel, data) in measured.iter().enumerate() {
+                        if plan
+                            .channels
+                            .no_data(channel)
+                            .is_some_and(|no_data| no_data.holds(data, local))
+                        {
+                            continue;
+                        }
                         self.accumulators[node * channels + channel].push(data.value(local));
                     }
                     let voxel = [

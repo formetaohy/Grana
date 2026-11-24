@@ -356,12 +356,6 @@ impl Renderer {
         allocation: reserve::Allocation,
         reset: Reset,
     ) -> Result<(), String> {
-        self.resources = None;
-        if reset == Reset::Dataset {
-            self.targets.clear();
-            self.meshes = None;
-            self.sections.clear();
-        }
         let resources = Resources::new(
             device,
             &self.layouts,
@@ -385,6 +379,11 @@ impl Renderer {
         }
         self.residence.setup(device, resources.slots(), pyramid);
         self.resources = Some(resources);
+        if reset == Reset::Dataset {
+            self.targets.clear();
+            self.meshes = None;
+            self.sections.clear();
+        }
         if reset == Reset::Residency {
             return Ok(());
         }

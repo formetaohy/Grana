@@ -379,7 +379,8 @@ fn rebuild(
         ));
     }
     let channels = reader.pyramid().channel_count();
-    let mut builder = LabelBuilder::new(level, inspected, channels);
+    let no_data = reader.no_data();
+    let mut builder = LabelBuilder::new(level, inspected, &no_data);
     let mut start = 0;
     while start < extent[2] {
         let core = SLAB.min(extent[2] - start);

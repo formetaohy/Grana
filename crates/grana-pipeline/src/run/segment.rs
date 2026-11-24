@@ -189,6 +189,7 @@ impl Slicer<'_> {
             return Ok(None);
         };
         let warp = self.request.drifts.warp(self.request.channel, time);
+        let no_data = self.reader.pyramid().channels()[self.request.channel].no_data();
         let width = ranges[0].end - ranges[0].start;
         let height = ranges[1].end - ranges[1].start;
         let mut slices = Vec::with_capacity((ranges[2].end - ranges[2].start) as usize);
@@ -202,7 +203,21 @@ impl Slicer<'_> {
                 .read_region(time, 0, self.request.channel, &slice, warp)
                 .map_err(|error| error.to_string())?;
             let mut plane = vec![0.0f32; values.voxel_count()];
-            values.write_values(&mut plane);
+            values.write_values_absent_as_nan(no_data, &mut plane);
+            let mut absent = None;
+            if no_data.is_some() {
+                absent = Some(
+                    plane
+                        .iter()
+                        .map(|value| !value.is_finite())
+                        .collect::<Vec<_>>(),
+                );
+                for value in &mut plane {
+                    if !value.is_finite() {
+                        *value = 0.0;
+                    }
+                }
+            }
             let kept = mask.as_ref().is_none_or(|mask| covers(mask, &ranges, z));
             let mut labels = if kept {
                 self.segmenter
@@ -211,6 +226,13 @@ impl Slicer<'_> {
             } else {
                 vec![0u32; width as usize * height as usize]
             };
+            if let Some(absent) = absent {
+                for (label, absent) in labels.iter_mut().zip(&absent) {
+                    if *absent {
+                        *label = 0;
+                    }
+                }
+            }
             if let Some(mask) = mask.as_ref() {
                 keep_labels(&mut labels, mask, &ranges, z);
             }

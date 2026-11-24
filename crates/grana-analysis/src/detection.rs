@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
-use grana_volume::{Intensity, VoxelData};
+use grana_volume::{Intensity, NoData, VoxelData};
 
 use self::spill::Storage;
 use crate::budget::Budget;
@@ -25,6 +25,7 @@ pub(crate) struct Plan<'a> {
     pub(crate) anchor: [i64; 3],
     pub(crate) region: [Range<u32>; 3],
     pub(crate) intensity: Intensity,
+    pub(crate) no_data: Option<NoData>,
     pub(crate) budget: Budget,
     pub(crate) cancel: &'a AtomicBool,
     pub(crate) read: &'a Read<'a>,
@@ -80,6 +81,7 @@ impl Plan<'_> {
             anchor,
             region,
             intensity,
+            no_data,
             budget,
             cancel,
             read,
@@ -135,7 +137,7 @@ impl Plan<'_> {
                         raw.resize(plane * (end - z) as usize, 0.0);
                         let band = match read(&ranges) {
                             Ok(data) if data.voxel_count() == raw.len() => {
-                                data.write_values(&mut raw);
+                                data.write_values_absent_as_nan(no_data, &mut raw);
                                 Ok((z, raw))
                             }
                             Ok(_) => Err("the detection band does not cover the requested region"
@@ -376,8 +378,16 @@ fn depth(
     let planes = target.len() / plane;
     let workers = workers.clamp(1, planes.max(1));
     if workers == 1 {
+        let mut weight = vec![0.0f32; plane];
         for (index, values) in target.chunks_mut(plane).enumerate() {
-            depth_plane(window, start + index as u32, radius, kernel, values);
+            depth_plane(
+                window,
+                start + index as u32,
+                radius,
+                kernel,
+                values,
+                &mut weight,
+            );
         }
         return;
     }
@@ -386,21 +396,47 @@ fn depth(
         for (block, values) in target.chunks_mut(each * plane).enumerate() {
             let first = start + (block * each) as u32;
             scope.spawn(move |_| {
-                for (index, plane) in values.chunks_mut(plane).enumerate() {
-                    depth_plane(window, first + index as u32, radius, kernel, plane);
+                let mut weight = vec![0.0f32; plane];
+                for (index, plane_values) in values.chunks_mut(plane).enumerate() {
+                    depth_plane(
+                        window,
+                        first + index as u32,
+                        radius,
+                        kernel,
+                        plane_values,
+                        &mut weight,
+                    );
                 }
             });
         }
     });
 }
 
-fn depth_plane(window: &Window, z: u32, radius: usize, kernel: &[f32], values: &mut [f32]) {
+fn depth_plane(
+    window: &Window,
+    z: u32,
+    radius: usize,
+    kernel: &[f32],
+    values: &mut [f32],
+    weight: &mut [f32],
+) {
     values.fill(0.0);
-    for (tap, weight) in kernel.iter().enumerate() {
+    weight.fill(0.0);
+    for (tap, weight_at) in kernel.iter().enumerate() {
         let source = window.plane((z as i64 + tap as i64 - radius as i64).max(0) as u32);
-        for (slot, value) in values.iter_mut().zip(source) {
-            *slot += weight * value;
+        for ((sum, held), sample) in values.iter_mut().zip(weight.iter_mut()).zip(source) {
+            if sample.is_finite() {
+                *sum += weight_at * sample;
+                *held += weight_at;
+            }
         }
+    }
+    let centre = window.plane(z);
+    for (index, value) in values.iter_mut().enumerate() {
+        *value = match centre[index].is_finite() {
+            true => *value / weight[index],
+            false => f32::NAN,
+        };
     }
 }
 
@@ -541,14 +577,27 @@ fn vertical(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) {
                 block[y * width..(y + 1) * width].copy_from_slice(&part[start..start + width]);
             }
             for y in 0..dims[1] {
+                let centre = &block[y * width..(y + 1) * width];
                 let target = &mut blurred[y * width..(y + 1) * width];
-                target.fill(0.0);
-                for (tap, weight) in kernel.iter().enumerate() {
-                    let sample = (y as i64 + tap as i64 - radius).clamp(0, last) as usize;
-                    let source = &block[sample * width..(sample + 1) * width];
-                    for (slot, value) in target.iter_mut().zip(source) {
-                        *slot += weight * value;
+                for x in 0..width {
+                    if !centre[x].is_finite() {
+                        target[x] = f32::NAN;
+                        continue;
                     }
+                    let mut sum = 0.0f32;
+                    let mut weight = 0.0f32;
+                    for (tap, weight_at) in kernel.iter().enumerate() {
+                        let sample = (y as i64 + tap as i64 - radius).clamp(0, last) as usize;
+                        let value = block[sample * width + x];
+                        if value.is_finite() {
+                            sum += weight_at * value;
+                            weight += weight_at;
+                        }
+                    }
+                    target[x] = match weight > 0.0 {
+                        true => sum / weight,
+                        false => f32::NAN,
+                    };
                 }
             }
             for y in 0..dims[1] {
@@ -563,12 +612,23 @@ fn vertical(part: &mut [f32], dims: [usize; 3], depth: usize, kernel: &[f32]) {
 fn blur_line(padded: &[f32], blurred: &mut [f32], kernel: &[f32], radius: usize) {
     let length = blurred.len();
     for (x, slot) in blurred.iter_mut().enumerate() {
+        if !padded[radius + x].is_finite() {
+            *slot = f32::NAN;
+            continue;
+        }
         let source = &padded[x..x + 2 * radius + 1];
         let mut sum = 0.0f32;
-        for (value, weight) in source.iter().zip(kernel) {
-            sum += value * weight;
+        let mut weight = 0.0f32;
+        for (value, weight_at) in source.iter().zip(kernel) {
+            if value.is_finite() {
+                sum += value * weight_at;
+                weight += weight_at;
+            }
         }
-        *slot = sum;
+        *slot = match weight > 0.0 {
+            true => sum / weight,
+            false => f32::NAN,
+        };
     }
     assert!(
         padded.len() >= length + 2 * radius,

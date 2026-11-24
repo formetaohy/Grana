@@ -1,9 +1,9 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatistics};
-use grana_volume::{Level, VoxelData};
+use grana_volume::{Level, NoData, VoxelData};
 use rayon::prelude::*;
 
 use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
@@ -35,17 +35,22 @@ pub struct LabelBuilder {
     level: usize,
     info: Level,
     channels: usize,
+    no_data: Vec<Option<NoData>>,
     objects: Vec<Object>,
     index: HashMap<u32, usize>,
 }
 
 impl LabelBuilder {
-    pub fn new(level: usize, info: Level, channels: usize) -> Self {
-        assert!(channels > 0, "a label image measures at least one channel");
+    pub fn new(level: usize, info: Level, no_data: &[Option<NoData>]) -> Self {
+        assert!(
+            !no_data.is_empty(),
+            "a label image measures at least one channel"
+        );
         Self {
             level,
             info,
-            channels,
+            channels: no_data.len(),
+            no_data: no_data.to_vec(),
             objects: Vec::new(),
             index: HashMap::new(),
         }
@@ -173,6 +178,7 @@ impl LabelBuilder {
     ) {
         let width = extent[0] as usize;
         let height = extent[1] as usize;
+        let no_data = self.no_data.clone();
         for z in 0..extent[2] {
             for y in 0..extent[1] {
                 for x in 0..extent[0] {
@@ -194,6 +200,9 @@ impl LabelBuilder {
                         object.high[axis] = object.high[axis].max(*value);
                     }
                     for (channel, data) in channels.iter().enumerate() {
+                        if no_data[channel].is_some_and(|no_data| no_data.holds(data, slot)) {
+                            continue;
+                        }
                         object.accumulators[channel].push(data.value(slot));
                     }
                 }

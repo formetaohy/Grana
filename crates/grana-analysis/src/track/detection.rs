@@ -7,7 +7,6 @@ use grana_object::TrackDetection;
 pub(super) struct Detection {
     centroid: Vec3,
     radii: [f32; 3],
-    stretch: [f32; 3],
     frame: u32,
     object: usize,
 }
@@ -15,14 +14,14 @@ pub(super) struct Detection {
 pub(super) struct Detections {
     detections: Vec<Detection>,
     spans: Vec<Range<usize>>,
-    stretch: f32,
+    largest: f32,
 }
 
 impl Detections {
     pub fn new(frames: &[&[TrackDetection]]) -> Self {
         let mut detections = Vec::new();
         let mut spans = Vec::with_capacity(frames.len());
-        let mut widest = 1.0f32;
+        let mut largest = 0.0f32;
         for (frame, frame_detections) in frames.iter().enumerate() {
             let start = detections.len();
             detections.extend(
@@ -31,12 +30,10 @@ impl Detections {
                     .enumerate()
                     .map(|(object, detection)| {
                         let radii = detection.radii();
-                        let shape = stretch(radii);
-                        widest = widest.max(shape.into_iter().fold(1.0, f32::max));
+                        largest = radii.into_iter().fold(largest, f32::max);
                         Detection {
                             centroid: Vec3::from(detection.centroid()),
                             radii,
-                            stretch: shape,
                             frame: frame as u32,
                             object,
                         }
@@ -47,7 +44,7 @@ impl Detections {
         Self {
             detections,
             spans,
-            stretch: widest,
+            largest: largest.max(f32::MIN_POSITIVE),
         }
     }
 
@@ -80,16 +77,21 @@ impl Detections {
         (radii[0] * radii[1] * radii[2]).cbrt()
     }
 
-    pub fn gate(&self, index: usize, reach: f32) -> Vec3 {
-        Vec3::from(self.detection(index).stretch) * reach
+    pub fn gate(&self, index: usize, reach: f32, step: f32) -> Vec3 {
+        let radii = self.detection(index).radii;
+        Vec3::new(
+            reach * step.max(radii[0]),
+            reach * step.max(radii[1]),
+            reach * step.max(radii[2]),
+        )
     }
 
-    pub fn grid(&self, frame: usize, cell: f32) -> Grid<'_> {
-        Grid::new(self, frame, cell)
+    pub fn grid(&self, frame: usize, step: f32) -> Grid<'_> {
+        Grid::new(self, frame, step.max(self.largest))
     }
 
-    pub fn widest(&self) -> f32 {
-        self.stretch
+    pub fn largest(&self) -> f32 {
+        self.largest
     }
 
     fn detection(&self, index: usize) -> &Detection {
@@ -97,12 +99,12 @@ impl Detections {
     }
 }
 
-fn stretch(radii: [f32; 3]) -> [f32; 3] {
-    let smallest = radii.into_iter().fold(f32::INFINITY, f32::min);
-    if !(smallest.is_finite() && smallest > 0.0) {
-        return [1.0; 3];
-    }
-    radii.map(|radius| radius / smallest)
+fn key(position: Vec3, cell: f32) -> [i64; 3] {
+    [
+        (position.x / cell).floor() as i64,
+        (position.y / cell).floor() as i64,
+        (position.z / cell).floor() as i64,
+    ]
 }
 
 pub(super) struct Grid<'a> {
@@ -159,12 +161,4 @@ impl<'a> Grid<'a> {
             }
         }
     }
-}
-
-fn key(position: Vec3, cell: f32) -> [i64; 3] {
-    [
-        (position.x / cell).floor() as i64,
-        (position.y / cell).floor() as i64,
-        (position.z / cell).floor() as i64,
-    ]
 }

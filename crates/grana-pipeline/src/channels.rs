@@ -213,6 +213,14 @@ impl Channels {
         &self.pyramid
     }
 
+    pub fn no_data(&self) -> Vec<Option<grana_volume::NoData>> {
+        self.pyramid
+            .channels()
+            .iter()
+            .map(grana_volume::ChannelInfo::no_data)
+            .collect()
+    }
+
     pub fn decode(&self) -> Option<grana_image::Decode> {
         self.reader.decode()
     }

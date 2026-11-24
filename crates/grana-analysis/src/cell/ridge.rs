@@ -90,17 +90,30 @@ impl Smoothing {
         for z in 0..depth {
             for y in 0..height {
                 for x in 0..width {
+                    let index = x + width * (y + height * z);
+                    if !input[index].is_finite() {
+                        output[index] = f32::NAN;
+                        continue;
+                    }
                     let mut sum = 0.0f32;
-                    for (index, weight) in kernel.iter().enumerate() {
-                        let step = index as i64 - radius;
+                    let mut weight = 0.0f32;
+                    for (tap, weight_at) in kernel.iter().enumerate() {
+                        let step = tap as i64 - radius;
                         let at = match axis {
                             0 => (clamp(x as i64 + step, width), y, z),
                             1 => (x, clamp(y as i64 + step, height), z),
                             _ => (x, y, clamp(z as i64 + step, depth)),
                         };
-                        sum += weight * input[at.0 + width * (at.1 + height * at.2)];
+                        let value = input[at.0 + width * (at.1 + height * at.2)];
+                        if value.is_finite() {
+                            sum += weight_at * value;
+                            weight += weight_at;
+                        }
                     }
-                    output[x + width * (y + height * z)] = sum;
+                    output[index] = match weight > 0.0 {
+                        true => sum / weight,
+                        false => f32::NAN,
+                    };
                 }
             }
         }

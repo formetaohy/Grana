@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use grana_object::Mask;
-use grana_volume::{Intensity, VoxelData};
+use grana_volume::{Intensity, NoData, VoxelData};
 use grana_warp::Warp;
 
 use crate::channels::Channels;
@@ -39,6 +39,7 @@ impl Leveling {
         warp: &Warp,
     ) -> Result<Self, String> {
         let intensity = reader.pyramid().channels()[channel].intensity();
+        let no_data = reader.pyramid().channels()[channel].no_data();
         let width = (ranges[0].end - ranges[0].start) as usize;
         let plane = width * (ranges[1].end - ranges[1].start) as usize;
         let depth = ranges[2].end - ranges[2].start;
@@ -53,8 +54,11 @@ impl Leveling {
                 .read_region(time, level, channel, &slice, warp)
                 .map_err(|error| error.to_string())?;
             let mut voxels = vec![0.0f32; values.voxel_count()];
-            values.write_values(&mut voxels);
+            values.write_values_absent_as_nan(no_data, &mut voxels);
             for (index, value) in voxels.iter().enumerate().step_by(step) {
+                if !value.is_finite() {
+                    continue;
+                }
                 if let Some(mask) = mask {
                     let x = ranges[0].start + (index % width) as u32;
                     let y = ranges[1].start + (index / width) as u32;
@@ -86,15 +90,18 @@ impl Leveling {
         }
     }
 
-    pub(super) fn apply(&self, values: &VoxelData) -> Vec<f32> {
+    pub(super) fn apply(&self, values: &VoxelData, no_data: Option<NoData>) -> Vec<f32> {
         let mut plane = vec![0.0f32; values.voxel_count()];
-        values.write_values(&mut plane);
+        values.write_values_absent_as_nan(no_data, &mut plane);
         let span = self.high - self.low;
         if !span.is_finite() || span <= 0.0 {
             plane.fill(0.0);
             return plane;
         }
         for value in &mut plane {
+            if !value.is_finite() {
+                continue;
+            }
             let unit = self.intensity.unit(*value);
             *value = ((unit - self.low) / span).clamp(0.0, 1.0);
         }

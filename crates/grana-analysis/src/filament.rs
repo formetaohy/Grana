@@ -190,13 +190,17 @@ impl FilamentScan {
         if detection.voxel_count() as u64 != expected {
             return Err("the detection frame does not cover the requested level".to_string());
         }
+        let missing = self.channels.no_data(self.channels.detection());
         let field = LocalField::new(
             [0, 1, 2].map(|axis| self.extent[axis] as usize),
             [0, 0, 0],
             [0, 0, 0],
             self.intensity,
             self.budget,
-            |index| detection.value(index),
+            |index| match missing.is_some_and(|no_data| no_data.holds(detection, index)) {
+                true => f32::NAN,
+                false => detection.value(index),
+            },
         );
         volume::mask(
             detection,
@@ -248,7 +252,7 @@ impl FilamentScan {
                     continue;
                 }
                 let slot = (*owner as usize - 1) * self.channels.count() + channel;
-                self.measure(data, cell, &mut accumulators[slot]);
+                self.measure(data, channel, cell, &mut accumulators[slot]);
             }
         }
         let mut vertices = Vec::new();
@@ -300,7 +304,14 @@ impl FilamentScan {
         volume::nearest(&self.tube, &self.grid, &mut self.owner, &mut self.reach);
     }
 
-    fn measure(&self, data: &VoxelData, cell: usize, accumulator: &mut SampleAccumulator) {
+    fn measure(
+        &self,
+        data: &VoxelData,
+        channel: usize,
+        cell: usize,
+        accumulator: &mut SampleAccumulator,
+    ) {
+        let missing = self.channels.no_data(channel);
         let voxel = self.grid.voxel(cell);
         let extent = self.extent;
         let step = self.grid.step;
@@ -312,7 +323,11 @@ impl FilamentScan {
             for y in low[1]..high[1] {
                 let base = width * (z as usize * height + y as usize);
                 for x in low[0]..high[0] {
-                    accumulator.push(data.value(base + x as usize));
+                    let index = base + x as usize;
+                    if missing.is_some_and(|no_data| no_data.holds(data, index)) {
+                        continue;
+                    }
+                    accumulator.push(data.value(index));
                 }
             }
         }

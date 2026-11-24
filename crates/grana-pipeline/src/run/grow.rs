@@ -47,6 +47,7 @@ struct Field<'a> {
     time: u32,
     level: usize,
     channel: usize,
+    no_data: Option<grana_volume::NoData>,
     warp: &'a Warp,
     leveling: &'a Leveling,
 }
@@ -57,7 +58,7 @@ impl CellField for Field<'_> {
             .reader
             .read_region(self.time, self.level, self.channel, ranges, self.warp)
             .map_err(|error| error.to_string())?;
-        Ok(self.leveling.apply(&values))
+        Ok(self.leveling.apply(&values, self.no_data))
     }
 }
 
@@ -156,6 +157,7 @@ pub fn grow(
             time,
             level,
             channel: request.channel,
+            no_data: reader.pyramid().channels()[request.channel].no_data(),
             warp,
             leveling: &leveling,
         };
@@ -179,7 +181,7 @@ pub fn grow(
             });
             continue;
         };
-        let mut surfaces = labelled::Surfaces::new(level, info, channels);
+        let mut surfaces = labelled::Surfaces::new(level, info, &reader.no_data());
         let mut halted = false;
         for index in 0..growth.bands() {
             if cancel.load(Ordering::Relaxed) {

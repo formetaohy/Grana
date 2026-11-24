@@ -21,8 +21,8 @@ use grana_pipeline::Channels;
 use grana_scene::{Dataset, Drifts, ObjectFrame, ObjectKind, ObjectParams, Scene};
 use grana_store::SpillStore;
 use grana_volume::{
-    Basis, Calibration, Channel, ChannelInfo, Extent, Intensity, Level, Pyramid, Region, Spacing,
-    Statistics, Volume, VolumeSeries, VoxelData, VoxelFormat, VoxelSemantics,
+    Basis, Calibration, Channel, ChannelInfo, Extent, Intensity, Level, NoData, Pyramid, Region,
+    Spacing, Statistics, Volume, VolumeSeries, VoxelData, VoxelFormat, VoxelSemantics,
 };
 use grana_zarr::write_image;
 
@@ -42,7 +42,7 @@ fn detects_and_localises_bright_spots() {
         data.range(),
         SpotParams::new(0.5, 0.2),
         Region::none(),
-        ChannelSet::new(1, 0),
+        ChannelSet::new(0, &[None]),
         Budget::new(2),
     );
     let voxels = AtomicU64::new(0);
@@ -203,6 +203,47 @@ fn extracts_measured_surfaces_from_two_balls() {
         assert!(placed, "the object centroid {centre:?} is misplaced");
     }
 
+    let fill = HIGH - 1;
+    let mut holed = match volume.channels()[0].data() {
+        VoxelData::U16(values) => values.clone(),
+        other => panic!("a ball volume is sixteen bit, found {:?}", other.format()),
+    };
+    for z in 0..8 {
+        for y in 0..8 {
+            for x in 0..8 {
+                holed[extent.index(x, y, z) as usize] = fill;
+            }
+        }
+    }
+    let holey = Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new(
+            "signal",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(holed),
+        )],
+    );
+    let filled = extract_surfaces_at(
+        &holey,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        None,
+        Some(NoData::U16(fill)),
+    );
+    assert_eq!(
+        filled.object_count(),
+        2,
+        "a declared missing body is no surface to detect"
+    );
+    for (plain, holed) in set.objects().iter().zip(filled.objects()) {
+        let relative = (plain.volume() - holed.volume()).abs() / plain.volume();
+        assert!(
+            relative < 0.02,
+            "a missing body nearby moved a ball volume by {relative}"
+        );
+    }
+
     let level = Level::new(extent, spacing);
     let centre = level.voxel_center([24.0, 32.0, 24.0]);
     let roi = grana_object::Mask::boxed(
@@ -218,6 +259,7 @@ fn extracts_measured_surfaces_from_two_balls() {
         level,
         SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Some(&roi),
+        None,
     );
     assert_eq!(
         masked.object_count(),
@@ -238,6 +280,7 @@ fn extracts_measured_surfaces_from_two_balls() {
         level,
         SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
         Some(&tiny),
+        None,
     );
     assert_eq!(
         small.object_count(),
@@ -389,6 +432,7 @@ fn extract_surfaces(volume: &grana_volume::Volume, params: SurfaceParams) -> Sur
         Level::new(volume.extent(), volume.spacing()),
         params,
         None,
+        None,
     )
 }
 
@@ -397,14 +441,16 @@ fn extract_surfaces_at(
     level: Level,
     params: SurfaceParams,
     roi: Option<&grana_object::Mask>,
+    no_data: Option<NoData>,
 ) -> SurfaceSet {
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
+    let missing = vec![no_data; channels];
     let builder = SurfaceBuilder::new(
         0,
         level,
         params,
-        ChannelSet::new(channels, 0),
+        ChannelSet::new(0, &missing),
         Region::none(),
         intensity,
     );
@@ -662,7 +708,7 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
         0,
         level,
         FilamentParams::new(8_000.0 / f32::from(HIGH), 2.5),
-        ChannelSet::new(1, 0),
+        ChannelSet::new(0, &[None]),
         Region::none(),
         intensity,
         Budget::new(1),
@@ -1060,7 +1106,7 @@ fn coloc_series(
     let mut scan = ColocScan::new(
         info,
         sampling,
-        ColocScanConfig::new(pair, 2, intensities, None),
+        ColocScanConfig::new(pair, 2, intensities, [None, None], None),
         Region::none(),
     );
     let cancel = AtomicBool::new(false);
@@ -1128,6 +1174,32 @@ fn links_motion_and_splits_lineages() {
     assert_eq!(set.len(), 3);
     assert_eq!(set.divisions(), 1);
     assert_eq!(set.children(0).count(), 2);
+
+    let apart = tracked(
+        &[(&[[0.0, 0.0, 0.0]][..], 1.0), (&[[0.8, 0.0, 0.0]][..], 1.0)],
+        TrackParams::new(1.0, 0, events(false, 2.0, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(
+        apart.len(),
+        2,
+        "a match too far inside the gate is a death and a birth, not a link"
+    );
+    assert!(
+        apart.links().is_empty(),
+        "the distant detection starts over"
+    );
+
+    let carried = tracked(
+        &[(&[[0.0, 0.0, 0.0]][..], 3.0), (&[[2.0, 0.0, 0.0]][..], 3.0)],
+        TrackParams::new(1.0, 0, events(false, 2.0, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(
+        carried.len(),
+        1,
+        "a large object travels as far as its own radius"
+    );
 }
 
 #[test]

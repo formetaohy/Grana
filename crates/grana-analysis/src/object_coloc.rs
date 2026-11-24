@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use grana_measure::{ColocPair, ObjectColocValue};
 use grana_object::ObjectAnchor;
-use grana_volume::{Level, Region};
+use grana_volume::{Level, NoData, Region};
 
 use crate::coloc::ColocRead;
 use crate::schedule;
@@ -42,6 +42,7 @@ pub fn object_coloc_level(
 pub struct ObjectColocScan {
     pair: ColocPair,
     level: usize,
+    no_data: [Option<NoData>; 2],
     tiles: Vec<[Range<u32>; 3]>,
     objects: usize,
 }
@@ -53,6 +54,7 @@ impl ObjectColocScan {
         info: Level,
         region: Region,
         objects: usize,
+        no_data: [Option<NoData>; 2],
         anchors: &[ObjectAnchor],
     ) -> Self {
         assert!(
@@ -63,6 +65,7 @@ impl ObjectColocScan {
         Self {
             pair,
             level,
+            no_data,
             tiles,
             objects,
         }
@@ -101,6 +104,7 @@ impl ObjectColocScan {
                         time,
                         pair: self.pair,
                         objects: self.objects,
+                        no_data: self.no_data,
                     },
                 )
             },
@@ -196,6 +200,7 @@ struct TileContext<'a> {
     time: u32,
     pair: ColocPair,
     objects: usize,
+    no_data: [Option<NoData>; 2],
 }
 
 struct Tile {
@@ -222,6 +227,7 @@ impl Tile {
             time,
             pair,
             objects,
+            no_data,
         } = *context;
         if self.sums.is_empty() {
             self.sums = vec![0.0; objects * OBJECT_COLOC_FIELDS];
@@ -258,6 +264,11 @@ impl Tile {
                 "an object colocalization label names an object of its set"
             );
             let base = object * OBJECT_COLOC_FIELDS;
+            if no_data[0].is_some_and(|no_data| no_data.holds(&a, index))
+                || no_data[1].is_some_and(|no_data| no_data.holds(&b, index))
+            {
+                continue;
+            }
             if self.sums[base] == 0.0 {
                 self.touched.push(*label);
             }

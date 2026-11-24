@@ -138,8 +138,10 @@ fn bins(columns: usize, histogram: u64) -> usize {
     each.clamp(work::FIELD_BIN_MIN, work::FIELD_BIN_MAX) as usize
 }
 
-fn bin(value: f32, intensity: Intensity, scale: f32, last: usize) -> usize {
-    (((value - intensity.min()) * scale) as usize).min(last)
+fn bin(value: f32, intensity: Intensity, scale: f32, last: usize) -> Option<usize> {
+    value
+        .is_finite()
+        .then(|| (((value - intensity.min()) * scale) as usize).min(last))
 }
 
 fn quantiles(histogram: &[u16], count: u32, intensity: Intensity) -> Option<(f32, f32)> {
@@ -346,8 +348,11 @@ impl BlockLevels {
                                     for x in x0..x1 {
                                         let slot =
                                             origin + (x - i64::from(cover[0].start)) as usize;
-                                        let target =
-                                            bin(values[base + slot], intensity, scale, last);
+                                        let Some(target) =
+                                            bin(values[base + slot], intensity, scale, last)
+                                        else {
+                                            continue;
+                                        };
                                         histogram[target] += 1;
                                         stored += 1;
                                     }
@@ -473,7 +478,10 @@ impl LocalField {
                         for y in low[1]..high[1] {
                             let base = dims[0] * (y + dims[1] * z);
                             for x in low[0]..high[0] {
-                                let target = bin(value(base + x), intensity, scale, bins - 1);
+                                let Some(target) = bin(value(base + x), intensity, scale, bins - 1)
+                                else {
+                                    continue;
+                                };
                                 histogram[target] += 1;
                                 stored += 1;
                             }

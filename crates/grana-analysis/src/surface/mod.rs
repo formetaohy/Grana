@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_geometry::Geometry;
 use grana_object::SurfaceSet;
 use grana_store::SpillStore;
-use grana_volume::{Intensity, Level, NoData, Pyramid, Region, VoxelData};
+use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
 use crate::morphology::Element;
 use grana_object::Mask;
@@ -138,7 +138,6 @@ pub(super) struct Gate<'a> {
     pub(super) limit: [u32; 3],
     pub(super) placement: Level,
     pub(super) roi: Option<&'a Mask>,
-    pub(super) no_data: Option<NoData>,
 }
 
 impl Gate<'_> {
@@ -153,11 +152,6 @@ impl Gate<'_> {
             Some(roi) => roi.contains(self.placement.voxel_center(voxel.map(|value| value as f32))),
             None => true,
         }
-    }
-
-    pub(super) fn rejects(&self, value: f32) -> bool {
-        self.no_data
-            .is_some_and(|no_data| no_data.matches_sample(value))
     }
 }
 
@@ -182,7 +176,6 @@ pub struct SurfaceBuilder {
     morph_radius: u32,
     seeds: Vec<[f32; 3]>,
     seed_policy: SeedPolicy,
-    no_data: Option<NoData>,
 }
 
 impl SurfaceBuilder {
@@ -242,7 +235,6 @@ impl SurfaceBuilder {
             morph_radius,
             seeds: Vec::new(),
             seed_policy: SeedPolicy::Unseeded,
-            no_data: None,
         }
     }
 
@@ -391,13 +383,7 @@ impl SurfaceBuilder {
             limit: [self.region[0].end, self.region[1].end, self.region[2].end],
             placement: self.placement,
             roi,
-            no_data: self.no_data,
         }
-    }
-
-    pub fn with_no_data(mut self, no_data: Option<NoData>) -> Self {
-        self.no_data = no_data;
-        self
     }
 
     pub fn with_seeds(mut self, seeds: &[[f32; 3]], policy: SeedPolicy) -> Self {
@@ -491,6 +477,7 @@ impl SurfaceBuilder {
                 anchor: self.anchor,
                 region: self.region.clone(),
                 intensity: self.intensity,
+                no_data: self.channels.no_data(self.channels.detection()),
                 budget,
                 cancel,
                 read: sources.read,

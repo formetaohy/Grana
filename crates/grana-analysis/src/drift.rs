@@ -1,7 +1,7 @@
 use std::f32::consts::TAU;
 use std::ops::Range;
 
-use grana_volume::{Extent, Pyramid, VoxelData};
+use grana_volume::{Extent, NoData, Pyramid, VoxelData};
 use grana_warp::{Grid, Warp};
 
 const WINDOW: u32 = 64;
@@ -152,7 +152,7 @@ fn centered(extent: Extent) -> [Range<u32>; 3] {
     })
 }
 
-pub fn window(data: &VoxelData, ranges: &[Range<u32>; 3]) -> Vec<f32> {
+pub fn window(data: &VoxelData, ranges: &[Range<u32>; 3], no_data: Option<NoData>) -> Vec<f32> {
     let mut values = vec![
         0.0f32;
         ranges
@@ -160,7 +160,7 @@ pub fn window(data: &VoxelData, ranges: &[Range<u32>; 3]) -> Vec<f32> {
             .map(|range| (range.end - range.start) as usize)
             .product()
     ];
-    data.write_values(&mut values);
+    data.write_values_absent_as_nan(no_data, &mut values);
     values
 }
 
@@ -175,14 +175,48 @@ pub fn shift(reference: &[f32], moving: &[f32], dims: [usize; 3]) -> [f32; 3] {
         moving.len(),
         "a moving window matches the reference window"
     );
-    if reference.iter().all(|value| *value == reference[0]) {
+    let validity = {
+        let masked = reference
+            .iter()
+            .zip(moving)
+            .any(|(left, right)| !(left.is_finite() && right.is_finite()));
+        masked.then(|| {
+            reference
+                .iter()
+                .zip(moving)
+                .map(|(left, right)| left.is_finite() && right.is_finite())
+                .collect::<Vec<bool>>()
+        })
+    };
+    let kept = |index: usize| validity.as_ref().is_none_or(|valid| valid[index]);
+    let mut first = None;
+    let mut flat = true;
+    for (index, value) in reference.iter().enumerate() {
+        if !kept(index) {
+            continue;
+        }
+        match first {
+            None => first = Some(*value),
+            Some(held) if held != *value => {
+                flat = false;
+                break;
+            }
+            Some(_) => {}
+        }
+    }
+    if first.is_none() || flat {
         return [0.0; 3];
     }
     let sizes = dims.map(|value| (2 * value.max(2)).next_power_of_two());
     let mut reference_spectrum = Cube::new(sizes);
     let mut spectrum = Cube::new(sizes);
-    fill(&mut reference_spectrum, reference, dims);
-    fill(&mut spectrum, moving, dims);
+    fill(
+        &mut reference_spectrum,
+        reference,
+        dims,
+        validity.as_deref(),
+    );
+    fill(&mut spectrum, moving, dims, validity.as_deref());
     reference_spectrum.transform(false);
     spectrum.transform(false);
     let dc = reference_spectrum.index([0; 3]);
@@ -356,19 +390,33 @@ fn add(sum: &mut Complex, value: Complex, weight: Complex) {
     sum.im += value.re * weight.im + value.im * weight.re;
 }
 
-fn fill(cube: &mut Cube, source: &[f32], dims: [usize; 3]) {
-    let mut mean = 0.0f64;
-    for value in source {
-        mean += f64::from(*value);
+fn fill(cube: &mut Cube, source: &[f32], dims: [usize; 3], validity: Option<&[bool]>) {
+    let mut total = 0.0f64;
+    let mut count = 0u64;
+    for (index, value) in source.iter().enumerate() {
+        if validity.is_some_and(|valid| !valid[index]) || !value.is_finite() {
+            continue;
+        }
+        total += f64::from(*value);
+        count += 1;
     }
-    mean /= source.len() as f64;
+    let mean = match count {
+        0 => 0.0,
+        count => total / count as f64,
+    };
     for z in 0..dims[2] {
         for y in 0..dims[1] {
             for x in 0..dims[0] {
                 let taper = [taper(x, dims[0]), taper(y, dims[1]), taper(z, dims[2])];
-                let value = (f64::from(source[x + dims[0] * (y + dims[1] * z)]) - mean) as f32;
-                let index = cube.index([x, y, z]);
-                cube.values[index] = Complex {
+                let index = x + dims[0] * (y + dims[1] * z);
+                let sample = source[index];
+                let value = match validity.is_some_and(|valid| !valid[index]) || !sample.is_finite()
+                {
+                    true => 0.0,
+                    false => (f64::from(sample) - mean) as f32,
+                };
+                let slot = cube.index([x, y, z]);
+                cube.values[slot] = Complex {
                     re: value * taper[0] * taper[1] * taper[2],
                     im: 0.0,
                 };
@@ -539,13 +587,29 @@ pub fn correlation(reference: &[f32], moving: &[f32]) -> f32 {
         moving.len(),
         "a correlation compares windows of one size"
     );
-    let count = reference.len() as f64;
-    let mean_reference = reference.iter().map(|value| f64::from(*value)).sum::<f64>() / count;
-    let mean_moving = moving.iter().map(|value| f64::from(*value)).sum::<f64>() / count;
+    let mut count = 0u64;
+    let mut sum_reference = 0.0f64;
+    let mut sum_moving = 0.0f64;
+    for (left, right) in reference.iter().zip(moving) {
+        if left.is_finite() && right.is_finite() {
+            count += 1;
+            sum_reference += f64::from(*left);
+            sum_moving += f64::from(*right);
+        }
+    }
+    if count == 0 {
+        return 0.0;
+    }
+    let count = count as f64;
+    let mean_reference = sum_reference / count;
+    let mean_moving = sum_moving / count;
     let mut cross = 0.0f64;
     let mut square_reference = 0.0f64;
     let mut square_moving = 0.0f64;
     for (left, right) in reference.iter().zip(moving) {
+        if !(left.is_finite() && right.is_finite()) {
+            continue;
+        }
         let left = f64::from(*left) - mean_reference;
         let right = f64::from(*right) - mean_moving;
         cross += left * right;

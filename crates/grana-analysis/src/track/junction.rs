@@ -108,7 +108,9 @@ pub(super) fn attach(
         progress(total, total);
         return Some(());
     }
-    let cell = events.division_range().max(events.merge_range()) * detections.widest();
+    let division = events.division_range().max(params.max_step());
+    let merge = events.merge_range().max(params.max_step());
+    let cell = division.max(merge).max(detections.largest());
     let mut support = Support::default();
     let mut starts = vec![Vec::new(); frames];
     for index in 0..chains.len() {
@@ -141,18 +143,13 @@ pub(super) fn attach(
         };
         let mut candidates = Vec::new();
         if events.division() {
-            forks(
-                &step,
-                &mut support,
-                events.division_range(),
-                &mut candidates,
-            );
+            forks(&step, &mut support, division, &mut candidates);
         }
         if events.merge() {
             joins(
                 &step,
                 &mut support,
-                events.merge_range(),
+                merge,
                 events.merge_overlap(),
                 &mut candidates,
             );

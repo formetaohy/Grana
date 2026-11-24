@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use grana_engine::Viewport;
 use grana_render::{Delivery, FrameInfo};
 
-use super::{App, RETRY_INTERVAL, STREAM_POLL};
+use super::{App, STREAM_POLL};
 use crate::stream::{Stream, View as StreamView};
 
 impl App {
@@ -147,7 +147,14 @@ impl App {
         self.present_ui();
         match outcome {
             Ok(()) => Some(Duration::MAX),
-            Err(_) => Some(RETRY_INTERVAL),
+            Err(detail) => {
+                match self.surface.as_ref().and_then(|surface| surface.lost()) {
+                    Some(detail) => self.fail(detail),
+                    None => self
+                        .set_output_message(&format!("the viewport could not be drawn: {detail}")),
+                }
+                Some(Duration::MAX)
+            }
         }
     }
 

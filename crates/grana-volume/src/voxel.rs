@@ -425,6 +425,33 @@ impl VoxelData {
         });
     }
 
+    pub fn write_values_absent_as_nan(&self, no_data: Option<NoData>, out: &mut [f32]) {
+        assert_eq!(
+            out.len(),
+            self.voxel_count(),
+            "the destination must hold every voxel"
+        );
+        let Some(no_data) = no_data else {
+            self.write_values(out);
+            return;
+        };
+        macro_rules! held {
+            ($($variant:ident),*) => {
+                match self {
+                    $(Self::$variant(data) => {
+                        for (slot, value) in out.iter_mut().zip(data.iter()) {
+                            *slot = match value.is_no_data(no_data) {
+                                true => f32::NAN,
+                                false => value.to_f32(),
+                            };
+                        }
+                    })*
+                }
+            };
+        }
+        held!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+    }
+
     pub fn value(&self, index: usize) -> f32 {
         match self {
             Self::U8(data) => value_of(data, index),

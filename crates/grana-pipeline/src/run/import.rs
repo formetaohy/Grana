@@ -83,7 +83,7 @@ pub fn import(
             .basis()
             .untransform(warp.translation())
             .map(|value| value.round() as i64);
-        let mut builder = LabelBuilder::new(image_level, info, pyramid.channel_count());
+        let mut builder = LabelBuilder::new(image_level, info, &reader.no_data());
         for (origin, core) in &cores {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(());

@@ -309,7 +309,13 @@ pub fn coloc(
     let mut scan = ColocScan::new(
         scan_info,
         sampling,
-        ColocScanConfig::new(pair, channels, intensities, mask_id),
+        ColocScanConfig::new(
+            pair,
+            channels,
+            intensities,
+            [pair.a(), pair.b()].map(|channel| pyramid.channels()[channel].no_data()),
+            mask_id,
+        ),
         region,
     );
     let scan_units = scan.tile_count() * frames as usize;
@@ -451,7 +457,15 @@ pub fn object_coloc(
                 return Ok(None);
             }
             let anchors = frame.anchors();
-            let scan = ObjectColocScan::new(pair, level_index, info, region, objects, &anchors);
+            let scan = ObjectColocScan::new(
+                pair,
+                level_index,
+                info,
+                region,
+                objects,
+                [pair.a(), pair.b()].map(|channel| pyramid.channels()[channel].no_data()),
+                &anchors,
+            );
             let shape = frame.shape().map_err(|error| error.to_string())?;
             let raster = LabelRaster::new(&shape, info);
             let labels = |ranges: &[std::ops::Range<u32>; 3]| -> Result<Vec<u32>, String> {
@@ -521,20 +535,20 @@ fn spots(
     if intensity.span() <= 0.0 {
         return Err("the selected channel has no intensity range to detect".to_string());
     }
-    let channels = pyramid.channel_count();
     let level_index = spot_level(pyramid, region, params, budget)?;
     let level = pyramid.level(level_index);
     let domain = Domain::new(region, level);
     let totals = pyramid.frame_count();
     let window = budget.window(field_bytes(level, region, budget));
     let share = budget.split(window, totals);
+    let no_data = reader.no_data();
     let scanner = SpotScanner::new(
         level_index,
         level,
         intensity,
         params,
         region,
-        ChannelSet::new(channels, channel),
+        ChannelSet::new(channel, &no_data),
         share,
     );
     let completed = pipeline(
@@ -607,6 +621,7 @@ fn surfaces(
             .max(voxel_count(level, region) * std::mem::size_of::<f32>() as u64),
     );
     let share = budget.split(window, totals);
+    let no_data = reader.no_data();
     let completed = pipeline(
         totals,
         budget.workers(),
@@ -623,11 +638,10 @@ fn surfaces(
                 level_index,
                 level,
                 params,
-                ChannelSet::new(pyramid.channel_count(), channel),
+                ChannelSet::new(channel, &no_data),
                 region,
                 pyramid.channels()[channel].intensity(),
             )
-            .with_no_data(pyramid.channels()[channel].no_data())
             .with_seeds(frame_seeds, policy);
             let mask = domain.mask(roi.as_ref(), time)?;
             let set = builder.scan(
@@ -705,7 +719,6 @@ fn filaments(
     let level = filament_level(pyramid, budget).ok_or_else(|| {
         "the dataset is too large to trace filaments at any resolution level".to_string()
     })?;
-    let channels = pyramid.channel_count();
     let info = pyramid.level(level);
     if !grana_analysis::filament_fits(info, budget) {
         return Err("the dataset is too small to trace filaments".to_string());
@@ -716,6 +729,7 @@ fn filaments(
     let totals = pyramid.frame_count();
     let window = budget.window(voxels * FILAMENT_VOXEL_BYTES);
     let intensity = pyramid.channels()[channel].intensity();
+    let no_data = reader.no_data();
     let completed = pipeline(
         totals,
         budget.workers(),
@@ -726,7 +740,7 @@ fn filaments(
                 level,
                 info,
                 params,
-                ChannelSet::new(channels, channel),
+                ChannelSet::new(channel, &no_data),
                 region,
                 intensity,
                 budget,
@@ -848,21 +862,11 @@ pub fn drift(
         done: 0,
         total,
     });
-    let anchor = grana_analysis::drift_window(
-        &reader
-            .read_region(reference, level, channel, &ranges, &Warp::IDENTITY)
-            .map_err(String::from)?,
-        &ranges,
-    );
+    let anchor = drift_window(reader, reference, level, channel, &ranges, &Warp::IDENTITY)?;
     let fine = if level > 0 {
         let ranges = grana_analysis::drift_spans(pyramid, 0);
         let dims = window_dims(&ranges);
-        let anchor = grana_analysis::drift_window(
-            &reader
-                .read_region(reference, 0, channel, &ranges, &Warp::IDENTITY)
-                .map_err(String::from)?,
-            &ranges,
-        );
+        let anchor = drift_window(reader, reference, 0, channel, &ranges, &Warp::IDENTITY)?;
         Some((ranges, dims, anchor))
     } else {
         None
@@ -871,12 +875,14 @@ pub fn drift(
     let mut anchors = Vec::with_capacity(plan.ranges.len());
     let mut centres = Vec::with_capacity(plan.ranges.len());
     for ranges in &plan.ranges {
-        anchors.push(grana_analysis::drift_window(
-            &reader
-                .read_region(reference, 0, channel, ranges, &Warp::IDENTITY)
-                .map_err(String::from)?,
+        anchors.push(drift_window(
+            reader,
+            reference,
+            0,
+            channel,
             ranges,
-        ));
+            &Warp::IDENTITY,
+        )?);
         centres.push(base.corner([
             (ranges[0].start + ranges[0].end) as f32 / 2.0,
             (ranges[1].start + ranges[1].end) as f32 / 2.0,
@@ -899,24 +905,14 @@ pub fn drift(
         let global = if time == reference {
             [0.0; 3]
         } else {
-            let moving = grana_analysis::drift_window(
-                &reader
-                    .read_region(time, level, channel, &ranges, &Warp::IDENTITY)
-                    .map_err(String::from)?,
-                &ranges,
-            );
+            let moving = drift_window(reader, time, level, channel, &ranges, &Warp::IDENTITY)?;
             let coarse = grana_analysis::drift_shift(&anchor, &moving, dims);
             let shift = match &fine {
                 None => coarse.map(|value| value * ratio),
                 Some((ranges, dims, fine_anchor)) => {
                     let whole = coarse.map(|value| (value * ratio).round());
                     let warp = Warp::shift(base.basis().transform(whole));
-                    let moving = grana_analysis::drift_window(
-                        &reader
-                            .read_region(time, 0, channel, ranges, &warp)
-                            .map_err(String::from)?,
-                        ranges,
-                    );
+                    let moving = drift_window(reader, time, 0, channel, ranges, &warp)?;
                     let residual = grana_analysis::drift_shift(fine_anchor, &moving, *dims);
                     [0, 1, 2].map(|axis| whole[axis] + residual[axis])
                 }
@@ -932,12 +928,7 @@ pub fn drift(
                 if cancel.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                let moving = grana_analysis::drift_window(
-                    &reader
-                        .read_region(time, 0, channel, ranges, &placement)
-                        .map_err(String::from)?,
-                    ranges,
-                );
+                let moving = drift_window(reader, time, 0, channel, ranges, &placement)?;
                 let residual = grana_analysis::drift_shift(anchor, &moving, window_dims(ranges));
                 let local = base.basis().transform(residual);
                 let shift = [0, 1, 2].map(|axis| global[axis] + local[axis]);
@@ -973,6 +964,42 @@ pub fn drift(
 
 fn window_dims(ranges: &[Range<u32>; 3]) -> [usize; 3] {
     [0, 1, 2].map(|axis| (ranges[axis].end - ranges[axis].start) as usize)
+}
+
+fn drift_window(
+    reader: &Channels,
+    time: u32,
+    level: usize,
+    channel: usize,
+    ranges: &[Range<u32>; 3],
+    warp: &Warp,
+) -> Result<Vec<f32>, String> {
+    let data = reader
+        .read_region(time, level, channel, ranges, warp)
+        .map_err(String::from)?;
+    Ok(grana_analysis::drift_window(
+        &data,
+        ranges,
+        reader.pyramid().channels()[channel].no_data(),
+    ))
+}
+
+fn stored_window(
+    reader: &Channels,
+    time: u32,
+    level: usize,
+    channel: usize,
+    ranges: &[Range<u32>; 3],
+    warp: &Warp,
+) -> Result<Vec<f32>, String> {
+    let data = reader
+        .stored_region(time, level, channel, ranges, warp)
+        .map_err(String::from)?;
+    Ok(grana_analysis::drift_window(
+        &data,
+        ranges,
+        reader.pyramid().channels()[channel].no_data(),
+    ))
 }
 
 pub struct RegisterRequest {
@@ -1015,21 +1042,11 @@ pub fn register(
     let base = pyramid.level(0);
     let ranges = grana_analysis::drift_spans(pyramid, level);
     let dims = window_dims(&ranges);
-    let anchor = grana_analysis::drift_window(
-        &reader
-            .stored_region(time, level, reference, &ranges, &Warp::IDENTITY)
-            .map_err(String::from)?,
-        &ranges,
-    );
+    let anchor = stored_window(reader, time, level, reference, &ranges, &Warp::IDENTITY)?;
     let fine = if level > 0 {
         let ranges = grana_analysis::drift_spans(pyramid, 0);
         let dims = window_dims(&ranges);
-        let anchor = grana_analysis::drift_window(
-            &reader
-                .stored_region(time, 0, reference, &ranges, &Warp::IDENTITY)
-                .map_err(String::from)?,
-            &ranges,
-        );
+        let anchor = stored_window(reader, time, 0, reference, &ranges, &Warp::IDENTITY)?;
         Some((ranges, dims, anchor))
     } else {
         None
@@ -1038,12 +1055,14 @@ pub fn register(
     let mut anchors = Vec::with_capacity(plan.ranges.len());
     let mut centres = Vec::with_capacity(plan.ranges.len());
     for ranges in &plan.ranges {
-        anchors.push(grana_analysis::drift_window(
-            &reader
-                .stored_region(time, 0, reference, ranges, &Warp::IDENTITY)
-                .map_err(String::from)?,
+        anchors.push(stored_window(
+            reader,
+            time,
+            0,
+            reference,
             ranges,
-        ));
+            &Warp::IDENTITY,
+        )?);
         centres.push(base.corner([
             (ranges[0].start + ranges[0].end) as f32 / 2.0,
             (ranges[1].start + ranges[1].end) as f32 / 2.0,
@@ -1083,24 +1102,14 @@ pub fn register(
                 pyramid.channels()[channel].name()
             ));
         }
-        let moving = grana_analysis::drift_window(
-            &reader
-                .stored_region(time, level, channel, &ranges, &Warp::IDENTITY)
-                .map_err(String::from)?,
-            &ranges,
-        );
+        let moving = stored_window(reader, time, level, channel, &ranges, &Warp::IDENTITY)?;
         let coarse = grana_analysis::drift_shift(&anchor, &moving, dims);
         let shift = match &fine {
             None => coarse.map(|value| value * ratio),
             Some((ranges, dims, fine_anchor)) => {
                 let whole = coarse.map(|value| (value * ratio).round());
                 let warp = Warp::shift(base.basis().transform(whole));
-                let moving = grana_analysis::drift_window(
-                    &reader
-                        .stored_region(time, 0, channel, ranges, &warp)
-                        .map_err(String::from)?,
-                    ranges,
-                );
+                let moving = stored_window(reader, time, 0, channel, ranges, &warp)?;
                 let residual = grana_analysis::drift_shift(fine_anchor, &moving, *dims);
                 [0, 1, 2].map(|axis| whole[axis] + residual[axis])
             }
@@ -1110,12 +1119,7 @@ pub fn register(
             None => (&anchor, &ranges, level),
             Some((ranges, _, anchor)) => (anchor, ranges, 0),
         };
-        let moving = grana_analysis::drift_window(
-            &reader
-                .stored_region(time, matched_level, channel, matched, &placed)
-                .map_err(String::from)?,
-            matched,
-        );
+        let moving = stored_window(reader, time, matched_level, channel, matched, &placed)?;
         let agreement = grana_analysis::drift_correlation(probe, &moving);
         if !(agreement.is_finite() && agreement >= MINIMUM_AGREEMENT) {
             return Err(format!(
@@ -1134,12 +1138,7 @@ pub fn register(
                 if cancel.load(Ordering::Relaxed) {
                     return Ok(());
                 }
-                let moving = grana_analysis::drift_window(
-                    &reader
-                        .stored_region(time, 0, channel, ranges, &placement)
-                        .map_err(String::from)?,
-                    ranges,
-                );
+                let moving = stored_window(reader, time, 0, channel, ranges, &placement)?;
                 let residual = grana_analysis::drift_shift(anchor, &moving, window_dims(ranges));
                 let local = base.basis().transform(residual);
                 let shift = [0, 1, 2].map(|axis| global[axis] + local[axis]);

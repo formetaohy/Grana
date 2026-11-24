@@ -5,7 +5,7 @@ use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, ColocCell, ColocCost, ColocFrame, ColocJoint, ColocPair,
     ColocSample, ColocSeries, ColocSeriesInfo, ColocSignificance,
 };
-use grana_volume::{Intensity, Level, Region, VoxelData};
+use grana_volume::{Intensity, Level, NoData, Region, VoxelData};
 
 use crate::schedule;
 use grana_object::Mask;
@@ -19,6 +19,7 @@ const WORKING_BINS: usize = COLOC_BINS_MAX;
 pub struct ColocScanConfig {
     pair: ColocPair,
     intensities: [Intensity; 2],
+    no_data: [Option<NoData>; 2],
     mask: Option<u64>,
 }
 
@@ -27,6 +28,7 @@ impl ColocScanConfig {
         pair: ColocPair,
         channels: usize,
         intensities: [Intensity; 2],
+        no_data: [Option<NoData>; 2],
         mask: Option<u64>,
     ) -> Self {
         assert!(
@@ -40,6 +42,7 @@ impl ColocScanConfig {
         Self {
             pair,
             intensities,
+            no_data,
             mask,
         }
     }
@@ -55,6 +58,7 @@ pub struct ColocScan {
     pair: ColocPair,
     sampling: ColocSampling,
     mask: Option<u64>,
+    no_data: [Option<NoData>; 2],
     region_voxels: u64,
     scales: [[f32; 2]; 2],
     frames: Vec<ColocFrame>,
@@ -72,6 +76,7 @@ impl ColocScan {
         let ColocScanConfig {
             pair,
             intensities,
+            no_data,
             mask,
         } = config;
         let Some(ranges) = region.voxel_range(info) else {
@@ -87,6 +92,7 @@ impl ColocScan {
             pair,
             sampling,
             mask,
+            no_data,
             region_voxels,
             scales: intensities.map(scale),
             frames: (0..frames).map(|_| ColocFrame::new(WORKING_BINS)).collect(),
@@ -172,6 +178,7 @@ impl ColocScan {
                         ranges,
                         a: &a,
                         b: &b,
+                        no_data: self.no_data,
                         mask: cached.as_ref(),
                     },
                 ))
@@ -316,6 +323,7 @@ struct TileRead<'a> {
     ranges: [std::ops::Range<u32>; 3],
     a: &'a VoxelData,
     b: &'a VoxelData,
+    no_data: [Option<NoData>; 2],
     mask: Option<&'a Mask>,
 }
 
@@ -343,6 +351,7 @@ impl ColocWorker {
             ranges: tile,
             a,
             b,
+            no_data,
             mask,
         } = read;
         let dims = [0, 1, 2].map(|axis| tile[axis].end - tile[axis].start);
@@ -386,6 +395,13 @@ impl ColocWorker {
                             * (compact_y + compact_dims[1] as usize * compact_z);
                     let raw_a = a.value(voxel);
                     let raw_b = b.value(voxel);
+                    let absent = no_data[0].is_some_and(|no_data| no_data.holds(a, voxel))
+                        || no_data[1].is_some_and(|no_data| no_data.holds(b, voxel));
+                    if absent {
+                        x += stride;
+                        compact_x += 1;
+                        continue;
+                    }
                     let first = unit(scales[0], raw_a);
                     let second = unit(scales[1], raw_b);
                     let compact = u32::try_from(compact)

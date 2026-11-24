@@ -3,7 +3,7 @@ use std::ops::Range;
 use grana_analysis::{LabelBuilder, LabelSlab};
 use grana_object::SurfaceSet;
 use grana_scene::Drifts;
-use grana_volume::{Level, VoxelData};
+use grana_volume::{Level, NoData, VoxelData};
 
 use crate::channels::Channels;
 
@@ -14,9 +14,9 @@ pub(super) struct Surfaces {
 }
 
 impl Surfaces {
-    pub(super) fn new(level: usize, info: Level, channels: usize) -> Self {
+    pub(super) fn new(level: usize, info: Level, no_data: &[Option<NoData>]) -> Self {
         Self {
-            builder: LabelBuilder::new(level, info, channels),
+            builder: LabelBuilder::new(level, info, no_data),
         }
     }
 
@@ -70,7 +70,7 @@ pub(super) fn surfaces(
         "the labels cover every voxel of their box"
     );
     let channels = reader.pyramid().channel_count();
-    let mut builder = Surfaces::new(level, info, channels);
+    let mut builder = Surfaces::new(level, info, &reader.no_data());
     let mut z = 0u32;
     while z < depth {
         let core = LABEL_SLAB.min(depth - z);

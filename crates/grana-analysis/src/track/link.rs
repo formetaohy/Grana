@@ -7,8 +7,8 @@ use super::chain::Chains;
 use super::detection::{Detections, Grid};
 use crate::assign::{self, Edge};
 
-const DUMMY_COST: f64 = 1.0;
-const GAP_COST: f64 = 0.25;
+const UNMATCHED_COST: f64 = 0.5;
+const GAP_WEIGHT: f64 = 0.2;
 
 struct Linker {
     chains: Chains,
@@ -71,6 +71,7 @@ impl Linker {
         detections: &Detections,
         frame: usize,
         step: f32,
+        gap: f64,
         grid: &Grid<'_>,
     ) -> Vec<Vec<Edge>> {
         let targets = detections.span(frame);
@@ -81,7 +82,7 @@ impl Linker {
             let last = *chain.points().last().expect("a chain holds points");
             let reach = frame as u32 - chain.end();
             let predicted = detections.centroid(last) + self.velocity[index] * reach as f32;
-            let gate = detections.gate(last, reach as f32 * step);
+            let gate = detections.gate(last, reach as f32, step);
             let mut edges = Vec::new();
             grid.near(predicted, gate, |target, distance| {
                 let closeness = 1.0 - distance;
@@ -90,12 +91,12 @@ impl Linker {
                 }
                 edges.push(Edge {
                     column: target - targets.start,
-                    cost: 1.0 - f64::from(closeness) + GAP_COST * f64::from(reach - 1),
+                    cost: f64::from(distance).powi(2) + gap * f64::from(reach - 1),
                 });
             });
             edges.push(Edge {
                 column: count + row,
-                cost: DUMMY_COST,
+                cost: UNMATCHED_COST,
             });
             rows.push(edges);
         }
@@ -113,7 +114,10 @@ pub(super) fn link(
     let total = 2 * frames;
     let span = params.max_gap() as usize + 1;
     let step = params.max_step();
-    let cell = step * detections.widest();
+    let gap = match params.max_gap() {
+        0 => 0.0,
+        max_gap => GAP_WEIGHT / f64::from(max_gap),
+    };
     let mut linker = Linker::new();
     for frame in 0..frames {
         progress(frame, total);
@@ -129,7 +133,7 @@ pub(super) fn link(
             }
             continue;
         }
-        let rows = linker.rows(detections, frame, step, &detections.grid(frame, cell));
+        let rows = linker.rows(detections, frame, step, gap, &detections.grid(frame, step));
         let sources = linker.open.clone();
         let assignment = assign::solve(&rows, count + sources.len(), cancel)?;
         let mut claimed = vec![false; count];

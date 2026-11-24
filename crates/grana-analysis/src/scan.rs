@@ -110,6 +110,7 @@ impl SpotScanner {
             anchor: self.template.field_anchor(),
             region: self.template.ranges.clone(),
             intensity: self.template.intensity,
+            no_data: self.channels.no_data(detection),
             budget: self.budget,
             cancel,
             read: &detection_read,
@@ -129,7 +130,7 @@ impl SpotScanner {
                 cancel,
             },
             workers,
-            || SpotWorker::new(&self.template, self.channels, roi),
+            || SpotWorker::new(&self.template, self.channels.clone(), roi),
             |worker, index, _| worker.run(index, &build.image, &build.field, read),
             |delivery| match delivery {
                 Delivery::Progress { .. } => Ok(()),
@@ -232,7 +233,7 @@ impl<'a> SpotWorker<'a> {
         let data = read(channel, range)?;
         self.values.clear();
         self.values.resize(data.voxel_count(), 0.0);
-        data.write_values(&mut self.values);
+        data.write_values_absent_as_nan(self.channels.no_data(channel), &mut self.values);
         Ok(())
     }
 }
@@ -490,7 +491,7 @@ impl SpotScan {
                                 + dims[1]
                                     * ((z - core[2].start) as usize + RESPONSE_REACH as usize));
                     let value = self.response[base];
-                    if value <= 0.0 {
+                    if !value.is_finite() || value <= 0.0 {
                         continue;
                     }
                     let mut best = f32::NEG_INFINITY;
@@ -515,7 +516,7 @@ impl SpotScan {
                         continue;
                     }
                     let contrast = field_row.contrast(i64::from(x), self.blurred[base]);
-                    if contrast < self.threshold {
+                    if !contrast.is_finite() || contrast < self.threshold {
                         continue;
                     }
                     let mut voxel = [x as f32, y as f32, z as f32];
@@ -645,7 +646,7 @@ impl SpotScan {
                     let index = local_x as usize
                         + desired[0] * (local_y as usize + desired[1] * local_z as usize);
                     let value = self.blurred[index] - background;
-                    if value <= 0.0 {
+                    if !value.is_finite() || value <= 0.0 {
                         continue;
                     }
                     let sample = self.level.voxel_center([x as f32, y as f32, z as f32]);

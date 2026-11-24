@@ -160,7 +160,8 @@ fn intensities(
                 return Err("the sampled tile disagrees with its extent".to_string());
             }
             let mut samples = vec![0.0f32; data.voxel_count()];
-            data.write_values(&mut samples);
+            let no_data = reader.pyramid().channels()[channel].no_data();
+            data.write_values_absent_as_nan(no_data, &mut samples);
             for object in &members {
                 let voxel = voxels[*object];
                 let local = [0, 1, 2].map(|axis| (voxel[axis] - low[axis]) as usize);

@@ -603,10 +603,6 @@ impl TrackParams {
             max_step.is_finite() && max_step > 0.0,
             "a tracking step must be a positive length"
         );
-        assert!(
-            !events.division() || events.division_range() >= max_step,
-            "the division range covers the tracking step"
-        );
         Self {
             max_step,
             max_gap,
@@ -651,16 +647,7 @@ impl TrackParams {
             max_step.is_finite() && max_step > 0.0,
             "a tracking step must be a positive length"
         );
-        let events = if self.events.division_range() < max_step {
-            self.events.with_division_range(max_step)
-        } else {
-            self.events
-        };
-        Self {
-            max_step,
-            events,
-            ..self
-        }
+        Self { max_step, ..self }
     }
 
     pub fn with_max_gap(self, max_gap: u32) -> Self {
@@ -668,10 +655,6 @@ impl TrackParams {
     }
 
     pub fn with_events(self, events: TrackEvents) -> Self {
-        assert!(
-            !events.division() || events.division_range() >= self.max_step,
-            "the division range covers the tracking step"
-        );
         Self { events, ..self }
     }
 }
