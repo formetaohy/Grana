@@ -1526,7 +1526,10 @@ fn exports_a_region_of_the_channels_and_labels() {
     let spots = SpotSet::new(
         0,
         vec![Spot::new(center, 0.9, 1.0)],
-        IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]),
+        IntensityTable::new(
+            1,
+            vec![Some(SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0))],
+        ),
     );
     let mut label_scene = Scene::new(Dataset::synthetic("crop", image.pyramid().clone()));
     let label_set = label_scene.add_object(ObjectKind::Spots, 0);
@@ -2811,7 +2814,10 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
         SpotSet::new(
             0,
             vec![Spot::new(centre, 0.9, 1.0)],
-            IntensityTable::new(1, vec![SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0)]),
+            IntensityTable::new(
+                1,
+                vec![Some(SampleStatistics::new(1.0, 1.0, 1.0, 0.0, 1.0))],
+            ),
         )
     };
     label_scene.install(label_set, 0, ObjectFrame::from_spots(spots()));

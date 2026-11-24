@@ -42,11 +42,19 @@ impl Payload for SpotPage {
             bytes.extend_from_slice(&spot.group().unwrap_or(u32::MAX).to_le_bytes());
         }
         for statistics in table {
-            bytes.extend_from_slice(&statistics.mean().to_le_bytes());
-            bytes.extend_from_slice(&statistics.minimum().to_le_bytes());
-            bytes.extend_from_slice(&statistics.maximum().to_le_bytes());
-            bytes.extend_from_slice(&statistics.deviation().to_le_bytes());
-            bytes.extend_from_slice(&statistics.sum().to_le_bytes());
+            match statistics {
+                Some(statistics) => {
+                    bytes.extend_from_slice(&statistics.mean().to_le_bytes());
+                    bytes.extend_from_slice(&statistics.minimum().to_le_bytes());
+                    bytes.extend_from_slice(&statistics.maximum().to_le_bytes());
+                    bytes.extend_from_slice(&statistics.deviation().to_le_bytes());
+                    bytes.extend_from_slice(&statistics.sum().to_le_bytes());
+                }
+                None => {
+                    bytes.extend_from_slice(&f32::NAN.to_le_bytes());
+                    bytes.extend_from_slice(&[0u8; STATISTICS_BYTES - 4]);
+                }
+            }
         }
         bytes
     }
@@ -104,6 +112,13 @@ impl Decode for SpotPage {
             let deviation = value()?;
             let sum = f64::from_le_bytes(bytes.get(cursor..cursor + 8)?.try_into().ok()?);
             cursor += 8;
+            if mean.is_nan() {
+                if minimum != 0.0 || maximum != 0.0 || deviation != 0.0 || sum != 0.0 {
+                    return None;
+                }
+                table.push(None);
+                continue;
+            }
             if ![mean, minimum, maximum, deviation]
                 .iter()
                 .all(|value| value.is_finite())
@@ -114,9 +129,9 @@ impl Decode for SpotPage {
             {
                 return None;
             }
-            table.push(SampleStatistics::new(
+            table.push(Some(SampleStatistics::new(
                 mean, minimum, maximum, deviation, sum,
-            ));
+            )));
         }
         Some(Self::new(Arc::new(SpotSet::new(
             level,

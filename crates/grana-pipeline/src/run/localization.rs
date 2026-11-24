@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_object::{IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet};
+use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
 use grana_readout::localization::{self, Localization};
 use grana_scene::{LocalizationAlignment, ObjectFrame};
 use grana_warp::Warp;
@@ -145,8 +145,7 @@ fn intensities(
             .or_default()
             .push(index);
     }
-    let blank = SampleStatistics::new(0.0, 0.0, 0.0, 0.0, 0.0);
-    let mut values = vec![blank; spots.len() * channels];
+    let mut values = vec![None; spots.len() * channels];
     for (tile, members) in tiles {
         let low = [0, 1, 2].map(|axis| tile[axis] * TILE);
         let high = [0, 1, 2].map(|axis| (low[axis] + TILE).min(dims[axis]));

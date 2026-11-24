@@ -105,15 +105,21 @@ impl SampleAccumulator {
         self.maximum = self.maximum.max(other.maximum);
     }
 
-    pub fn statistics(self) -> SampleStatistics {
+    pub fn statistics(self) -> Option<SampleStatistics> {
         if self.count == 0 {
-            return SampleStatistics::new(0.0, 0.0, 0.0, 0.0, 0.0);
+            return None;
         }
         let mean = self
             .mean
             .clamp(f64::from(self.minimum), f64::from(self.maximum)) as f32;
         let deviation = (self.squared / self.count as f64).max(0.0).sqrt() as f32;
-        SampleStatistics::new(mean, self.minimum, self.maximum, deviation, self.sum)
+        Some(SampleStatistics::new(
+            mean,
+            self.minimum,
+            self.maximum,
+            deviation,
+            self.sum,
+        ))
     }
 
     pub(crate) fn parts(self) -> AccumulatorParts {
@@ -174,11 +180,11 @@ impl Default for SampleAccumulator {
 #[derive(Clone, Debug, PartialEq)]
 pub struct IntensityTable {
     channels: usize,
-    values: Vec<SampleStatistics>,
+    values: Vec<Option<SampleStatistics>>,
 }
 
 impl IntensityTable {
-    pub fn new(channels: usize, values: Vec<SampleStatistics>) -> Self {
+    pub fn new(channels: usize, values: Vec<Option<SampleStatistics>>) -> Self {
         assert!(
             channels > 0,
             "an intensity table measures at least one channel"
@@ -203,7 +209,7 @@ impl IntensityTable {
         self.values.len() / self.channels
     }
 
-    pub fn values(&self) -> &[SampleStatistics] {
+    pub fn values(&self) -> &[Option<SampleStatistics>] {
         &self.values
     }
 
@@ -211,7 +217,7 @@ impl IntensityTable {
         self.values.is_empty()
     }
 
-    pub fn object(&self, object: usize, channel: usize) -> SampleStatistics {
+    pub fn object(&self, object: usize, channel: usize) -> Option<SampleStatistics> {
         assert!(
             object < self.objects() && channel < self.channels,
             "the measured object lies inside the intensity table"

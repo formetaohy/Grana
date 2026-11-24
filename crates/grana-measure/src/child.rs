@@ -143,7 +143,9 @@ impl ChildMetric {
                 match self {
                     Self::Diameter => 2.0 * spot.equivalent_radius(),
                     Self::Contrast => spot.quality(),
-                    Self::Intensity(channel) => intensities.object(object, channel).mean(),
+                    Self::Intensity(channel) => intensities
+                        .object(object, channel)
+                        .map_or(f32::NAN, |statistics| statistics.mean()),
                     Self::Volume
                     | Self::Area
                     | Self::Sphericity
@@ -164,7 +166,9 @@ impl ChildMetric {
                     Self::Area => statistics.area() as f32,
                     Self::Sphericity => statistics.sphericity() as f32,
                     Self::Voxels => statistics.voxel_count() as f32,
-                    Self::Intensity(channel) => intensities.object(object, channel).mean(),
+                    Self::Intensity(channel) => intensities
+                        .object(object, channel)
+                        .map_or(f32::NAN, |statistics| statistics.mean()),
                     Self::Diameter
                     | Self::Contrast
                     | Self::Length
@@ -183,7 +187,9 @@ impl ChildMetric {
                     Self::Area => statistics.area() as f32,
                     Self::Sphericity => statistics.sphericity() as f32,
                     Self::Voxels => statistics.voxel_count() as f32,
-                    Self::Intensity(channel) => intensities.object(object, channel).mean(),
+                    Self::Intensity(channel) => intensities
+                        .object(object, channel)
+                        .map_or(f32::NAN, |statistics| statistics.mean()),
                     Self::Diameter
                     | Self::Contrast
                     | Self::Length
@@ -205,7 +211,9 @@ impl ChildMetric {
                     Self::Terminals => statistics.terminals() as f32,
                     Self::Junctions => statistics.junctions() as f32,
                     Self::Nodes => statistics.nodes() as f32,
-                    Self::Intensity(channel) => intensities.object(object, channel).mean(),
+                    Self::Intensity(channel) => intensities
+                        .object(object, channel)
+                        .map_or(f32::NAN, |statistics| statistics.mean()),
                     Self::Contrast | Self::Area | Self::Sphericity | Self::Voxels => {
                         panic!("the filament child metric {self:?} is read from filaments")
                     }

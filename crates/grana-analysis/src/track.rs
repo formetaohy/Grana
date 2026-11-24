@@ -2,11 +2,12 @@ use std::sync::atomic::AtomicBool;
 
 use grana_object::{TrackDetection, TrackParams, TrackSet};
 
+mod candidate;
 mod chain;
 mod detection;
-mod junction;
-mod link;
+mod packing;
 mod set;
+mod solve;
 
 pub struct TrackLinker {
     params: TrackParams,
@@ -31,8 +32,7 @@ impl TrackLinker {
                     .expect("an empty track set is valid"),
             );
         }
-        let mut chains = link::link(&detections, self.params, cancel, progress)?;
-        junction::attach(&mut chains, &detections, self.params, cancel, progress)?;
+        let chains = solve::solve(&detections, self.params, cancel, progress)?;
         Some(set::build(&chains, &detections, frame_interval))
     }
 }

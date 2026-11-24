@@ -1,12 +1,19 @@
-use grana_object::{Track, TrackLink, TrackNode, TrackSet};
+use grana_object::{Link, Track, TrackLink, TrackNode, TrackSet};
 
 use super::chain::Chains;
 use super::detection::Detections;
 
 pub(super) fn build(chains: &Chains, detections: &Detections, frame_interval: f32) -> TrackSet {
-    let mut order = (0..chains.len()).collect::<Vec<_>>();
-    order.sort_unstable_by_key(|&index| (chains.chain(index).start(), index));
-    let mut slot = vec![0usize; chains.len()];
+    let count = chains.len();
+    let mut order = (0..count).collect::<Vec<_>>();
+    order.sort_unstable_by_key(|index| {
+        (
+            chains.chain(*index).start(),
+            chains.points(*index)[0],
+            *index,
+        )
+    });
+    let mut slot = vec![0usize; count];
     for (position, &index) in order.iter().enumerate() {
         slot[index] = position;
     }
@@ -28,11 +35,26 @@ pub(super) fn build(chains: &Chains, detections: &Detections, frame_interval: f3
             )
         })
         .collect::<Vec<_>>();
+    let mut incoming = vec![0u8; count];
+    let mut outgoing = vec![0u8; count];
+    for &(parent, child) in chains.links() {
+        outgoing[parent] += 1;
+        incoming[child] += 1;
+    }
     let links = chains
         .links()
         .iter()
-        .map(|&(parent, child, kind)| TrackLink::new(slot[parent] as u32, slot[child] as u32, kind))
+        .map(|&(parent, child)| {
+            let kind = if outgoing[parent] == 2 {
+                Link::Division
+            } else if incoming[child] == 2 {
+                Link::Merge
+            } else {
+                Link::Gap
+            };
+            TrackLink::new(slot[parent] as u32, slot[child] as u32, kind)
+        })
         .collect::<Vec<_>>();
     TrackSet::try_with_links(frame_interval, tracks, links)
-        .expect("the linked chains form a track set")
+        .expect("the solved chains form a track set")
 }

@@ -358,13 +358,13 @@ fn floods_a_wand_past_the_high_side_of_its_block() {
             vec![statistics],
             IntensityTable::new(
                 1,
-                vec![SampleStatistics::new(
+                vec![Some(SampleStatistics::new(
                     5000.0,
                     0.0,
                     f32::from(HIGH),
                     1.0,
                     40_000.0,
-                )],
+                ))],
             ),
         )),
     );
@@ -759,7 +759,7 @@ fn pages_localization_frames_beyond_the_resident_budget() {
         let spots = (0..PER_FRAME)
             .map(|index| Spot::new(center(time, index), 0.05, 1.0))
             .collect::<Vec<_>>();
-        let intensities = IntensityTable::new(1, vec![statistics; PER_FRAME]);
+        let intensities = IntensityTable::new(1, vec![Some(statistics); PER_FRAME]);
         scene.install(
             set,
             time,
@@ -1135,7 +1135,7 @@ fn coloc_series(
 }
 
 #[test]
-fn links_motion_and_splits_lineages() {
+fn links_divisions_and_merges_jointly() {
     let set = tracked(
         &[
             (&[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0]][..], 1.0),
@@ -1160,20 +1160,6 @@ fn links_motion_and_splits_lineages() {
             .frames(),
         1
     );
-
-    let set = tracked(
-        &[
-            (&[[0.0, 0.0, 0.0]][..], 1.0),
-            (&[[-0.6, 0.0, 0.0], [0.6, 0.0, 0.0]][..], 0.8),
-            (&[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]][..], 0.8),
-            (&[[-1.4, 0.0, 0.0], [1.4, 0.0, 0.0]][..], 0.8),
-        ],
-        TrackParams::new(0.8, 0, events(true, 2.0, 2.0, 0.0)),
-        2.0,
-    );
-    assert_eq!(set.len(), 3);
-    assert_eq!(set.divisions(), 1);
-    assert_eq!(set.children(0).count(), 2);
 
     let apart = tracked(
         &[(&[[0.0, 0.0, 0.0]][..], 1.0), (&[[0.8, 0.0, 0.0]][..], 1.0)],
@@ -1200,10 +1186,55 @@ fn links_motion_and_splits_lineages() {
         1,
         "a large object travels as far as its own radius"
     );
-}
 
-#[test]
-fn merges_two_lineages_that_share_a_detection() {
+    let divided = tracked(
+        &[
+            (&[[0.0, 0.0, 0.0]][..], 0.5),
+            (&[[-0.3, 0.0, 0.0], [0.3, 0.0, 0.0]][..], 0.5),
+            (&[[-0.6, 0.0, 0.0], [0.6, 0.0, 0.0]][..], 0.5),
+        ],
+        TrackParams::new(0.5, 0, events(true, 1.5, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(
+        divided.len(),
+        3,
+        "a mother that ends between two daughters divides into them"
+    );
+    assert_eq!(divided.divisions(), 1);
+    assert_eq!(divided.children(0).count(), 2);
+
+    let claimed = tracked(
+        &[
+            (
+                &[[0.0, 0.0, 0.0], [1.6, -0.4, 0.0], [-1.6, -0.4, 0.0]][..],
+                0.5,
+            ),
+            (
+                &[[0.0, 0.0, 0.0], [1.2, -0.2, 0.0], [-1.2, -0.2, 0.0]][..],
+                0.5,
+            ),
+            (&[[0.5, 0.0, 0.0], [-0.5, 0.0, 0.0]][..], 0.5),
+        ],
+        TrackParams::new(0.5, 0, events(true, 2.0, 2.0, 0.0)),
+        1.0,
+    );
+    assert_eq!(
+        claimed.divisions(),
+        1,
+        "a division still explains daughters that weaker links already held"
+    );
+    let daughter = claimed
+        .track_at(2, 0)
+        .expect("the first daughter is tracked");
+    assert_eq!(
+        claimed
+            .parents(daughter)
+            .map(|link| link.kind())
+            .collect::<Vec<_>>(),
+        vec![Link::Division]
+    );
+
     let frames = || {
         [
             (&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]][..], 1.2),
@@ -1211,30 +1242,37 @@ fn merges_two_lineages_that_share_a_detection() {
             (&[[1.2, 0.0, 0.0]][..], 1.5),
         ]
     };
-    let set = tracked(
+    let merged = tracked(
         &frames(),
         TrackParams::new(2.0, 0, events(false, 2.0, 2.0, 0.0)),
         1.0,
     );
-    assert_eq!(set.merges(), 1);
-    let merged = set.track_at(2, 0).expect("the merged object is tracked");
-    assert_eq!(set.parents(merged).count(), 2);
-    assert!(set.parents(merged).all(|link| link.kind() == Link::Merge));
+    assert_eq!(merged.merges(), 1);
+    let joined = merged.track_at(2, 0).expect("the merged object is tracked");
+    assert_eq!(merged.parents(joined).count(), 2);
+    assert!(
+        merged
+            .parents(joined)
+            .all(|link| link.kind() == Link::Merge)
+    );
     assert_eq!(
-        set.track(merged)
+        merged
+            .track(joined)
             .expect("the merged track exists")
             .nodes()
             .len(),
         2
     );
-
-    let apart = tracked(
+    let overlapping = tracked(
         &frames(),
         TrackParams::new(2.0, 0, events(false, 2.0, 2.0, 0.35)),
         1.0,
     );
-    assert_eq!(apart.merges(), 0);
-
+    assert_eq!(
+        overlapping.merges(),
+        0,
+        "a merge needs the sources to overlap as much as the caller asks"
+    );
     let gated = tracked(
         &[
             (&[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]][..], 1.2),

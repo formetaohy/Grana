@@ -56,7 +56,7 @@ impl Sampling<'_, '_> {
         &mut self,
         time: u32,
         surface: &ImportedSurface,
-    ) -> Result<Vec<SampleStatistics>, String> {
+    ) -> Result<Vec<Option<SampleStatistics>>, String> {
         let Some(sampler) = self.sampler.as_mut() else {
             return Err("the Imaris statistics do not measure every channel".to_string());
         };
@@ -69,7 +69,11 @@ impl Sampling<'_, '_> {
         Ok(measured.intensities)
     }
 
-    fn spot(&mut self, time: u32, spot: &ImportedSpot) -> Result<Vec<SampleStatistics>, String> {
+    fn spot(
+        &mut self,
+        time: u32,
+        spot: &ImportedSpot,
+    ) -> Result<Vec<Option<SampleStatistics>>, String> {
         let Some(sampler) = self.sampler.as_mut() else {
             return Err("the Imaris statistics do not measure every channel".to_string());
         };
@@ -86,7 +90,7 @@ impl Sampling<'_, '_> {
         &mut self,
         time: u32,
         filament: &ImportedFilament,
-    ) -> Result<Vec<SampleStatistics>, String> {
+    ) -> Result<Vec<Option<SampleStatistics>>, String> {
         let Some(sampler) = self.sampler.as_mut() else {
             return Err("the Imaris statistics do not measure every channel".to_string());
         };
@@ -313,7 +317,7 @@ fn surfaces(
                 Some(samples) if samples.len() == channels => samples
                     .iter()
                     .copied()
-                    .map(statistics_sample)
+                    .map(|sample| Some(statistics_sample(sample)))
                     .collect::<Vec<_>>(),
                 _ => sampling.surface(*time, surface)?,
             };
@@ -371,7 +375,7 @@ fn spots(
                 Some(samples) if samples.len() == channels => samples
                     .iter()
                     .copied()
-                    .map(statistics_sample)
+                    .map(|sample| Some(statistics_sample(sample)))
                     .collect::<Vec<_>>(),
                 _ => sampling.spot(*time, spot)?,
             };
@@ -431,9 +435,11 @@ fn filaments(
             indices.append(&mut faces);
             objects.push(measures(filament, &edges, &union)?);
             let samples = match filament.intensities() {
-                Some(samples) if samples.len() == channels => {
-                    samples.iter().copied().map(statistics_sample).collect()
-                }
+                Some(samples) if samples.len() == channels => samples
+                    .iter()
+                    .copied()
+                    .map(|sample| Some(statistics_sample(sample)))
+                    .collect(),
                 _ => sampling.filament(*time, filament)?,
             };
             intensities.extend(samples);

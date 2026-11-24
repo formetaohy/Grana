@@ -1359,7 +1359,7 @@ impl Table {
             let points = members.iter().map(|(_, point)| *point).collect::<Vec<_>>();
             let distances = spatial::neighbour_distances(&points);
             for ((row, _), distance) in members.iter().zip(distances) {
-                values[*row] = Measured::new(distance, 1);
+                values[*row] = read(distance);
             }
         }
         values

@@ -362,7 +362,7 @@ impl<'a> Merged<'a> {
 pub(super) struct Chunk {
     pub(super) statistics: SurfaceStatistics,
     pub(super) seed: Option<u32>,
-    pub(super) intensities: Vec<SampleStatistics>,
+    pub(super) intensities: Vec<Option<SampleStatistics>>,
     pub(super) vertices: Vec<([f32; 3], [f32; 3])>,
     pub(super) indices: Vec<u32>,
 }
@@ -382,8 +382,10 @@ pub(super) fn mesh_piece(
     let info = topology.info();
     let patches = topology.patches();
     let node = piece.node;
-    let mean = piece.accumulators[info.detection()].statistics().mean();
-    if let Some(spec) = filter
+    let mean = piece.accumulators[info.detection()]
+        .statistics()
+        .map(|statistics| statistics.mean());
+    if let Some((spec, mean)) = filter.zip(mean)
         && info.span() > 0.0
         && mean / info.span() < spec.min_mean_intensity()
     {

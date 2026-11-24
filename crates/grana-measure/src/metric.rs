@@ -55,7 +55,10 @@ impl Statistic {
         }
     }
 
-    pub fn value(self, statistics: SampleStatistics) -> f32 {
+    pub fn value(self, statistics: Option<SampleStatistics>) -> f32 {
+        let Some(statistics) = statistics else {
+            return f32::NAN;
+        };
         match self {
             Self::Mean => statistics.mean(),
             Self::Sum => statistics.sum() as f32,

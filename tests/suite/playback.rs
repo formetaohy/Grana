@@ -170,7 +170,7 @@ fn crowd(time: u32) -> SpotSet {
             Spot::new(center, 1.0, 0.5)
         })
         .collect::<Vec<_>>();
-    let statistics = vec![SampleStatistics::new(20.0, 10.0, 30.0, 0.0, 20.0); spots.len()];
+    let statistics = vec![Some(SampleStatistics::new(20.0, 10.0, 30.0, 0.0, 20.0)); spots.len()];
     SpotSet::new(0, spots, IntensityTable::new(1, statistics))
 }
 

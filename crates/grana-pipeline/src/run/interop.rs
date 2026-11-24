@@ -260,7 +260,7 @@ fn intensities(
                     detection.id()
                 )
             })?;
-            values.extend_from_slice(measured);
+            values.extend(measured.iter().copied().map(Some));
         }
         return Ok(IntensityTable::new(channels, values));
     }
@@ -296,7 +296,7 @@ fn measure(
     let dims = [extent.x(), extent.y(), extent.z()];
     let span = info.spacing();
     let step = [span.x(), span.y(), span.z()];
-    let mut values = vec![SampleStatistics::new(0.0, 0.0, 0.0, 0.0, 0.0); spots.len() * channels];
+    let mut values = vec![None; spots.len() * channels];
     for channel in 0..channels {
         for (slot, spot) in spots.iter().enumerate() {
             let center = spot.center();
@@ -324,7 +324,10 @@ fn measure(
                 .read_region(time, 0, channel, &ranges, warps.get(channel))
                 .map_err(|error| error.to_string())?;
             let mut samples = vec![0.0f32; data.voxel_count()];
-            data.write_values(&mut samples);
+            data.write_values_absent_as_nan(
+                reader.pyramid().channels()[channel].no_data(),
+                &mut samples,
+            );
             let size = [
                 (ranges[0].end - ranges[0].start) as usize,
                 (ranges[1].end - ranges[1].start) as usize,

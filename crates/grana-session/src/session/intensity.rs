@@ -13,7 +13,7 @@ const TILE: u32 = 32;
 const TILE_VOXELS: u64 = (TILE as u64).pow(3);
 
 pub(super) struct Sampled {
-    pub(super) intensities: Vec<SampleStatistics>,
+    pub(super) intensities: Vec<Option<SampleStatistics>>,
     pub(super) level: usize,
     pub(super) coverage: f32,
     pub(super) outside: f32,

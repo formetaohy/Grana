@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use grana_measure::{Aggregate, Group, Kind, Table};
-use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
+use grana_object::{
+    IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
+};
 
 use crate::support::measure_source;
 
@@ -339,6 +341,46 @@ fn summarises_robust_statistics() {
     assert_eq!(Aggregate::from_index(quartile.index()), Some(quartile));
 }
 
+#[test]
+fn reports_an_unmeasured_object_as_absent() {
+    assert_eq!(
+        SampleAccumulator::new().statistics(),
+        None,
+        "an accumulator that holds no sample reports nothing rather than zero"
+    );
+    let frames = measure_source(Kind::Spots, &[CHANNEL], [unmeasured()]);
+    let table = Table::build(
+        Arc::clone(&frames),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the object table builds");
+    let column = table
+        .column("egfp_488_intensity_mean")
+        .expect("the intensity column exists");
+    assert_eq!(
+        table.value(0, column),
+        grana_measure::Measured::Absent,
+        "an object whose voxels were never measured reports no intensity"
+    );
+    let text = csv_of(&table, &[0]);
+    let mut lines = text.lines();
+    let header = lines.next().expect("the statistics carry a header");
+    let row = lines.next().expect("the statistics carry a row");
+    let slot = header
+        .split(',')
+        .position(|key| key == "egfp_488_intensity_mean")
+        .expect("the header names the intensity column");
+    assert_eq!(
+        row.split(',').nth(slot),
+        Some(""),
+        "an absent intensity leaves the csv field empty instead of writing zero"
+    );
+}
+
 fn value(table: &Table, row: usize, key: &str) -> f32 {
     let column = table
         .columns()
@@ -360,8 +402,8 @@ fn spots() -> SpotSet {
     let intensities = IntensityTable::new(
         1,
         vec![
-            SampleStatistics::new(10.0, 9.0, 11.0, 0.5, 100.0),
-            SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0),
+            Some(SampleStatistics::new(10.0, 9.0, 11.0, 0.5, 100.0)),
+            Some(SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0)),
         ],
     );
     SpotSet::new(
@@ -374,12 +416,20 @@ fn spots() -> SpotSet {
     )
 }
 
+fn unmeasured() -> SpotSet {
+    SpotSet::new(
+        0,
+        vec![Spot::new([1.0, 2.0, 3.0], 0.5, 0.25)],
+        IntensityTable::new(1, vec![None]),
+    )
+}
+
 fn grouped(z: f32) -> SpotSet {
     let intensities = IntensityTable::new(
         1,
         vec![
-            SampleStatistics::new(10.0, 9.0, 11.0, 0.5, 100.0),
-            SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0),
+            Some(SampleStatistics::new(10.0, 9.0, 11.0, 0.5, 100.0)),
+            Some(SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0)),
         ],
     );
     SpotSet::new(

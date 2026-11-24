@@ -278,7 +278,14 @@ fn imports_anisotropic_localizations_and_round_trips_them() {
     }
     assert!((spot.quality() - 3000.0).abs() < 1.0e-3);
     assert!(
-        (spots.intensities().object(0, 0).mean() - f32::from(HIGH)).abs() < 1.0,
+        (spots
+            .intensities()
+            .object(0, 0)
+            .expect("the localization is measured")
+            .mean()
+            - f32::from(HIGH))
+        .abs()
+            < 1.0,
         "the localization samples the voxel it lands on"
     );
     assert!(
@@ -362,7 +369,14 @@ fn imports_imaris_filaments() {
     assert_eq!(statistics.nodes(), 3);
     assert_eq!(statistics.terminals(), 2);
     assert_eq!(statistics.junctions(), 0);
-    assert_eq!(filaments.intensities().object(0, 0).mean(), 5000.0);
+    assert_eq!(
+        filaments
+            .intensities()
+            .object(0, 0)
+            .expect("the filament is measured")
+            .mean(),
+        5000.0
+    );
     assert!(session.import().is_empty());
 }
 
@@ -403,7 +417,9 @@ fn measures_imported_objects_where_their_voxels_are() {
             _ => panic!("the fixture imports spots and surfaces"),
         };
         for object in 0..table.objects() {
-            let statistics = table.object(object, 0);
+            let statistics = table
+                .object(object, 0)
+                .expect("the fixture measures every object");
             measured.push(statistics.sum() / f64::from(statistics.mean()));
         }
     }
@@ -633,7 +649,7 @@ fn round_trips_a_project() {
             ],
             IntensityTable::new(
                 1,
-                vec![SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0); 2],
+                vec![Some(SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0)); 2],
             ),
         )),
     );

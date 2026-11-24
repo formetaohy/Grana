@@ -439,7 +439,10 @@ fn objects(
         }
         let geometry = row.frame.geometry().map_err(|error| error.to_string())?;
         let table = row.frame.intensities();
-        let complete = table.channels() == channels && table.objects() == row.frame.object_count();
+        let complete = table.channels() == channels
+            && table.objects() == row.frame.object_count()
+            && (0..row.frame.object_count())
+                .all(|object| (0..channels).all(|channel| table.object(object, channel).is_some()));
         measured &= complete;
         for object in 0..row.frame.object_count() {
             if !row.visible(object) {
@@ -450,7 +453,11 @@ fn objects(
             if complete {
                 intensities.push(
                     (0..channels)
-                        .map(|channel| table.object(object, channel))
+                        .map(|channel| {
+                            table
+                                .object(object, channel)
+                                .expect("the exported table measures every channel")
+                        })
                         .collect::<Vec<_>>(),
                 );
             }

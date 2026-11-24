@@ -90,10 +90,6 @@ impl Detections {
         Grid::new(self, frame, step.max(self.largest))
     }
 
-    pub fn largest(&self) -> f32 {
-        self.largest
-    }
-
     fn detection(&self, index: usize) -> &Detection {
         &self.detections[index]
     }

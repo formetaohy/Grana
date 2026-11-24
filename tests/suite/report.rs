@@ -20,7 +20,13 @@ fn spots(frame: u32, count: usize) -> SpotSet {
     let intensities = (0..count)
         .map(|index| {
             let mean = 1_000.0 + 2_500.0 * index as f32;
-            SampleStatistics::new(mean, mean, mean, 0.0, f64::from(mean))
+            Some(SampleStatistics::new(
+                mean,
+                mean,
+                mean,
+                0.0,
+                f64::from(mean),
+            ))
         })
         .collect::<Vec<_>>();
     SpotSet::new(0, spots, IntensityTable::new(1, intensities))

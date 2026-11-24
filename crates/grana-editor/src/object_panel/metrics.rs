@@ -362,7 +362,10 @@ pub(super) fn measure<'a>(
     children
 }
 
-pub(super) fn intensity_text(intensity: grana_object::SampleStatistics) -> String {
+pub(super) fn intensity_text(intensity: Option<grana_object::SampleStatistics>) -> String {
+    let Some(intensity) = intensity else {
+        return "—".to_string();
+    };
     format!(
         "{:.0} ± {:.0} ({:.0}–{:.0})",
         intensity.mean(),

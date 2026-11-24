@@ -1,10 +1,10 @@
-use grana_object::Link;
+use glam::Vec3;
 
 pub(super) struct Chain {
     points: Vec<usize>,
     start: u32,
     end: u32,
-    incoming: u8,
+    velocity: Vec3,
     outgoing: u8,
 }
 
@@ -21,59 +21,28 @@ impl Chain {
         self.end
     }
 
-    pub fn incoming(&self) -> u8 {
-        self.incoming
+    pub fn velocity(&self) -> Vec3 {
+        self.velocity
     }
 
     pub fn outgoing(&self) -> u8 {
         self.outgoing
     }
+
+    pub fn last(&self) -> usize {
+        *self.points.last().expect("a chain holds a point")
+    }
 }
 
+#[derive(Default)]
 pub(super) struct Chains {
     chains: Vec<Chain>,
-    links: Vec<(usize, usize, Link)>,
-    stamps: Vec<u64>,
-    epoch: u64,
+    links: Vec<(usize, usize)>,
 }
 
 impl Chains {
     pub fn new() -> Self {
-        Self {
-            chains: Vec::new(),
-            links: Vec::new(),
-            stamps: Vec::new(),
-            epoch: 0,
-        }
-    }
-
-    pub fn push(&mut self, point: usize, frame: u32) -> usize {
-        self.chains.push(Chain {
-            points: vec![point],
-            start: frame,
-            end: frame,
-            incoming: 0,
-            outgoing: 0,
-        });
-        self.epoch += 1;
-        self.stamps.push(self.epoch);
-        self.chains.len() - 1
-    }
-
-    pub fn extend(&mut self, index: usize, point: usize, frame: u32) {
-        let chain = &mut self.chains[index];
-        assert_eq!(
-            frame,
-            chain.end + 1,
-            "a contiguous extension advances one frame"
-        );
-        assert_eq!(
-            chain.outgoing, 0,
-            "a chain with a gap successor never extends"
-        );
-        chain.points.push(point);
-        chain.end = frame;
-        self.touch(index);
+        Self::default()
     }
 
     pub fn len(&self) -> usize {
@@ -85,62 +54,51 @@ impl Chains {
     }
 
     pub fn points(&self, index: usize) -> &[usize] {
-        &self.chains[index].points
+        self.chains[index].points()
     }
 
-    pub fn links(&self) -> &[(usize, usize, Link)] {
+    pub fn last(&self, index: usize) -> usize {
+        self.chains[index].last()
+    }
+
+    pub fn links(&self) -> &[(usize, usize)] {
         &self.links
     }
 
-    pub fn stamp(&self, index: usize) -> u64 {
-        self.stamps[index]
-    }
-
-    fn touch(&mut self, index: usize) {
-        self.epoch += 1;
-        self.stamps[index] = self.epoch;
-    }
-
-    pub fn cut(&mut self, index: usize, frame: u32) -> usize {
-        let chain = &mut self.chains[index];
-        let position = (frame - chain.start) as usize;
-        assert!(
-            position > 0 && position < chain.points.len(),
-            "a cut divides a chain between two of its frames"
-        );
-        let points = chain.points.split_off(position);
-        let end = chain.end;
-        chain.end = frame - 1;
-        let outgoing = chain.outgoing;
-        chain.outgoing = 0;
+    pub fn push(&mut self, point: usize, frame: u32, velocity: Vec3) -> usize {
+        assert!(velocity.is_finite(), "a chain follows a finite velocity");
         self.chains.push(Chain {
-            points,
+            points: vec![point],
             start: frame,
-            end,
-            incoming: 0,
-            outgoing,
+            end: frame,
+            velocity,
+            outgoing: 0,
         });
-        let tail = self.chains.len() - 1;
-        self.touch(index);
-        self.epoch += 1;
-        self.stamps.push(self.epoch);
-        for link in &mut self.links {
-            if link.0 == index {
-                link.0 = tail;
-            }
-        }
-        tail
+        self.chains.len() - 1
     }
 
-    pub fn attach(&mut self, parent: usize, child: usize, kind: Link) {
+    pub fn extend(&mut self, index: usize, point: usize, frame: u32, velocity: Vec3) {
+        let chain = &mut self.chains[index];
+        assert_eq!(
+            frame,
+            chain.end + 1,
+            "a contiguous extension advances one frame"
+        );
+        chain.points.push(point);
+        chain.end = frame;
+        chain.velocity = velocity;
+    }
+
+    pub fn attach(&mut self, parent: usize, child: usize) {
         assert!(
-            self.chains[child].start > self.chains[parent].end,
+            self.chains[parent].end < self.chains[child].start,
             "a link leaves a parent before its child starts"
         );
+        assert!(
+            self.chains[parent].outgoing < 2,
+            "a chain leads to at most two chains"
+        );
         self.chains[parent].outgoing += 1;
-        self.chains[child].incoming += 1;
-        self.links.push((parent, child, kind));
-        self.touch(parent);
-        self.touch(child);
+        self.links.push((parent, child));
     }
 }

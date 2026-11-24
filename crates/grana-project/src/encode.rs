@@ -1265,7 +1265,13 @@ impl Encode for IntensityTable {
         writer.count(self.objects());
         for object in 0..self.objects() {
             for channel in 0..self.channels() {
-                self.object(object, channel).encode(writer);
+                match self.object(object, channel) {
+                    Some(statistics) => {
+                        writer.bool(true);
+                        statistics.encode(writer);
+                    }
+                    None => writer.bool(false),
+                }
             }
         }
     }

@@ -1888,12 +1888,16 @@ impl Decode for IntensityTable {
             return Err(FAULT_VALUE);
         }
         let total = match channels.checked_mul(objects) {
-            Some(total) if total.saturating_mul(24) <= reader.remaining() => total,
+            Some(total) if total.saturating_mul(25) <= reader.remaining() => total,
             _ => return Err(FAULT_SHAPE),
         };
         let mut values = Vec::with_capacity(total.min(1 << 16));
         for _ in 0..total {
-            values.push(SampleStatistics::decode(reader)?);
+            values.push(if reader.bool()? {
+                Some(SampleStatistics::decode(reader)?)
+            } else {
+                None
+            });
         }
         Ok(Self::new(channels, values))
     }
