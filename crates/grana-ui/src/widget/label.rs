@@ -1,11 +1,7 @@
-use std::f32::consts::TAU;
-
 use glam::Vec2;
 
 use crate::color::Color;
-use crate::content::{
-    BadgeContent, ColorSwatchContent, Content, LabelledContent, SpinnerContent, TextContent,
-};
+use crate::content::{BadgeContent, ColorSwatchContent, Content, LabelledContent, TextContent};
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::Corners;
 use crate::paint::Painter;
@@ -63,14 +59,6 @@ pub fn labelled<'a, A>(theme: &Theme, label: &str, value: &str) -> Element<'a, A
     }))
 }
 
-pub fn spinner<'a, A>(size: f32) -> Element<'a, A> {
-    Element::new(Layout {
-        size: Size::new(Length::Fixed(size), Length::Fixed(size)),
-        ..Layout::row()
-    })
-    .with_content(Content::Spinner(SpinnerContent { size }))
-}
-
 pub fn color_swatch<'a, A>(color: [f32; 3], size: f32) -> Element<'a, A> {
     Element::new(Layout {
         size: Size::new(Length::Fixed(size), Length::Fixed(size)),
@@ -125,29 +113,6 @@ pub(super) fn paint_labelled(
             .truncating(),
         Align::Center,
     );
-}
-
-pub(super) fn paint_spinner(spinner: &SpinnerContent, painter: &mut Painter, info: &PaintInfo<'_>) {
-    let palette = info.theme.palette;
-    let center = info.rect.center();
-    let base_r = spinner.size * 0.36;
-    let morph = 0.5 + 0.5 * (info.time * 3.2).sin();
-    let lobes = 7.0;
-    let amp = base_r * (0.14 + 0.12 * morph);
-    let rot = info.time * 2.4;
-    let steps = 28usize;
-    let point_at = |step: usize| {
-        let theta = (step as f32 / steps as f32) * TAU;
-        let r = base_r + amp * (lobes * theta + info.time * 4.5).cos();
-        let angle = theta + rot;
-        center + Vec2::new(angle.cos() * r, angle.sin() * r)
-    };
-    let mut prev = point_at(0);
-    for step in 1..=steps {
-        let next = point_at(step);
-        painter.segment(prev, next, (spinner.size * 0.13).max(1.6), palette.tertiary);
-        prev = next;
-    }
 }
 
 pub(super) fn paint_color_swatch(

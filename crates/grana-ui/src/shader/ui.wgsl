@@ -141,7 +141,13 @@ fn premultiplied(color: vec4<f32>, mask: f32) -> vec4<f32> {
 fn cross2(a: vec2<f32>, b: vec2<f32>) -> f32 {    return a.x * b.y - a.y * b.x;
 }
 
-fn triangle_coverage(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, point: vec2<f32>) -> f32 {
+fn triangle_coverage(
+    a: vec2<f32>,
+    b: vec2<f32>,
+    c: vec2<f32>,
+    point: vec2<f32>,
+    boundary_only: bool,
+) -> f32 {
     let area = cross2(b - a, c - a);
     if (abs(area) < 0.00001) {
         return 0.0;
@@ -150,6 +156,12 @@ fn triangle_coverage(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, point: vec2<f32>)
     let ab = sign * cross2(b - a, point - a) / max(length(b - a), 0.0001);
     let bc = sign * cross2(c - b, point - b) / max(length(c - b), 0.0001);
     let ca = sign * cross2(a - c, point - c) / max(length(a - c), 0.0001);
+    if (boundary_only) {
+        if (ab < 0.0 || ca < 0.0) {
+            return 0.0;
+        }
+        return clamp(bc + 0.5, 0.0, 1.0);
+    }
     return clamp(min(ab, min(bc, ca)) + 0.5, 0.0, 1.0);
 }
 
@@ -217,7 +229,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let a = instance.uv.xy * scale;
         let b = instance.uv.zw * scale;
         let c = instance.extra.xy * scale;
-        let coverage = triangle_coverage(a, b, c, in.position_px);
+        let coverage = triangle_coverage(a, b, c, in.position_px, instance.extra.z > 0.5);
         if (coverage <= 0.0) {
             discard;
         }

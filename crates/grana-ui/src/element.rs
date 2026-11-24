@@ -761,7 +761,7 @@ pub(crate) fn animates(content: &Content) -> bool {
             | Content::Segment(_)
             | Content::Tabs(_)
             | Content::ColorPicker(_)
-            | Content::Spinner(_)
+            | Content::Loading(_)
     )
 }
 

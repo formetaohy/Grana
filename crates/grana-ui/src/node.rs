@@ -11,6 +11,7 @@ use crate::motion::{Animated, Spring};
 use crate::paint::Clip;
 use crate::paint::Instances;
 use crate::style::Surface;
+use crate::widget::LoadingAnimator;
 
 pub type NodeId = DefaultKey;
 
@@ -22,6 +23,7 @@ pub(crate) struct Runtime {
     pub value: Animated,
     pub extent: Animated,
     pub engaged: Animated,
+    pub loading: LoadingAnimator,
     pub drag_value: f32,
     pub drag_extent: f32,
     pub commit: Option<f32>,
@@ -77,6 +79,7 @@ impl Runtime {
             value: Animated::new(value, SPRING),
             extent: Animated::new(extent, SPRING),
             engaged: Animated::new(0.0, SPRING),
+            loading: LoadingAnimator::new(),
             drag_value: 0.0,
             drag_extent: 0.0,
             commit: None,

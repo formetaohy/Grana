@@ -164,13 +164,13 @@ pub(super) fn drift<'a>(
                 } else {
                     0.5
                 };
-                let spinner = view::spinner(ctx, 14.0);
+                let loading = view::loading(ctx, 14.0);
                 let caption = view::caption(ctx, &text);
                 children.push(
                     grana_ui::row()
                         .gap(8.0)
                         .align(Align::Center)
-                        .children([spinner, caption]),
+                        .children([loading, caption]),
                 );
                 children.push(grana_ui::widget::progress(fraction, card_width()));
                 children.push(
@@ -296,13 +296,13 @@ pub(super) fn registration<'a>(
                 } else {
                     0.5
                 };
-                let spinner = view::spinner(ctx, 14.0);
+                let loading = view::loading(ctx, 14.0);
                 let caption = view::caption(ctx, &text);
                 children.push(
                     grana_ui::row()
                         .gap(8.0)
                         .align(Align::Center)
-                        .children([spinner, caption]),
+                        .children([loading, caption]),
                 );
                 children.push(grana_ui::widget::progress(fraction, card_width()));
                 children.push(

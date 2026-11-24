@@ -354,27 +354,62 @@ impl<'a> Painter<'a> {
     }
 
     pub fn triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: Color) {
-        if color.alpha <= 0.0 {
+        if !self.draw_triangle(a, b, c, color, false) {
             return;
         }
-        let min = a.min(b).min(c);
-        let max = a.max(b).max(c);
-        let rect = Rect::from_min_max(min, max);
-        if rect.is_empty() {
-            return;
-        }
-        let mut instance = Instance::blank(KIND_TRIANGLE);
-        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
-        instance.uv = [a.x, a.y, b.x, b.y];
-        instance.extra = [c.x, c.y, 0.0, 0.0];
-        instance.color = color.to_array();
-        self.push(instance);
         let clip = self.clip.rect;
         self.mark(Mark::Triangle {
             corners: [a.to_array(), b.to_array(), c.to_array()],
             color,
             clip,
         });
+    }
+
+    pub fn fill(&mut self, hub: Vec2, points: &[Vec2], color: Color) {
+        if points.len() < 3 || color.alpha <= 0.0 {
+            return;
+        }
+        let mut winding = 0.0f32;
+        for index in 0..points.len() {
+            let from = points[index];
+            let to = points[(index + 1) % points.len()];
+            let cross = (from - hub).perp_dot(to - hub);
+            assert!(cross != 0.0, "a filled contour never lines up with its hub");
+            if winding == 0.0 {
+                winding = cross.signum();
+            }
+            assert!(
+                cross.signum() == winding,
+                "a filled contour winds once around its hub"
+            );
+        }
+        for index in 0..points.len() {
+            let from = points[index];
+            let to = points[(index + 1) % points.len()];
+            self.draw_triangle(hub, from, to, color, true);
+        }
+        if self.marks.is_some() {
+            self.contour(points, color);
+        }
+    }
+
+    fn draw_triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: Color, boundary: bool) -> bool {
+        if color.alpha <= 0.0 {
+            return false;
+        }
+        let min = a.min(b).min(c);
+        let max = a.max(b).max(c);
+        let rect = Rect::from_min_max(min, max);
+        if rect.is_empty() {
+            return false;
+        }
+        let mut instance = Instance::blank(KIND_TRIANGLE);
+        instance.rect = [rect.min.x, rect.min.y, rect.width(), rect.height()];
+        instance.uv = [a.x, a.y, b.x, b.y];
+        instance.extra = [c.x, c.y, if boundary { 1.0 } else { 0.0 }, 0.0];
+        instance.color = color.to_array();
+        self.push(instance);
+        true
     }
 
     pub fn segment(&mut self, from: Vec2, to: Vec2, width: f32, color: Color) {

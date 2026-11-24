@@ -320,7 +320,7 @@ fn actions<'a>(
     let pending = state.io.pending > 0 || !state.jobs.is_empty();
     let mut children = Vec::new();
     if pending {
-        children.push(crate::view::spinner(ctx, 18.0));
+        children.push(crate::view::loading(ctx, 18.0));
     }
     if let Some(network) = transfer(ctx, state) {
         children.push(network);

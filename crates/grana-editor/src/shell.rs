@@ -157,7 +157,7 @@ fn status_banner<'a>(ctx: &mut BuildContext<'_, Message>, status: &Status) -> El
     };
     let mut row = Vec::new();
     if status.busy {
-        row.push(crate::view::spinner(ctx, 16.0));
+        row.push(crate::view::loading(ctx, 16.0));
     } else if status.error {
         row.push(grana_ui::widget::icon(
             Icon::Warning,
@@ -383,7 +383,7 @@ fn stitch_block<'a>(
     };
     let mut row = Vec::new();
     if stitch.running || stitch.scanning {
-        row.push(crate::view::spinner(ctx, 16.0));
+        row.push(crate::view::loading(ctx, 16.0));
     }
     row.push(
         crate::view::button_with(ctx, &label, Role::Filled, Length::Fill)

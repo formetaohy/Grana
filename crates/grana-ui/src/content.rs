@@ -25,7 +25,7 @@ pub(crate) enum ContentKind {
     MenuRow,
     ActionRow,
     Badge,
-    Spinner,
+    Loading,
     Progress,
     GradientBar,
     Labelled,
@@ -51,7 +51,7 @@ pub(crate) enum Content {
     MenuRow(MenuRowContent),
     ActionRow(ActionRowContent),
     Badge(BadgeContent),
-    Spinner(SpinnerContent),
+    Loading(LoadingContent),
     Progress(ProgressContent),
     GradientBar(GradientBarContent),
     Labelled(LabelledContent),
@@ -79,7 +79,7 @@ impl Content {
             Self::MenuRow(_) => ContentKind::MenuRow,
             Self::ActionRow(_) => ContentKind::ActionRow,
             Self::Badge(_) => ContentKind::Badge,
-            Self::Spinner(_) => ContentKind::Spinner,
+            Self::Loading(_) => ContentKind::Loading,
             Self::Progress(_) => ContentKind::Progress,
             Self::GradientBar(_) => ContentKind::GradientBar,
             Self::Labelled(_) => ContentKind::Labelled,
@@ -91,7 +91,7 @@ impl Content {
     pub(crate) fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Empty, Self::Empty) | (Self::Canvas, Self::Canvas) => true,
-            (Self::Spinner(a), Self::Spinner(b)) => a == b,
+            (Self::Loading(a), Self::Loading(b)) => a == b,
             (Self::Text(a), Self::Text(b)) => a == b,
             (Self::Icon(a), Self::Icon(b)) => a == b,
             (Self::Button(a), Self::Button(b)) => a == b,
@@ -156,7 +156,7 @@ impl Content {
             Self::MenuRow(_) => Geometry::Fixed,
             Self::ActionRow(_) => Geometry::Fixed,
             Self::Badge(badge) => Geometry::Label(&badge.label, badge.font),
-            Self::Spinner(spinner) => Geometry::Size(spinner.size),
+            Self::Loading(loading) => Geometry::Size(loading.size),
             Self::Progress(progress) => Geometry::Width(progress.width),
             Self::GradientBar(bar) => Geometry::Size(bar.height),
             Self::Labelled(_) => Geometry::Fixed,
@@ -316,7 +316,7 @@ pub struct BadgeContent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpinnerContent {
+pub struct LoadingContent {
     pub size: f32,
 }
 

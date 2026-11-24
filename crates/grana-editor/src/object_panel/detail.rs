@@ -271,7 +271,7 @@ pub(super) fn detect<'a>(
             } else {
                 0.0
             };
-            let spinner = view::spinner(ctx, 14.0);
+            let loading = view::loading(ctx, 14.0);
             let caption = view::caption(
                 ctx,
                 &view::progress_caption(language, kind, job, running, frames),
@@ -288,7 +288,7 @@ pub(super) fn detect<'a>(
                 grana_ui::row()
                     .gap(6.0)
                     .align(Align::Center)
-                    .children([spinner, caption]),
+                    .children([loading, caption]),
                 progress,
                 cancel,
             ])
@@ -320,7 +320,7 @@ pub(super) fn importing<'a>(
     } else {
         0.0
     };
-    let spinner = view::spinner(ctx, 14.0);
+    let loading = view::loading(ctx, 14.0);
     let caption = view::caption(
         ctx,
         &view::progress_caption(
@@ -343,7 +343,7 @@ pub(super) fn importing<'a>(
         grana_ui::row()
             .gap(6.0)
             .align(Align::Center)
-            .children([spinner, caption]),
+            .children([loading, caption]),
         progress,
         cancel,
     ]

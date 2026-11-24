@@ -445,7 +445,7 @@ fn output<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
     if state.batch_running() {
         let paused = state.batch_paused();
         let mut actions = vec![
-            view::spinner(ctx, 16.0),
+            view::loading(ctx, 16.0),
             view::caption(
                 ctx,
                 if paused {

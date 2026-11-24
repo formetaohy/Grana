@@ -285,7 +285,7 @@ fn tracking_controls<'a>(
                 0.0
             };
             buttons.push(grana_ui::widget::progress(fraction, 110.0));
-            buttons.push(view::spinner(ctx, 16.0));
+            buttons.push(view::loading(ctx, 16.0));
             buttons.push(enabled_button(
                 ctx,
                 &format!("{prefix}.cancel"),

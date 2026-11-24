@@ -16,6 +16,7 @@ pub(crate) mod display;
 pub(crate) mod field;
 pub(crate) mod icon;
 pub(crate) mod label;
+pub(crate) mod loading;
 pub(crate) mod menu;
 pub(crate) mod segment;
 pub(crate) mod slider;
@@ -30,7 +31,9 @@ pub use display::{
 };
 pub use field::text_field;
 pub use icon::icon;
-pub use label::{badge, caption, color_swatch, labelled, spinner, weak};
+pub use label::{badge, caption, color_swatch, labelled, weak};
+pub(crate) use loading::LoadingAnimator;
+pub use loading::loading;
 pub use menu::{action_row, disclosure_row, menu_row};
 pub use segment::{segmented, segmented_fill, tabs};
 pub use slider::{drag_value, gradient_bar, progress, range_slider, slider_readout, slider_sized};
@@ -81,7 +84,7 @@ pub(crate) fn measure(
         Content::MenuRow(_) => (Vec2::new(available.x, menu::MENU_ROW), None),
         Content::ActionRow(_) => (Vec2::new(available.x, menu::MENU_ROW), None),
         Content::Badge(badge) => (label::measure_badge(badge, text), None),
-        Content::Spinner(spinner) => (Vec2::splat(spinner.size), None),
+        Content::Loading(loading) => (Vec2::splat(loading.size), None),
         Content::Progress(progress) => (Vec2::new(progress.width, 10.0), None),
         Content::GradientBar(bar) => (Vec2::new(available.x, bar.height), None),
         Content::Labelled(_) => (Vec2::new(available.x, 22.0), None),
@@ -168,8 +171,8 @@ pub(crate) fn paint(
             label::paint_badge(badge, painter, info);
             None
         }
-        Content::Spinner(spinner) => {
-            label::paint_spinner(spinner, painter, info);
+        Content::Loading(_) => {
+            loading::paint_loading(runtime, painter, info);
             None
         }
         Content::Progress(progress) => {
@@ -255,8 +258,8 @@ pub(crate) fn animate<A>(node: &mut Node<A>, frame: &FrameAnimation, text: &mut 
             animating = true;
         }
     }
-    if matches!(node.content, Content::Spinner(_)) {
-        node.paint_dirty = true;
+    if matches!(node.content, Content::Loading(_)) {
+        node.runtime.loading.step(frame.elapsed);
         animating = true;
     }
     if animating {
