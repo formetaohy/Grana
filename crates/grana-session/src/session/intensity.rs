@@ -16,6 +16,7 @@ pub(super) struct Sampled {
     pub(super) intensities: Vec<SampleStatistics>,
     pub(super) level: usize,
     pub(super) coverage: f32,
+    pub(super) outside: f32,
     pub(super) measured: bool,
 }
 
@@ -109,7 +110,7 @@ impl<'a> Sampler<'a> {
     ) -> Result<Sampled, String> {
         let channels = self.channels.pyramid().channel_count();
         let allowance = self.per_object;
-        let (index, low, high) = self.choose(low, high, allowance)?;
+        let (index, low, high, outside) = self.choose(low, high, allowance)?;
         let level = self.channels.pyramid().level(index);
         let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
         let tiles = tiles_of(dims);
@@ -177,6 +178,7 @@ impl<'a> Sampler<'a> {
                 .collect(),
             level: index,
             coverage: if measured { coverage } else { 0.0 },
+            outside,
             measured,
         })
     }
@@ -186,21 +188,19 @@ impl<'a> Sampler<'a> {
         low: [f32; 3],
         high: [f32; 3],
         allowance: u64,
-    ) -> Result<(usize, [u32; 3], [u32; 3]), String> {
+    ) -> Result<(usize, [u32; 3], [u32; 3], f32), String> {
         let pyramid = self.channels.pyramid();
         let allowed = (allowance / TILE_VOXELS).max(1);
         let mut coarsest = None;
         for index in 0..pyramid.level_count() {
             let level = pyramid.level(index);
-            let Some((low, high)) = voxel_bounds(level, low, high) else {
-                continue;
-            };
+            let (low, high, outside) = voxel_bounds(level, low, high)?;
             let dims = [high[0] - low[0], high[1] - low[1], high[2] - low[2]];
             let tiles = tiles_of(dims);
             let count = u64::from(tiles[0]) * u64::from(tiles[1]) * u64::from(tiles[2]);
-            coarsest = Some((index, low, high));
+            coarsest = Some((index, low, high, outside));
             if count <= allowed {
-                return Ok((index, low, high));
+                return Ok((index, low, high, outside));
             }
         }
         coarsest.ok_or_else(|| "the object lies outside the dataset".to_string())
@@ -238,26 +238,39 @@ fn select(tiles: [u32; 3], allowance: u64) -> Vec<[u32; 3]> {
         .collect()
 }
 
-fn voxel_bounds(level: Level, low: [f32; 3], high: [f32; 3]) -> Option<([u32; 3], [u32; 3])> {
+fn voxel_bounds(
+    level: Level,
+    low: [f32; 3],
+    high: [f32; 3],
+) -> Result<([u32; 3], [u32; 3], f32), String> {
     let low = level.voxel_of(low);
     let high = level.voxel_of(high);
     let extent = level.extent();
     let limits = [extent.x(), extent.y(), extent.z()];
     let mut start = [0u32; 3];
     let mut end = [0u32; 3];
+    let mut whole = 1.0f64;
+    let mut held = 1.0f64;
     for axis in 0..3 {
         let first = low[axis].min(high[axis]).floor();
         let last = low[axis].max(high[axis]).ceil() + 1.0;
         if !(first.is_finite() && last.is_finite()) {
-            return None;
+            return Err("the sampled object holds a finite extent".to_string());
         }
+        whole *= f64::from((last - first).max(0.0));
         start[axis] = first.max(0.0) as u32;
         end[axis] = (last as i64).clamp(0, i64::from(limits[axis])) as u32;
         if start[axis] >= end[axis] {
-            return None;
+            return Err("the sampled object lies outside the dataset".to_string());
         }
+        held *= f64::from(end[axis] - start[axis]);
     }
-    Some((start, end))
+    let outside = if whole > 0.0 {
+        (1.0 - held / whole).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
+    Ok((start, end, outside))
 }
 
 fn surface_mask(

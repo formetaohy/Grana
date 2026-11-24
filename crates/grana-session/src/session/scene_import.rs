@@ -20,6 +20,7 @@ struct Report {
     lowest: Option<usize>,
     highest: Option<usize>,
     coverage: Option<f32>,
+    outside: f32,
 }
 
 impl Report {
@@ -36,6 +37,7 @@ impl Report {
             self.coverage
                 .map_or(sampled.coverage, |held| held.min(sampled.coverage)),
         );
+        self.outside = self.outside.max(sampled.outside);
     }
 
     fn levels(&self) -> Option<(usize, usize)> {
@@ -233,6 +235,12 @@ impl Session {
                 text.push_str(&format!(
                     " · {} held no voxel inside and were sampled at their centre",
                     report.unmeasured
+                ));
+            }
+            if report.outside > 0.0 {
+                text.push_str(&format!(
+                    " · up to {:.0}% of an object's bounds lay outside the dataset and stayed unsampled",
+                    f64::from(report.outside) * 100.0
                 ));
             }
             notes.push(text);

@@ -1,6 +1,6 @@
 use grana_display::Extent;
 use grana_measure::{
-    ChildField, ColocMetric, ColocPair, Measurement, Objects, RelationField, Scale, Unit,
+    ChildField, ColocMetric, ColocPair, Measurement, Objects, RelationField, Unit,
 };
 use grana_object::RelationFrame;
 
@@ -29,12 +29,12 @@ pub enum ObjectColor {
 }
 
 impl ObjectColor {
-    pub fn unit(self, scale: Scale) -> Unit {
+    pub fn unit(self) -> Unit {
         match self {
             Self::Identity => Unit::Count,
-            Self::Measurement(measurement) => measurement.unit(scale),
-            Self::Relation { field, .. } => field.unit(scale),
-            Self::Child { field, .. } => field.unit(scale),
+            Self::Measurement(measurement) => measurement.unit(),
+            Self::Relation { field, .. } => field.unit(),
+            Self::Child { field, .. } => field.unit(),
             Self::Coloc { .. } | Self::Score => Unit::Count,
         }
     }

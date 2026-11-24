@@ -1,7 +1,7 @@
 use grana_object::RelationFrame;
 
+use crate::column::{area_key, length_key};
 use crate::csv;
-use crate::scale::Scale;
 
 pub struct PairExport {
     interval: f32,
@@ -19,7 +19,7 @@ impl PairExport {
         format!("relations-{source}-{target}{offset}.csv")
     }
 
-    pub fn new(interval: f32, source: &str, target: &str, scale: Scale) -> Self {
+    pub fn new(interval: f32, source: &str, target: &str) -> Self {
         assert!(
             interval.is_finite() && interval > 0.0,
             "a pair export names a positive frame interval"
@@ -36,10 +36,10 @@ impl PairExport {
             "source".to_string(),
             "target".to_string(),
             "contacting".to_string(),
-            scale.area_key("contact"),
-            scale.length_key("distance"),
+            area_key("contact"),
+            length_key("distance"),
             "inside_percent".to_string(),
-            scale.length_key("center"),
+            length_key("center"),
             "source_partners".to_string(),
         ];
         let columns = columns.iter().map(String::as_str).collect::<Vec<_>>();

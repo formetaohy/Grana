@@ -211,21 +211,20 @@ fn columns(
 }
 
 fn default_columns(table: &Table, channel: usize, keys: &[String]) -> Vec<Column> {
-    let scale = table.scale();
     let intensity = Measurement::Intensity {
         channel,
         statistic: Statistic::Mean,
     }
-    .key(keys, scale);
-    let diameter = scale.length_key("diameter");
+    .key(keys);
+    let diameter = grana_measure::length_key("diameter");
     let size = if table.column(&diameter).is_some() {
         diameter
     } else {
-        scale.length_key("length")
+        grana_measure::length_key("length")
     };
     [
-        Some(scale.volume_key("volume")),
-        Some(scale.area_key("area")),
+        Some(grana_measure::volume_key("volume")),
+        Some(grana_measure::area_key("area")),
         Some(size),
         Some(intensity),
     ]

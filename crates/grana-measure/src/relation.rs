@@ -1,7 +1,6 @@
 use grana_object::RelationFrame;
 
-use crate::column::{Column, Unit};
-use crate::scale::Scale;
+use crate::column::{Column, Unit, area_key, length_key};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RelationField {
@@ -57,23 +56,23 @@ impl RelationField {
         }
     }
 
-    pub fn key(self, scale: Scale) -> String {
+    pub fn key(self) -> String {
         match self {
-            Self::Distance => scale.length_key("distance"),
-            Self::Center => scale.length_key("center"),
+            Self::Distance => length_key("distance"),
+            Self::Center => length_key("center"),
             Self::Inside => "inside".to_string(),
             Self::Partner => "partner".to_string(),
-            Self::Contact => scale.area_key("contact"),
+            Self::Contact => area_key("contact"),
             Self::Overlapping => "partners".to_string(),
         }
     }
 
-    pub fn unit(self, scale: Scale) -> Unit {
+    pub fn unit(self) -> Unit {
         match self {
-            Self::Distance | Self::Center => scale.length(),
+            Self::Distance | Self::Center => Unit::Micrometer,
             Self::Inside => Unit::Percent,
             Self::Partner | Self::Overlapping => Unit::Count,
-            Self::Contact => scale.area(),
+            Self::Contact => Unit::SquareMicrometer,
         }
     }
 
@@ -86,7 +85,7 @@ impl RelationField {
         }
     }
 
-    pub fn column(self, key: &str, target: &str, shift: i32, scale: Scale) -> Column {
+    pub fn column(self, key: &str, target: &str, shift: i32) -> Column {
         let label = if shift == 0 {
             format!("{target} {}", self.label())
         } else {
@@ -94,8 +93,8 @@ impl RelationField {
         };
         Column::new(
             label,
-            format!("{key}_{}", self.key(scale)),
-            self.unit(scale),
+            format!("{key}_{}", self.key()),
+            self.unit(),
             self.decimals(),
         )
     }
@@ -174,10 +173,10 @@ impl<'a> RelationRow<'a> {
     }
 }
 
-pub fn relation_keys(key: &str, scale: Scale) -> Vec<String> {
+pub fn relation_keys(key: &str) -> Vec<String> {
     let mut keys = Vec::new();
     for field in RelationField::ALL {
-        let base = format!("{key}_{}", field.key(scale));
+        let base = format!("{key}_{}", field.key());
         keys.push(base.clone());
         for aggregate in crate::table::Aggregate::ALL {
             keys.push(format!("{base}_{}", aggregate.key()));

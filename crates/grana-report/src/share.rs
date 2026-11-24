@@ -209,13 +209,12 @@ fn plot(panel: Panel<'_>) -> Result<String, String> {
 fn statistics(page: &mut String, table: &Table, name: &str) {
     let aggregates = aggregates();
     table.materialize_many(&(0..table.columns().len()).collect::<Vec<_>>());
-    let scale = table.scale();
     let columns = table
         .columns()
         .iter()
         .enumerate()
         .skip(table.identity_columns())
-        .filter(|(_, column)| !position_key(column, scale))
+        .filter(|(_, column)| !position_key(column))
         .filter_map(|(index, column)| {
             let values = table.materialize(index);
             let present = values
@@ -286,16 +285,15 @@ fn aggregates() -> [(&'static str, Aggregate); STATISTICS] {
 
 fn primary(table: &Table) -> Option<usize> {
     let columns = table.columns();
-    let scale = table.scale();
     let preferred = [
-        scale.volume_key("volume"),
-        scale.length_key("length"),
-        scale.length_key("diameter"),
-        scale.area_key("area"),
-        scale.length_key("max_diameter"),
-        scale.volume_key("hull_volume"),
-        scale.volume_key("nucleus_volume"),
-        scale.volume_key("cytoplasm_volume"),
+        grana_measure::volume_key("volume"),
+        grana_measure::length_key("length"),
+        grana_measure::length_key("diameter"),
+        grana_measure::area_key("area"),
+        grana_measure::length_key("max_diameter"),
+        grana_measure::volume_key("hull_volume"),
+        grana_measure::volume_key("nucleus_volume"),
+        grana_measure::volume_key("cytoplasm_volume"),
         "sphericity".to_string(),
         "nucleus_sphericity".to_string(),
         "contrast".to_string(),
@@ -320,9 +318,9 @@ fn positional(columns: &[Column], index: usize) -> bool {
     AXES.contains(&columns[index].key())
 }
 
-fn position_key(column: &Column, scale: grana_measure::Scale) -> bool {
+fn position_key(column: &Column) -> bool {
     AXES.iter()
-        .any(|axis| column.key() == scale.length_key(axis))
+        .any(|axis| column.key() == grana_measure::length_key(axis))
 }
 
 fn spread(table: &Table, column: usize) -> bool {
@@ -332,10 +330,9 @@ fn spread(table: &Table, column: usize) -> bool {
 fn window(table: &Table) -> Window {
     let mut low = [f32::INFINITY; 3];
     let mut high = [f32::NEG_INFINITY; 3];
-    let scale = table.scale();
     for (axis, name) in AXES.iter().enumerate() {
         let Some(column) = table
-            .column(&scale.length_key(name))
+            .column(&grana_measure::length_key(name))
             .and_then(|column| table.extent(column))
         else {
             continue;

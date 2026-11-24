@@ -403,7 +403,9 @@ impl Channels {
                 },
                 ranges,
             ),
-            Kind::Operator => operator::read(&node.spec, &reader, ranges, info),
+            Kind::Operator => {
+                operator::read(&node.spec, &reader, ranges, info, self.pyramid.channels())
+            }
             Kind::Bleach { source, factors } => {
                 let factors = factors.as_ref().map_err(|detail| ChannelsError::Derived {
                     detail: detail.clone(),

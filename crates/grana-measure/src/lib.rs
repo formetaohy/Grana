@@ -17,7 +17,6 @@ mod pair;
 mod plot;
 mod relation;
 mod sample;
-mod scale;
 mod scope;
 mod significance;
 mod spatial;
@@ -33,7 +32,7 @@ pub use coloc::{
     ColocSeriesInfo, ColocSettings, ColocSignificance, ColocStatistics, ColocThresholdRange,
     ColocThresholds, ObjectColoc, ObjectColocValue,
 };
-pub use column::{Column, Unit};
+pub use column::{Column, Unit, area_key, length_key, speed_key, volume_key};
 pub use filter::Filter;
 pub use frame::{Frame, FrameSource, Kind};
 pub use lasso::Lasso;
@@ -49,7 +48,6 @@ pub use plot::{
 };
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;
-pub use scale::Scale;
 pub use scope::Scope;
 pub use significance::{
     Level, MannWhitney, WelchTest, benjamini_hochberg, hedges_g, hedges_g_pooled, stars,

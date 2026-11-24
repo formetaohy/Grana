@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use grana_object::{Mask, rasterize};
 use grana_optics::Psf;
-use grana_volume::{ChannelInfo, Intensity, Level, Statistics, VoxelFormat, VoxelSemantics};
+use grana_volume::{
+    ChannelInfo, Intensity, Level, NoData, Statistics, VoxelFormat, VoxelSemantics,
+};
 
 use crate::mask::MaskGate;
 use crate::object_set::ObjectSetId;
@@ -365,12 +367,18 @@ impl DerivedSpec {
         } else {
             source.semantics()
         };
-        ChannelInfo::new(
+        let info = ChannelInfo::new(
             self.name.clone(),
             self.tint,
             Statistics::declared(self.intensity, semantics),
             format,
-        )
+        );
+        match self.operation {
+            Operation::Smooth(_) | Operation::Background(_) | Operation::Ratio(_) => {
+                info.with_no_data(NoData::F32(f32::NAN))
+            }
+            Operation::Mask { .. } | Operation::Restore(_) | Operation::Bleach => info,
+        }
     }
 }
 

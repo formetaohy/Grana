@@ -184,7 +184,7 @@ impl Protocol {
                     track_by: track_color(set.track_coloring(), scene),
                     classifier: set
                         .classifier()
-                        .map(|classifier| ClassifierSpec::of(classifier, &keys, scene.scale())),
+                        .map(|classifier| ClassifierSpec::of(classifier, &keys)),
                     object_coloc: set
                         .object_coloc()
                         .and_then(|coloc| channel_pair(coloc.pair(), &channels)),
@@ -307,7 +307,7 @@ impl Protocol {
                 source: source.key().as_str().to_string(),
                 target: target.key().as_str().to_string(),
                 shift: filter.shift(),
-                field: filter.field().key(scene.scale()),
+                field: filter.field().key(),
                 minimum: filter.range()[0],
                 maximum: filter.range()[1],
             })
@@ -752,7 +752,7 @@ fn object_color(
             ..color
         },
         ObjectColor::Measurement(measurement) => ColorSpec {
-            key: Some(measurement.key(keys, scene.scale())),
+            key: Some(measurement.key(keys)),
             ..color
         },
         ObjectColor::Relation {
@@ -761,15 +761,16 @@ fn object_color(
             shift,
         } => ColorSpec {
             target: Some(scene.objects.get(target)?.key().as_str().to_string()),
-            field: Some(field.key(scene.scale())),
+            field: Some(field.key()),
             shift,
             ..color
         },
         ObjectColor::Child { target, field } => ColorSpec {
-            key: Some(field.metric().map_or_else(
-                || "count".to_string(),
-                |metric| metric.key(keys, scene.scale()),
-            )),
+            key: Some(
+                field
+                    .metric()
+                    .map_or_else(|| "count".to_string(), |metric| metric.key(keys)),
+            ),
             target: Some(scene.objects.get(target)?.key().as_str().to_string()),
             aggregate: field
                 .statistic()
@@ -796,7 +797,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
     };
     Some(match metric {
         TrackColor::Measurement(measurement) => ColorSpec {
-            key: Some(measurement.column(scene.scale()).key().to_string()),
+            key: Some(measurement.column().key().to_string()),
             ..color
         },
         TrackColor::Relation {
@@ -806,7 +807,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
             shift,
         } => ColorSpec {
             target: Some(scene.objects.get(target)?.key().as_str().to_string()),
-            field: Some(field.key(scene.scale())),
+            field: Some(field.key()),
             aggregate: Some(aggregate.key().to_string()),
             shift,
             ..color

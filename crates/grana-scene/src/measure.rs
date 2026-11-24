@@ -1370,9 +1370,8 @@ fn preferred_axes(table: &Table) -> [usize; 2] {
     let columns = table.columns();
     let identity = table.identity_columns();
     let present = |key: &str| columns.iter().any(|column| column.key() == key);
-    let scale = table.scale();
-    let length = |name: &str| scale.length_key(name);
-    let volume = |name: &str| scale.volume_key(name);
+    let length = grana_measure::length_key;
+    let volume = grana_measure::volume_key;
     let family: Vec<String> = if present("contrast") {
         vec![length("diameter"), "contrast".to_string()]
     } else if present("junctions") {
@@ -1388,12 +1387,12 @@ fn preferred_axes(table: &Table) -> [usize; 2] {
         length("diameter"),
         "contrast".to_string(),
         volume("volume"),
-        scale.area_key("area"),
+        grana_measure::area_key("area"),
         "sphericity".to_string(),
         volume("hull_volume"),
         length("max_diameter"),
         length("length"),
-        scale.speed_key("speed"),
+        grana_measure::speed_key("speed"),
         length("displacement"),
         "straightness".to_string(),
         "branches".to_string(),

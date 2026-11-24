@@ -1,5 +1,4 @@
 use grana_display::{Coloring, Extent, Palette};
-use grana_measure::Scale;
 use grana_scene::{ObjectColor, ObjectSetId};
 use grana_session::Command;
 use grana_ui::{Align, BuildContext, Color, Element, Length, Level, Role, TextStyle};
@@ -13,7 +12,6 @@ pub struct Input<'a> {
     pub measurements: &'a [(ObjectColor, String)],
     pub extent: Option<Extent>,
     pub width: f32,
-    pub scale: Scale,
 }
 
 pub fn edit<'a>(
@@ -140,14 +138,13 @@ fn range<'a>(
         coloring,
         extent,
         width,
-        scale,
         ..
     } = input;
     let theme = *ctx.theme();
     let palette = theme.palette;
     let language = ctx.language();
     let base = coloring.clone();
-    let unit = metric.unit(scale);
+    let unit = metric.unit();
     let decimals = metric.decimals();
     let mut children = Vec::new();
     match (coloring.manual(), extent) {

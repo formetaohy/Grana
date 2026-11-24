@@ -341,7 +341,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
                 palette: set.object_coloring().palette(),
                 reversed: set.object_coloring().reversed(),
                 extent,
-                unit: metric.unit(scene.scale()),
+                unit: metric.unit(),
                 decimals: metric.decimals(),
             });
         }
@@ -354,7 +354,7 @@ pub fn legends(scene: &Scene) -> Vec<Legend> {
                 palette: set.track_coloring().palette(),
                 reversed: set.track_coloring().reversed(),
                 extent,
-                unit: metric.unit(scene.scale()),
+                unit: metric.unit(),
                 decimals: metric.decimals(),
             });
         }

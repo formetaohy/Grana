@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use grana_object::{CellSet, FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
 
 use crate::child::Child;
-use crate::column::{Column, Unit};
+use crate::column::{Column, Unit, length_key};
 use crate::csv;
 use crate::filter::Filter;
 use crate::frame::{Frame, FrameSource, Kind};
@@ -15,11 +15,10 @@ use crate::measured::Measured;
 use crate::metric::{Measurement, TrackMeasurement};
 use crate::relation::{RelationField, RelationRow};
 use crate::sample::Sample;
-use crate::scale::Scale;
 use crate::spatial;
 
-pub fn neighbour_key(scale: Scale) -> String {
-    scale.length_key("nearest_distance")
+pub fn neighbour_key() -> String {
+    length_key("nearest_distance")
 }
 
 pub const NEIGHBOUR_LABEL: &str = "nearest neighbour";
@@ -358,21 +357,20 @@ impl ObjectCell {
         keys: &[String],
         relations: &[RelationRow<'_>],
         children: &[Child<'_>],
-        scale: Scale,
     ) -> Column {
         match self {
             Self::Frame => Column::new("frame", "frame", Unit::Count, 0),
             Self::Time => Column::new("time", "time_s", Unit::Second, 3),
             Self::Object => Column::new("object", "object", Unit::Count, 0),
             Self::Track => Column::new("track", "track", Unit::Count, 0),
-            Self::Measure(measurement) => measurement.column(channels, keys, scale),
+            Self::Measure(measurement) => measurement.column(channels, keys),
             Self::Relation { index, field } => {
                 let row = relations[*index];
-                field.column(row.key(), row.target(), row.shift(), scale)
+                field.column(row.key(), row.target(), row.shift())
             }
             Self::Child { index, field } => {
                 let child = &children[*index];
-                child.fields()[*field].column(child.key(), child.name(), channels, keys, scale)
+                child.fields()[*field].column(child.key(), child.name(), channels, keys)
             }
         }
     }
@@ -539,7 +537,6 @@ struct Store {
 }
 
 pub struct Table {
-    scale: Scale,
     columns: Vec<Column>,
     identity: usize,
     observations: Vec<Observation>,
@@ -558,7 +555,6 @@ pub struct Table {
 }
 
 struct Draft {
-    scale: Scale,
     columns: Vec<Column>,
     identity: usize,
     observations: Vec<Observation>,
@@ -578,7 +574,6 @@ impl Draft {
         frame_interval: f32,
     ) -> Table {
         let Self {
-            scale,
             columns,
             identity,
             observations,
@@ -610,7 +605,6 @@ impl Draft {
             pinned: vec![false; columns_count],
         };
         Table {
-            scale,
             columns,
             identity,
             observations,
@@ -638,7 +632,6 @@ impl Table {
         group: Group,
         aggregate: Aggregate,
         basis: Option<Arc<Table>>,
-        scale: Scale,
     ) -> Option<Self> {
         assert!(
             !source.channels().is_empty(),
@@ -650,52 +643,32 @@ impl Table {
         );
         match group {
             Group::Object => {
-                let mut table = object_table(Arc::clone(&source), tracks, frame_interval, scale)?;
+                let mut table = object_table(Arc::clone(&source), tracks, frame_interval)?;
                 table.attach_neighbours();
                 Some(table)
             }
             Group::Track => {
                 let basis = match basis {
                     Some(basis) => basis,
-                    None => {
-                        object_basis(Arc::clone(&source), tracks.clone(), frame_interval, scale)?
-                    }
+                    None => object_basis(Arc::clone(&source), tracks.clone(), frame_interval)?,
                 };
-                let mut table = track_table(
-                    Arc::clone(&source),
-                    tracks,
-                    frame_interval,
-                    aggregate,
-                    scale,
-                );
+                let mut table = track_table(Arc::clone(&source), tracks, frame_interval, aggregate);
                 table.attach(basis);
                 Some(table)
             }
             Group::Timepoint => {
                 let basis = match basis {
                     Some(basis) => basis,
-                    None => {
-                        object_basis(Arc::clone(&source), tracks.clone(), frame_interval, scale)?
-                    }
+                    None => object_basis(Arc::clone(&source), tracks.clone(), frame_interval)?,
                 };
-                let mut table = timepoint_table(
-                    Arc::clone(&source),
-                    tracks,
-                    frame_interval,
-                    aggregate,
-                    scale,
-                )?;
+                let mut table =
+                    timepoint_table(Arc::clone(&source), tracks, frame_interval, aggregate)?;
                 table.attach(basis);
                 Some(table)
             }
             Group::Molecule => {
-                let mut table = molecule_table(
-                    Arc::clone(&source),
-                    tracks,
-                    frame_interval,
-                    aggregate,
-                    scale,
-                )?;
+                let mut table =
+                    molecule_table(Arc::clone(&source), tracks, frame_interval, aggregate)?;
                 table.attach_neighbours();
                 Some(table)
             }
@@ -734,16 +707,15 @@ impl Table {
     }
 
     fn attach_neighbours(&mut self) {
-        let scale = self.scale;
         let (Some(x), Some(y), Some(z)) = (
-            self.column(&scale.length_key("x")),
-            self.column(&scale.length_key("y")),
-            self.column(&scale.length_key("z")),
+            self.column(&length_key("x")),
+            self.column(&length_key("y")),
+            self.column(&length_key("z")),
         ) else {
             return;
         };
         let column =
-            Column::new(NEIGHBOUR_LABEL, neighbour_key(scale), scale.length(), 3).possibly_absent();
+            Column::new(NEIGHBOUR_LABEL, neighbour_key(), Unit::Micrometer, 3).possibly_absent();
         self.append(column, Plan::Neighbour { x, y, z }, None);
     }
 
@@ -753,7 +725,7 @@ impl Table {
             .iter()
             .map(|column| aggregated_source(&basis, column, self.aggregate))
             .collect();
-        let key = neighbour_key(self.scale);
+        let key = neighbour_key();
         if let Some(source) = basis.column(&key) {
             let base = &basis.columns()[source];
             let column = aggregate_column(base, self.aggregate);
@@ -1460,10 +1432,6 @@ impl Table {
         &self.columns
     }
 
-    pub fn scale(&self) -> Scale {
-        self.scale
-    }
-
     pub fn column(&self, key: &str) -> Option<usize> {
         self.columns.iter().position(|column| column.key() == key)
     }
@@ -1492,7 +1460,7 @@ impl Table {
     pub fn position(&self, row: usize) -> Option<[f32; 3]> {
         assert!(row < self.rows(), "the row lies inside the table");
         let axis = |name: &str| {
-            let key = self.scale.length_key(name);
+            let key = length_key(name);
             self.column(&key)
                 .and_then(|column| self.materialize(column)[row].present())
         };
@@ -1567,9 +1535,9 @@ impl Table {
     pub(crate) fn gated_points(&self, gated: &Mask) -> Vec<Vec<[f32; 3]>> {
         let basis = self.basis().unwrap_or(self);
         let (Some(x), Some(y), Some(z)) = (
-            basis.column(&basis.scale.length_key("x")),
-            basis.column(&basis.scale.length_key("y")),
-            basis.column(&basis.scale.length_key("z")),
+            basis.column(&length_key("x")),
+            basis.column(&length_key("y")),
+            basis.column(&length_key("z")),
         ) else {
             return Vec::new();
         };
@@ -1847,7 +1815,6 @@ fn object_table(
     source: Arc<dyn FrameSource>,
     tracks: Option<Arc<TrackSet>>,
     frame_interval: f32,
-    scale: Scale,
 ) -> Option<Table> {
     let channels = source.channels();
     let keys = channel_keys(channels);
@@ -1878,7 +1845,7 @@ fn object_table(
     }
     let columns = cells
         .iter()
-        .map(|cell| cell.column(channels, &keys, &relations, &children, scale))
+        .map(|cell| cell.column(channels, &keys, &relations, &children))
         .collect::<Vec<_>>();
     let channel_count = channels.len();
     let mut observations = Vec::new();
@@ -1908,7 +1875,6 @@ fn object_table(
     let sources = vec![None; plan.len()];
     Some(
         Draft {
-            scale,
             columns,
             identity: 4,
             observations,
@@ -1927,9 +1893,8 @@ fn object_basis(
     source: Arc<dyn FrameSource>,
     tracks: Option<Arc<TrackSet>>,
     frame_interval: f32,
-    scale: Scale,
 ) -> Option<Arc<Table>> {
-    let mut table = object_table(source, tracks, frame_interval, scale)?;
+    let mut table = object_table(source, tracks, frame_interval)?;
     table.attach_neighbours();
     Some(Arc::new(table))
 }
@@ -1939,7 +1904,6 @@ fn track_table(
     tracks: Option<Arc<TrackSet>>,
     frame_interval: f32,
     aggregate: Aggregate,
-    scale: Scale,
 ) -> Table {
     let channels = source.channels();
     let keys = channel_keys(channels);
@@ -1948,16 +1912,18 @@ fn track_table(
     let fields = aggregated_relations(&relations);
     let mut columns = TrackMeasurement::ALL
         .iter()
-        .map(|field| field.column(scale))
+        .map(|field| field.column())
         .collect::<Vec<_>>();
     columns.extend(
         measurements
             .iter()
-            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate, scale)),
+            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate)),
     );
-    columns.extend(fields.iter().map(|(index, field)| {
-        aggregate_relation_column(relations[*index], *field, aggregate, scale)
-    }));
+    columns.extend(
+        fields
+            .iter()
+            .map(|(index, field)| aggregate_relation_column(relations[*index], *field, aggregate)),
+    );
     let mut plan = TrackMeasurement::ALL
         .iter()
         .map(|field| Plan::TrackIdentity(*field))
@@ -1977,7 +1943,6 @@ fn track_table(
         .collect::<Vec<_>>();
     let sources = vec![None; plan.len()];
     Draft {
-        scale,
         columns,
         identity: TrackMeasurement::ALL.len(),
         observations,
@@ -1996,7 +1961,6 @@ fn timepoint_table(
     tracks: Option<Arc<TrackSet>>,
     frame_interval: f32,
     aggregate: Aggregate,
-    scale: Scale,
 ) -> Option<Table> {
     let channels = source.channels();
     let keys = channel_keys(channels);
@@ -2010,11 +1974,13 @@ fn timepoint_table(
     columns.extend(
         measurements
             .iter()
-            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate, scale)),
+            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate)),
     );
-    columns.extend(fields.iter().map(|(index, field)| {
-        aggregate_relation_column(relations[*index], *field, aggregate, scale)
-    }));
+    columns.extend(
+        fields
+            .iter()
+            .map(|(index, field)| aggregate_relation_column(relations[*index], *field, aggregate)),
+    );
     let mut plan = TimeField::ALL
         .iter()
         .map(|field| Plan::TimeField(*field))
@@ -2038,7 +2004,6 @@ fn timepoint_table(
     let sources = vec![None; plan.len()];
     Some(
         Draft {
-            scale,
             columns,
             identity: TimeField::ALL.len(),
             observations,
@@ -2058,7 +2023,6 @@ fn molecule_table(
     tracks: Option<Arc<TrackSet>>,
     frame_interval: f32,
     aggregate: Aggregate,
-    scale: Scale,
 ) -> Option<Table> {
     assert!(
         source.kind() == Kind::Spots,
@@ -2073,16 +2037,18 @@ fn molecule_table(
         .iter()
         .map(|field| field.column())
         .collect::<Vec<_>>();
-    columns.extend((0..3).map(|axis| position_column(axis, scale)));
-    columns.extend((0..3).map(|axis| spread_column(axis, scale)));
+    columns.extend((0..3).map(position_column));
+    columns.extend((0..3).map(spread_column));
     columns.extend(
         measurements
             .iter()
-            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate, scale)),
+            .map(|measurement| measurement.aggregate_column(channels, &keys, aggregate)),
     );
-    columns.extend(fields.iter().map(|(index, field)| {
-        aggregate_relation_column(relations[*index], *field, aggregate, scale)
-    }));
+    columns.extend(
+        fields
+            .iter()
+            .map(|(index, field)| aggregate_relation_column(relations[*index], *field, aggregate)),
+    );
     let mut molecules = Vec::<Molecule>::new();
     let mut index = HashMap::<u32, usize>::new();
     source.visit_all(&mut |frame: Frame<'_>| {
@@ -2125,7 +2091,6 @@ fn molecule_table(
     let sources = vec![None; plan.len()];
     Some(
         Draft {
-            scale,
             columns,
             identity: MoleculeField::ALL.len() + 6,
             observations,
@@ -2142,15 +2107,15 @@ fn molecule_table(
 
 const AXES: [&str; 3] = ["x", "y", "z"];
 
-fn position_column(axis: usize, scale: Scale) -> Column {
-    Column::new(AXES[axis], scale.length_key(AXES[axis]), scale.length(), 3)
+fn position_column(axis: usize) -> Column {
+    Column::new(AXES[axis], length_key(AXES[axis]), Unit::Micrometer, 3)
 }
 
-fn spread_column(axis: usize, scale: Scale) -> Column {
+fn spread_column(axis: usize) -> Column {
     Column::new(
         format!("spread {}", AXES[axis]),
-        scale.length_key(&format!("spread_{}", AXES[axis])),
-        scale.length(),
+        length_key(&format!("spread_{}", AXES[axis])),
+        Unit::Micrometer,
         4,
     )
 }
@@ -2176,9 +2141,8 @@ fn aggregate_relation_column(
     row: RelationRow<'_>,
     field: RelationField,
     aggregate: Aggregate,
-    scale: Scale,
 ) -> Column {
-    let base = field.column(row.key(), row.target(), row.shift(), scale);
+    let base = field.column(row.key(), row.target(), row.shift());
     Column::new(
         base.label().to_string(),
         format!("{}_{}", base.key(), aggregate.key()),

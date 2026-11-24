@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_measure::{Aggregate, Group, Kind, Scale, Table};
+use grana_measure::{Aggregate, Group, Kind, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet};
 
 use crate::support::measure_source;
@@ -8,7 +8,7 @@ use crate::support::measure_source;
 const CHANNEL: &str = "EGFP 488";
 
 #[test]
-fn measures_uncalibrated_data_in_pixels() {
+fn measures_every_object_in_micrometres() {
     let frames = measure_source(Kind::Spots, &[CHANNEL], [spots()]);
     let table = Table::build(
         Arc::clone(&frames),
@@ -17,32 +17,31 @@ fn measures_uncalibrated_data_in_pixels() {
         Group::Object,
         Aggregate::MEAN,
         None,
-        Scale::Pixel,
     )
-    .expect("the uncalibrated object table builds");
+    .expect("the object table builds");
     let keys = table
         .columns()
         .iter()
         .map(|column| column.key())
         .collect::<Vec<_>>();
-    assert!(keys.contains(&"x_px"), "position keys follow the scale");
+    assert!(keys.contains(&"x_um"), "a position is a physical length");
     assert!(
-        keys.contains(&"diameter_px"),
-        "a length key follows the scale"
+        keys.contains(&"diameter_um"),
+        "a length is a physical length"
     );
     assert!(
-        !keys
-            .iter()
-            .any(|key| key.ends_with("_um") || key.ends_with("_um3")),
-        "an uncalibrated table never claims a micrometre"
+        !keys.iter().any(|key| key.ends_with("_px")),
+        "no column claims a pixel"
     );
     assert!(
         table
             .columns()
             .iter()
             .filter(|column| column.unit().spatial())
-            .all(|column| !column.unit().physical()),
-        "an uncalibrated table reports no physical unit"
+            .all(|column| column.unit() == grana_measure::Unit::Micrometer
+                || column.unit() == grana_measure::Unit::SquareMicrometer
+                || column.unit() == grana_measure::Unit::CubicMicrometer),
+        "every spatial column carries a physical unit"
     );
 }
 
@@ -59,7 +58,6 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Object,
         Aggregate::MEAN,
         None,
-        Scale::Physical,
     )
     .expect("the object table builds");
     assert_eq!(table.rows(), 4);
@@ -82,7 +80,6 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Track,
         Aggregate::MEAN,
         None,
-        Scale::Physical,
     )
     .expect("the track table builds");
     assert_eq!(per_track.rows(), 2);
@@ -105,7 +102,6 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Timepoint,
         Aggregate::SUM,
         None,
-        Scale::Physical,
     )
     .expect("the timepoint table builds");
     assert_eq!(per_frame.rows(), 2);
@@ -137,7 +133,6 @@ fn summarises_spots_and_exports_a_csv() {
             Group::Object,
             Aggregate::MEAN,
             None,
-            Scale::Physical,
         )
         .expect("the object table builds"),
     );
@@ -148,7 +143,6 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Timepoint,
         Aggregate::SUM,
         Some(Arc::clone(&basis)),
-        Scale::Physical,
     )
     .expect("the timepoint table reuses its basis");
     assert_eq!(reused.rows(), per_frame.rows());
@@ -177,7 +171,6 @@ fn summarises_spots_and_exports_a_csv() {
         Group::Molecule,
         Aggregate::MEAN,
         None,
-        Scale::Physical,
     )
     .expect("the molecule table builds");
     assert_eq!(
@@ -211,7 +204,6 @@ fn materialises_measurement_columns_on_demand() {
         Group::Object,
         Aggregate::MEAN,
         None,
-        Scale::Physical,
     )
     .expect("the object table builds");
     assert!(

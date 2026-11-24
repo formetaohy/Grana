@@ -202,7 +202,6 @@ pub(super) fn appearance<'a>(
                 measurements: &metrics,
                 extent,
                 width,
-                scale: state.scene.scale(),
             },
         ));
     }

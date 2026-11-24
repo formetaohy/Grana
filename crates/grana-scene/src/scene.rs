@@ -27,9 +27,7 @@ use grana_display::{
     Coloring, Extent, Material, Shading, TransferFunction, VolumeMode, categorical,
 };
 use grana_geometry::ray_hit;
-use grana_measure::{
-    Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Scale, Table,
-};
+use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
 use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
 use grana_optics::Psf;
 use grana_volume::{
@@ -1163,13 +1161,6 @@ impl Scene {
         self.region.enabled().then_some(self.region)
     }
 
-    pub fn scale(&self) -> Scale {
-        match self.dataset.pyramid().calibration().measured() {
-            true => Scale::Physical,
-            false => Scale::Pixel,
-        }
-    }
-
     pub fn set_clip(&mut self, clip: Clip) {
         self.clip = clip;
     }
@@ -1567,7 +1558,7 @@ impl Scene {
                 .map(|channel| channel.name().to_string())
                 .collect::<Vec<_>>(),
         );
-        let classifier = Classifier::train(&table, &keys, features, positives, self.scale())?;
+        let classifier = Classifier::train(&table, &keys, features, positives)?;
         self.objects.set_classifier(id, Some(classifier));
         Ok(())
     }

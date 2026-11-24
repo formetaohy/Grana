@@ -90,7 +90,6 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
                         .as_ref()
                         .and_then(|values| values.get(index).copied()),
                     index,
-                    scene.scale(),
                 ),
                 color: set.color(),
                 selected: scene.object_selected(set.id(), index),
@@ -100,19 +99,12 @@ pub fn labels(scene: &Scene, time: u32) -> Vec<Label> {
     labels
 }
 
-fn text(
-    metric: Option<grana_scene::ObjectColor>,
-    value: Option<f32>,
-    index: usize,
-    scale: grana_measure::Scale,
-) -> String {
+fn text(metric: Option<grana_scene::ObjectColor>, value: Option<f32>, index: usize) -> String {
     let Some(metric) = metric else {
         return (index + 1).to_string();
     };
     match value {
-        Some(value) if value.is_finite() => {
-            crate::value(value, metric.unit(scale), metric.decimals())
-        }
+        Some(value) if value.is_finite() => crate::value(value, metric.unit(), metric.decimals()),
         _ => "\u{2026}".to_string(),
     }
 }

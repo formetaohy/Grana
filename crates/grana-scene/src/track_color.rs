@@ -1,4 +1,4 @@
-use grana_measure::{Aggregate, RelationField, Scale, TrackMeasurement, Unit};
+use grana_measure::{Aggregate, RelationField, TrackMeasurement, Unit};
 use grana_object::{RelationFrame, TrackSet};
 
 use crate::object_set::ObjectSetId;
@@ -16,10 +16,10 @@ pub enum TrackColor {
 }
 
 impl TrackColor {
-    pub fn unit(self, scale: Scale) -> Unit {
+    pub fn unit(self) -> Unit {
         match self {
-            Self::Measurement(measurement) => measurement.unit(scale),
-            Self::Relation { field, .. } => field.unit(scale),
+            Self::Measurement(measurement) => measurement.unit(),
+            Self::Relation { field, .. } => field.unit(),
         }
     }
 
