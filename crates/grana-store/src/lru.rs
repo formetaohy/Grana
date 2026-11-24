@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use crate::budget::{Meter, Pool};
 
 const SHARDS: usize = 16;
 const NONE: u32 = u32::MAX;
@@ -21,11 +24,10 @@ struct Shard<K, V> {
     newest: u32,
     oldest: u32,
     bytes: u64,
-    budget: u64,
 }
 
-impl<K: Copy + Eq + Hash, V> Shard<K, V> {
-    fn new(budget: u64) -> Self {
+impl<K: Clone + Eq + Hash, V> Shard<K, V> {
+    fn new() -> Self {
         Self {
             slots: HashMap::new(),
             nodes: Vec::new(),
@@ -33,7 +35,6 @@ impl<K: Copy + Eq + Hash, V> Shard<K, V> {
             newest: NONE,
             oldest: NONE,
             bytes: 0,
-            budget,
         }
     }
 
@@ -43,15 +44,14 @@ impl<K: Copy + Eq + Hash, V> Shard<K, V> {
         Some(Arc::clone(&self.nodes[slot as usize].value))
     }
 
-    fn insert(&mut self, key: K, value: Arc<V>, bytes: u64) {
+    fn insert(&mut self, key: K, value: Arc<V>, bytes: u64, budget: u64) -> u64 {
         if let Some(slot) = self.slots.get(&key).copied() {
             let node = &mut self.nodes[slot as usize];
             self.bytes = self.bytes - node.bytes + bytes;
             node.value = value;
             node.bytes = bytes;
             self.promote(slot);
-            self.evict();
-            return;
+            return self.evict(budget);
         }
         let slot = match self.free.pop() {
             Some(slot) => {
@@ -83,9 +83,10 @@ impl<K: Copy + Eq + Hash, V> Shard<K, V> {
             self.nodes[self.newest as usize].newer = slot;
         }
         self.newest = slot;
-        self.slots.insert(key, slot);
+        self.slots
+            .insert(self.nodes[slot as usize].key.clone(), slot);
         self.bytes += bytes;
-        self.evict();
+        self.evict(budget)
     }
 
     fn promote(&mut self, slot: u32) {
@@ -111,14 +112,15 @@ impl<K: Copy + Eq + Hash, V> Shard<K, V> {
         self.newest = slot;
     }
 
-    fn evict(&mut self) {
-        while self.bytes > self.budget && self.slots.len() > 1 {
+    fn evict(&mut self, budget: u64) -> u64 {
+        let mut evicted = 0;
+        while self.bytes > budget && self.slots.len() > 1 {
             let slot = self.oldest;
             if slot == NONE {
-                return;
+                break;
             }
             let node = &self.nodes[slot as usize];
-            let key = node.key;
+            let key = node.key.clone();
             let bytes = node.bytes;
             self.oldest = node.newer;
             if self.oldest == NONE {
@@ -131,43 +133,76 @@ impl<K: Copy + Eq + Hash, V> Shard<K, V> {
             self.nodes[slot as usize].newer = NONE;
             self.free.push(slot);
             self.bytes = self.bytes.saturating_sub(bytes);
+            evicted += bytes;
         }
+        evicted
     }
 }
 
 pub struct LruCache<K, V> {
     shards: Vec<Mutex<Shard<K, V>>>,
     size: fn(&V) -> u64,
+    pool: Pool,
+    scopes: Option<&'static AtomicUsize>,
 }
 
-impl<K: Copy + Eq + Hash, V> LruCache<K, V> {
-    pub fn new(budget: u64, size: fn(&V) -> u64) -> Self {
-        let budget = (budget / SHARDS as u64).max(1);
+impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
+    pub fn pooled(pool: Pool, size: fn(&V) -> u64) -> Self {
         Self {
-            shards: (0..SHARDS)
-                .map(|_| Mutex::new(Shard::new(budget)))
-                .collect(),
+            shards: (0..SHARDS).map(|_| Mutex::new(Shard::new())).collect(),
             size,
+            pool,
+            scopes: None,
         }
     }
 
-    pub fn single(budget: u64, size: fn(&V) -> u64) -> Self {
+    pub fn scoped(pool: Pool, scopes: &'static AtomicUsize, size: fn(&V) -> u64) -> Self {
         Self {
-            shards: vec![Mutex::new(Shard::new(budget.max(1)))],
-            size,
+            scopes: Some(scopes),
+            ..Self::pooled(pool, size)
         }
+    }
+
+    pub fn pool(&self) -> Pool {
+        self.pool
+    }
+
+    pub fn meter(&self) -> &'static Meter {
+        self.pool.meter()
+    }
+
+    pub fn share(&self) -> u64 {
+        let share = self.pool.share();
+        match self.scopes {
+            Some(scopes) => {
+                let live = scopes.load(Ordering::Relaxed).max(1) as u64;
+                (share / live).max(1)
+            }
+            None => share,
+        }
+    }
+
+    pub fn shard_bytes(&self) -> u64 {
+        (self.share() / self.shards.len() as u64).max(1)
     }
 
     pub fn fetch(&self, key: K) -> Option<Arc<V>> {
-        self.lock(key).fetch(key)
+        let held = self.lock(&key).fetch(key);
+        match &held {
+            Some(_) => self.meter().hit(),
+            None => self.meter().miss(),
+        }
+        held
     }
 
     pub fn insert(&self, key: K, value: Arc<V>) {
         let bytes = (self.size)(&value);
-        self.lock(key).insert(key, value, bytes);
+        let budget = self.shard_bytes();
+        let evicted = self.lock(&key).insert(key, value, bytes, budget);
+        self.meter().evict(evicted);
     }
 
-    fn lock(&self, key: K) -> std::sync::MutexGuard<'_, Shard<K, V>> {
+    fn lock(&self, key: &K) -> MutexGuard<'_, Shard<K, V>> {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let index = (hasher.finish() % self.shards.len() as u64) as usize;

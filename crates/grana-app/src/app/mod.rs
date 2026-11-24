@@ -280,7 +280,6 @@ impl App {
             let _ = repaint.send_event(Wake::Redraw);
         }));
         let budget = grana_render::texture_budget(gpu.memory());
-        grana_image::set_decode_budget(budget / 2);
         self.pending_engine = Some(spawn_engine(
             gpu.device.clone(),
             gpu.queue.clone(),

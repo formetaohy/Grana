@@ -3482,6 +3482,7 @@ dependencies = [
  "grana-scene",
  "grana-session",
  "grana-stitch",
+ "grana-store",
  "grana-ui",
  "grana-update",
  "grana-volume",
@@ -3931,6 +3932,7 @@ name = "grana-readout"
 version = "0.2.3"
 dependencies = [
  "grana-file",
+ "grana-store",
  "grana-volume",
  "hdf5-pure",
  "openreadout-core",

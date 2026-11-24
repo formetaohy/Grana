@@ -157,7 +157,7 @@ impl Tile<'_> {
                             field[slot] = OUTSIDE;
                             continue;
                         };
-                        if !gate.admits(voxel) {
+                        if gate.rejects(value) || !gate.admits(voxel) {
                             field[slot] = OUTSIDE;
                             continue;
                         }

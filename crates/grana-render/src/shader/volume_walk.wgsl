@@ -80,8 +80,7 @@ fn volume_reachable(
 
 fn inside_level(sight: Sight) -> bool {
     let dims = level_frame(sight.band).dims;
-    return all(sight.voxel >= vec3<f32>(-1.0))
-        && all(sight.voxel <= dims + vec3<f32>(1.0));
+    return all(sight.voxel >= vec3<f32>(0.0)) && all(sight.voxel <= dims);
 }
 
 fn walk_open(direction: vec3<f32>, begin: f32, finish: f32, sight: Sight) -> Walk {

@@ -58,6 +58,7 @@ struct LevelArray {
     array: Arc<Array<dyn ReadableStorageTraits>>,
     layout: Layout,
     kind: Kind,
+    fill: u32,
 }
 
 pub struct Label {
@@ -182,6 +183,14 @@ impl Label {
                     output[slot] = data[row + x];
                 }
             }
+        }
+        if level.fill != 0 {
+            let fill = level.fill;
+            output.iter_mut().for_each(|label| {
+                if *label == fill {
+                    *label = 0;
+                }
+            });
         }
         Ok(output)
     }
@@ -335,6 +344,7 @@ fn image(
         }
         levels.push(LevelArray {
             path: opened,
+            fill: background(&array, kind),
             array: Arc::new(array),
             layout,
             kind,
@@ -415,6 +425,20 @@ fn kind(origin: &str, array: &Array<dyn ReadableStorageTraits>) -> Result<Kind, 
             path: origin.to_string(),
             detail: format!("the label data type `{data_type}` is not an integer"),
         })
+    }
+}
+
+fn background(array: &Array<dyn ReadableStorageTraits>, kind: Kind) -> u32 {
+    let bytes = array.fill_value().as_ne_bytes();
+    match kind {
+        Kind::U8 => u32::from(bytes.first().copied().unwrap_or(0)),
+        Kind::U16 => bytes
+            .try_into()
+            .map_or(0, |at: [u8; 2]| u32::from(u16::from_ne_bytes(at))),
+        Kind::U32 => bytes
+            .try_into()
+            .map_or(0, |at: [u8; 4]| u32::from_ne_bytes(at)),
+        Kind::U64 | Kind::I8 | Kind::I16 | Kind::I32 => 0,
     }
 }
 

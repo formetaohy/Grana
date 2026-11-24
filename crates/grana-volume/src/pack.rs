@@ -88,8 +88,8 @@ impl Pack {
     fn stage(&mut self, pyramid: &Pyramid, data: &BrickData, pack: usize) {
         let sources = (0..self.components)
             .map(|component| {
-                data.channels()[pack * PACK + component]
-                    .units(pyramid.channels()[pack * PACK + component].intensity())
+                let info = &pyramid.channels()[pack * PACK + component];
+                data.channels()[pack * PACK + component].units(info.intensity(), info.no_data())
             })
             .collect::<Vec<_>>();
         let stride = texels(self.components);

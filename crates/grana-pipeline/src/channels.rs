@@ -483,10 +483,11 @@ impl Channels {
         let mut bricks = Vec::with_capacity(self.channels());
         for channel in 0..self.channels() {
             if !channels.contains(channel) {
-                let format = formats
-                    .get(channel)
-                    .map_or(grana_volume::VoxelFormat::F32, |info| info.format());
-                bricks.push(blank_brick(format));
+                let no_data = formats.get(channel).map_or_else(
+                    || grana_volume::NoData::zero(grana_volume::VoxelFormat::F32),
+                    grana_volume::ChannelInfo::fill,
+                );
+                bricks.push(blank_brick(no_data));
                 continue;
             }
             let region = self.read_aligned(time, level, channel, &ranges, warps)?;

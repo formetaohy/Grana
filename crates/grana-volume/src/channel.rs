@@ -1,4 +1,4 @@
-use crate::{Intensity, Statistics, VoxelFormat, VoxelSemantics};
+use crate::{Intensity, NoData, Statistics, VoxelFormat, VoxelSemantics};
 
 const BITS: usize = crate::CHANNEL_LIMIT;
 
@@ -74,6 +74,7 @@ pub struct ChannelInfo {
     statistics: Statistics,
     format: VoxelFormat,
     window: Option<Intensity>,
+    no_data: Option<NoData>,
 }
 
 impl ChannelInfo {
@@ -93,6 +94,7 @@ impl ChannelInfo {
             statistics,
             format,
             window: None,
+            no_data: None,
         }
     }
 
@@ -103,6 +105,24 @@ impl ChannelInfo {
         );
         self.window = Some(window);
         self
+    }
+
+    pub fn with_no_data(mut self, no_data: NoData) -> Self {
+        assert_eq!(
+            no_data.format(),
+            self.format,
+            "a channel no-data value holds the format of its volume"
+        );
+        self.no_data = no_data.declared();
+        self
+    }
+
+    pub fn no_data(&self) -> Option<NoData> {
+        self.no_data
+    }
+
+    pub fn fill(&self) -> NoData {
+        self.no_data.unwrap_or_else(|| NoData::zero(self.format))
     }
 
     pub fn window(&self) -> Option<Intensity> {

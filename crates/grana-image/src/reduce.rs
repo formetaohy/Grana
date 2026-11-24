@@ -1,12 +1,12 @@
 use std::ops::Range;
 
-use grana_volume::{BRICK_SIDE, Extent, PADDED_SIDE, VoxelData, VoxelFormat, VoxelSemantics};
+use grana_volume::{
+    BRICK_SIDE, Extent, NoData, PADDED_SIDE, VoxelData, VoxelFormat, VoxelSemantics, VoxelValue,
+};
 
 const RATIO: u32 = 2;
 
 pub(crate) const STEP: u32 = RATIO;
-
-const SAMPLES: f64 = 8.0;
 
 pub(crate) struct Source {
     dims: [usize; 3],
@@ -128,6 +128,7 @@ pub(crate) fn region(
     source: &Source,
     data: &VoxelData,
     ranges: &[Range<u32>; 3],
+    no_data: NoData,
 ) -> VoxelData {
     assert_eq!(
         data.format(),
@@ -135,80 +136,87 @@ pub(crate) fn region(
         "a reduced source holds the format of its level"
     );
     assert_eq!(
+        no_data.format(),
+        format,
+        "a reduced source holds the no-data value of its format"
+    );
+    assert_eq!(
         data.voxel_count(),
         source.count(),
         "a reduced source holds every voxel it serves"
     );
-    let count = ranges
-        .iter()
-        .map(|range| (range.end - range.start) as usize)
-        .product::<usize>();
-    let mut values = Vec::with_capacity(count);
+    let averaging = semantics.averages();
+    let declared = no_data.declared();
     macro_rules! reduce_arms {
-        ($($variant:ident => $cast:expr),*) => {
+        ($($variant:ident),*) => {
             match data {
                 $(
                     VoxelData::$variant(held) => {
-                        reduced(
+                        let fill = match no_data {
+                            NoData::$variant(fill) => fill,
+                            _ => unreachable!("a reduced source holds the no-data value of its format"),
+                        };
+                        VoxelData::$variant(reduced(
                             held,
                             source,
                             ranges,
-                            semantics.averages(),
-                            $cast,
-                            &mut values,
-                        );
+                            averaging,
+                            fill,
+                            declared,
+                        ))
                     }
                 )*
             }
         };
     }
-    reduce_arms!(
-        U8 => |value: u8| f64::from(value),
-        U16 => |value: u16| f64::from(value),
-        U32 => |value: u32| f64::from(value),
-        U64 => |value: u64| value as f64,
-        I8 => |value: i8| f64::from(value),
-        I16 => |value: i16| f64::from(value),
-        I32 => |value: i32| f64::from(value),
-        I64 => |value: i64| value as f64,
-        F32 => |value: f32| f64::from(value),
-        F64 => |value: f64| value
-    );
-    let mut next = values.into_iter();
-    VoxelData::from_values(format, count, || {
-        next.next().expect("a reduced region fills every voxel")
-    })
+    reduce_arms!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
 }
 
-fn reduced<T: Copy>(
+fn reduced<T: VoxelValue>(
     data: &[T],
     source: &Source,
     ranges: &[Range<u32>; 3],
     averages: bool,
-    cast: impl Fn(T) -> f64,
-    values: &mut Vec<f64>,
-) {
+    fill: T,
+    no_data: Option<NoData>,
+) -> Vec<T> {
+    let count = ranges
+        .iter()
+        .map(|range| (range.end - range.start) as usize)
+        .product::<usize>();
+    let mut values = Vec::with_capacity(count);
     for z in ranges[2].clone() {
         for y in ranges[1].clone() {
             for x in ranges[0].clone() {
                 let base = [RATIO * x, RATIO * y, RATIO * z];
-                if averages {
-                    let mut total = 0.0;
-                    for dz in 0..RATIO {
-                        let zz = (base[2] + dz).min(source.extent[2] - 1);
-                        for dy in 0..RATIO {
-                            let yy = (base[1] + dy).min(source.extent[1] - 1);
-                            for dx in 0..RATIO {
-                                let xx = (base[0] + dx).min(source.extent[0] - 1);
-                                total += cast(data[source.index(xx, yy, zz)]);
+                if !averages {
+                    values.push(data[source.index(base[0], base[1], base[2])]);
+                    continue;
+                }
+                let mut total = 0.0;
+                let mut present = 0u32;
+                for dz in 0..RATIO {
+                    let zz = (base[2] + dz).min(source.extent[2] - 1);
+                    for dy in 0..RATIO {
+                        let yy = (base[1] + dy).min(source.extent[1] - 1);
+                        for dx in 0..RATIO {
+                            let xx = (base[0] + dx).min(source.extent[0] - 1);
+                            let held = data[source.index(xx, yy, zz)];
+                            if no_data.is_some_and(|no_data| held.is_no_data(no_data)) {
+                                continue;
                             }
+                            total += held.to_f64();
+                            present += 1;
                         }
                     }
-                    values.push(total / SAMPLES);
-                } else {
-                    values.push(cast(data[source.index(base[0], base[1], base[2])]));
                 }
+                values.push(if present == 0 {
+                    fill
+                } else {
+                    T::from_f64(total / f64::from(present))
+                });
             }
         }
     }
+    values
 }

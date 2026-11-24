@@ -576,7 +576,9 @@ impl Residence {
                 None if planned.truncated || self.denied_frames >= 2 => {
                     Some((planned.desired.base, planned.ladder.base))
                 }
-                None if planned.ladder.base <= planned.desired.base => None,
+                None if self.denied_frames == 0 || planned.ladder.base <= planned.desired.base => {
+                    None
+                }
                 None => self.rejection,
             };
         }

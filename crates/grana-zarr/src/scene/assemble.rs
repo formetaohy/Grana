@@ -32,6 +32,12 @@ pub(super) fn channels(path: &str, members: &[Member]) -> Result<Vec<ChannelInfo
                     detail: "the images of the scene disagree on the voxel data type".to_string(),
                 });
             }
+            if channel.no_data() != reference.channels()[index].no_data() {
+                return Err(Error::Unsupported {
+                    path: path.to_string(),
+                    detail: "the images of the scene disagree on the fill value".to_string(),
+                });
+            }
         }
     }
     Ok((0..count)

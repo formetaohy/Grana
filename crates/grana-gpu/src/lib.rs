@@ -6,6 +6,7 @@ mod memory;
 mod pipeline;
 mod readback;
 mod scope;
+mod system;
 mod table;
 
 pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
@@ -19,4 +20,5 @@ pub use memory::{Memory, Pool};
 pub use pipeline::Pipelines;
 pub use readback::Readback;
 pub use scope::scoped;
+pub use system::physical_memory;
 pub use table::Table;

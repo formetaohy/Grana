@@ -1,9 +1,9 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use grana_volume::{Placement, VoxelData, VoxelFormat};
+use grana_store::{LruCache, Pool};
+use grana_volume::{NoData, Placement, VoxelData, VoxelFormat};
 
-use crate::Cache;
 use crate::codec::{Block as CodecBlock, Compression, reverse_predictor, swap};
 use crate::color::{ColorModel, ColorValues};
 use crate::directory::Directory;
@@ -21,6 +21,13 @@ use crate::tag::{
 const PREDICTOR_NONE: u64 = 1;
 const PREDICTOR_HORIZONTAL: u64 = 2;
 const PREDICTOR_FLOATING: u64 = 3;
+
+type Cache = LruCache<(u64, usize, usize, u32, usize), VoxelData>;
+
+fn blocks() -> &'static Cache {
+    static BLOCKS: OnceLock<Cache> = OnceLock::new();
+    BLOCKS.get_or_init(|| Cache::pooled(Pool::Region, VoxelData::bytes))
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Predictor {
@@ -56,9 +63,8 @@ pub(crate) struct Page {
 
 pub(crate) struct Source<'a> {
     pub store: &'a Store,
-    pub cache: &'a Cache,
     pub path: &'a Path,
-    pub file: usize,
+    pub identity: u64,
 }
 
 pub(crate) struct Plane<'a> {
@@ -309,17 +315,17 @@ impl Page {
         block: &Block,
     ) -> Result<Arc<VoxelData>, Error> {
         let key = (
-            plane.source.file,
+            plane.source.identity,
             plane.level,
             plane.page,
             sample,
             block.index,
         );
-        if let Some(held) = plane.source.cache.fetch(key) {
+        if let Some(held) = blocks().fetch(key) {
             return Ok(held);
         }
         let data = Arc::new(self.decode(plane.source, block)?);
-        plane.source.cache.insert(key, Arc::clone(&data));
+        blocks().insert(key, Arc::clone(&data));
         Ok(data)
     }
 
@@ -508,7 +514,7 @@ impl Page {
         } else {
             pixels * samples
         };
-        VoxelData::blank(self.format, count)
+        VoxelData::filled(NoData::zero(self.format), count)
     }
 
     fn invert(&self, data: &mut VoxelData) {

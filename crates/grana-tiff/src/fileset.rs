@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use grana_ome::{Image as OmeImage, TiffData};
+use grana_store::{LruCache, Pool};
 
 use crate::directory::{self, Directory, Header};
 use crate::error::Error;
@@ -13,57 +14,43 @@ use crate::page::Page;
 use crate::store::{Handles, Store};
 use crate::tag::TAG_IMAGE_DESCRIPTION;
 
-const PAGE_BYTES: u64 = 8 << 20;
-
-const LAYOUT_BYTES: u64 = 32 << 20;
-
 const MEMO_LIMIT: usize = 1 << 16;
 
 const EXTENSIONS: [&str; 5] = ["tif", "tiff", "tf2", "tf8", "btf"];
 
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 
-type PageCache = grana_store::LruCache<(usize, usize, usize), Page>;
-type LayoutCache = grana_store::LruCache<(usize, usize, usize), Layout>;
+type PageCache = LruCache<(u64, usize, usize), Page>;
+type LayoutCache = LruCache<(u64, usize, usize), Layout>;
 type MemoKey = (PathBuf, u64, u128);
 
 static PROBED: OnceLock<Mutex<HashMap<MemoKey, Option<String>>>> = OnceLock::new();
 
-pub(crate) struct Caches {
-    pages: PageCache,
-    layouts: LayoutCache,
+fn pages() -> &'static PageCache {
+    static PAGES: OnceLock<PageCache> = OnceLock::new();
+    PAGES.get_or_init(|| PageCache::pooled(Pool::Page, |page| page.bytes()))
 }
 
-impl Caches {
-    pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Self {
-            pages: PageCache::new(PAGE_BYTES, |page| page.bytes()),
-            layouts: LayoutCache::new(LAYOUT_BYTES, |layout| layout.bytes()),
-        })
-    }
+fn layouts() -> &'static LayoutCache {
+    static LAYOUTS: OnceLock<LayoutCache> = OnceLock::new();
+    LAYOUTS.get_or_init(|| LayoutCache::pooled(Pool::Layout, |layout| layout.bytes()))
 }
 
 pub(crate) struct File {
-    pub(crate) index: usize,
     pub(crate) path: PathBuf,
     pub(crate) store: Store,
     pub(crate) header: Header,
     pub(crate) ifds: Vec<u64>,
     first: Directory,
-    caches: Arc<Caches>,
+    identity: u64,
 }
 
 impl File {
-    pub(crate) fn open(path: &Path, caches: Arc<Caches>) -> Result<Self, Error> {
-        Self::open_with(path, 0, caches, None)
+    pub(crate) fn open(path: &Path) -> Result<Self, Error> {
+        Self::open_with(path, None)
     }
 
-    fn open_with(
-        path: &Path,
-        index: usize,
-        caches: Arc<Caches>,
-        handles: Option<Arc<Handles>>,
-    ) -> Result<Self, Error> {
+    fn open_with(path: &Path, handles: Option<Arc<Handles>>) -> Result<Self, Error> {
         let store = match handles {
             Some(handles) => Store::open_with(path, handles)?,
             None => Store::open(path)?,
@@ -76,18 +63,22 @@ impl File {
             .transpose()?
             .ok_or_else(|| Error::metadata(path, "the file holds no TIFF directory"))?;
         Ok(Self {
-            index,
             path: path.to_path_buf(),
             store,
             header,
             ifds,
             first,
-            caches,
+            identity: digest(path),
         })
     }
 
+    pub(crate) fn identity(&self) -> u64 {
+        self.identity
+    }
+
     pub(crate) fn page(&self, page: usize, level: usize) -> Result<Arc<Page>, Error> {
-        if let Some(held) = self.caches.pages.fetch((self.index, page, level)) {
+        let key = (self.identity, page, level);
+        if let Some(held) = pages().fetch(key) {
             return Ok(held);
         }
         let offset = self.offset(page, level)?;
@@ -98,14 +89,13 @@ impl File {
             self.header.big_endian,
             &self.path,
         )?);
-        self.caches
-            .pages
-            .insert((self.index, page, level), Arc::clone(&held));
+        pages().insert(key, Arc::clone(&held));
         Ok(held)
     }
 
     pub(crate) fn layout(&self, page: usize, level: usize) -> Result<Arc<Layout>, Error> {
-        if let Some(held) = self.caches.layouts.fetch((self.index, page, level)) {
+        let key = (self.identity, page, level);
+        if let Some(held) = layouts().fetch(key) {
             return Ok(held);
         }
         let held = self.page(page, level)?;
@@ -120,9 +110,7 @@ impl File {
             held.planar,
             &self.path,
         )?);
-        self.caches
-            .layouts
-            .insert((self.index, page, level), Arc::clone(&layout));
+        layouts().insert(key, Arc::clone(&layout));
         Ok(layout)
     }
 
@@ -150,20 +138,20 @@ impl File {
     pub(crate) fn page_count(&self) -> usize {
         self.ifds.len()
     }
+}
 
-    fn digest(&self) -> u64 {
-        let path = std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
-        let hash = mix(FNV_BASE, path.to_string_lossy().as_bytes());
-        let metadata = std::fs::metadata(&self.path).ok();
-        let length = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-        let modified = metadata.as_ref().map_or(0, |held| {
-            held.modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map_or(0, |duration| duration.as_nanos() as u64)
-        });
-        mix(mix(hash, &length.to_le_bytes()), &modified.to_le_bytes())
-    }
+fn digest(path: &Path) -> u64 {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let hash = mix(FNV_BASE, path.to_string_lossy().as_bytes());
+    let metadata = std::fs::metadata(&path).ok();
+    let length = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+    let modified = metadata.as_ref().map_or(0, |held| {
+        held.modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_nanos() as u64)
+    });
+    mix(mix(hash, &length.to_le_bytes()), &modified.to_le_bytes())
 }
 
 pub(crate) struct Fileset {
@@ -188,7 +176,6 @@ impl Fileset {
             signatures.insert(signature.clone(), 0);
         }
         record_name(&mut names, &path, 0);
-        let caches = Arc::clone(&root.caches);
         let handles = root.store.handles();
         members.push(root);
         let mut unresolved = Vec::new();
@@ -205,12 +192,7 @@ impl Fileset {
                     ));
                 }
                 let index = members.len();
-                let file = File::open_with(
-                    &sibling,
-                    index,
-                    Arc::clone(&caches),
-                    Some(Arc::clone(&handles)),
-                )?;
+                let file = File::open_with(&sibling, Some(Arc::clone(&handles)))?;
                 let signature = identify(&file).map_err(|detail| {
                     Error::metadata(
                         &path,
@@ -244,7 +226,6 @@ impl Fileset {
         if !unresolved.is_empty() {
             scan(
                 directory,
-                &caches,
                 &handles,
                 &mut members,
                 &mut names,
@@ -279,7 +260,11 @@ impl Fileset {
     }
 
     pub(crate) fn stamp(&self) -> u64 {
-        let mut digests = self.members.iter().map(File::digest).collect::<Vec<_>>();
+        let mut digests = self
+            .members
+            .iter()
+            .map(|member| member.identity)
+            .collect::<Vec<_>>();
         digests.sort_unstable();
         digests
             .iter()
@@ -318,8 +303,7 @@ impl Fileset {
 
 fn scan(
     directory: &Path,
-    caches: &Arc<Caches>,
-    handles: &Arc<crate::store::Handles>,
+    handles: &Arc<Handles>,
     members: &mut Vec<File>,
     names: &mut HashMap<String, usize>,
     signatures: &mut HashMap<String, usize>,
@@ -365,12 +349,7 @@ fn scan(
                 ),
             ));
         }
-        let file = File::open_with(
-            &candidate,
-            members.len(),
-            Arc::clone(caches),
-            Some(Arc::clone(handles)),
-        )?;
+        let file = File::open_with(&candidate, Some(Arc::clone(handles)))?;
         let index = members.len();
         signatures.insert(signature.clone(), index);
         record_name(names, &candidate, index);

@@ -159,6 +159,12 @@ impl Member {
         if dims.contains(&0) {
             return Ok(());
         }
+        let no_data = self
+            .image
+            .pyramid()
+            .channels()
+            .get(channel)
+            .and_then(grana_volume::ChannelInfo::no_data);
         let filter = if self
             .image
             .pyramid()
@@ -205,7 +211,11 @@ impl Member {
                 ];
                 let row = z * stride[2] + y * stride[1];
                 for x in 0..width {
-                    if let Some(value) = data.sample(dims, position, filter) {
+                    if filter == Filter::Nearest {
+                        if let Some(at) = grana_volume::nearest_index(dims, position) {
+                            output.copy_voxel(row + x, &data, at);
+                        }
+                    } else if let Some(value) = data.sample(dims, position, filter, no_data) {
                         output.set_value(row + x, value);
                     }
                     position[0] += step[0][0];

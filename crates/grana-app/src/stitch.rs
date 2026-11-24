@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use grana_stitch::Request;
 
 pub fn command(arguments: &[String]) -> Option<ExitCode> {
+    crate::cli::configure_budget();
     let mut paths = Vec::new();
     let mut channel = 0usize;
     let mut series = 0usize;

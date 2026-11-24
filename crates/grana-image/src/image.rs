@@ -5,15 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Extent, Pyramid, VolumeSeries, VoxelData, VoxelFormat,
-    VoxelSemantics, pad_brick,
+    BrickCoord, BrickData, BrickGrid, Extent, NoData, Pyramid, VolumeSeries, VoxelData,
+    VoxelFormat, VoxelSemantics, pad_brick,
 };
 use grana_warp::{Warp, Warps};
 use grana_zarr::{Labels, Plate};
 use rayon::prelude::*;
 
 use crate::align;
-use crate::cache::{self, Cache, Key, Shape, Store};
+use crate::cache::{self, Key, Shape, Store};
 use crate::level::Scale;
 use crate::reduce;
 use crate::region;
@@ -42,8 +42,7 @@ pub struct Image {
     pyramid: Pyramid,
     series: Vec<Series>,
     selected: usize,
-    identity: Option<u64>,
-    bricks: Cache,
+    namespace: u64,
     store: Option<Store>,
 }
 
@@ -82,6 +81,7 @@ impl Image {
             _ => None,
         };
         let identity = cache::identity(source, &geometry(&pyramid), dataset);
+        let namespace = identity.unwrap_or_else(cache::anonymous);
         let store = match (source, identity) {
             (Source::Memory(_), _) | (_, None) => None,
             (Source::File { .. } | Source::Remote { .. }, Some(_)) => {
@@ -93,8 +93,7 @@ impl Image {
             pyramid,
             series,
             selected: source.series(),
-            identity,
-            bricks: cache::bricks(),
+            namespace,
             store,
         })
     }
@@ -176,6 +175,16 @@ impl Image {
         self.aligned_region(time, level, channel, ranges, warp)
     }
 
+    pub fn fill(&self, channel: usize) -> Result<NoData, Error> {
+        self.pyramid
+            .channels()
+            .get(channel)
+            .map(grana_volume::ChannelInfo::fill)
+            .ok_or_else(|| Error::Resolved {
+                detail: "the requested channel does not exist".to_string(),
+            })
+    }
+
     pub fn read_brick(
         &self,
         time: u32,
@@ -244,7 +253,7 @@ impl Image {
         let origin = [spatial[0].start, spatial[1].start, spatial[2].start];
         let key = self.key(time, level, channel, [coord.x(), coord.y(), coord.z()]);
         let memoised = !matches!(self.inner, Inner::Zarr(_));
-        if memoised && let Some(data) = self.bricks.fetch(key) {
+        if memoised && let Some(data) = cache::bricks().fetch(key) {
             return Ok(data);
         }
         let data = if level < self.pyramid.stored() {
@@ -267,7 +276,7 @@ impl Image {
             ))
         };
         if memoised {
-            self.bricks.insert(key, Arc::clone(&data));
+            cache::bricks().insert(key, Arc::clone(&data));
         }
         Ok(data)
     }
@@ -357,17 +366,17 @@ impl Image {
         ranges: &[Range<u32>; 3],
         warp: &Warp,
     ) -> Result<VoxelData, Error> {
-        let format = self.channel_format(channel)?;
+        let fill = self.fill(channel)?;
         let extent = self.level_extent(level)?;
         let info = self.pyramid.level(level);
         let semantics = self.pyramid.channels()[channel].semantics();
         let limits = [extent.x(), extent.y(), extent.z()];
         let plan = align::plan(ranges, info, warp, limits);
         if plan.source().iter().any(|range| range.start >= range.end) {
-            return Ok(align::zeros(format, ranges));
+            return Ok(align::filled(fill, ranges));
         }
         let data = self.region_at(time, level, channel, plan.source())?;
-        Ok(align::resample(&data, &plan, ranges, semantics))
+        Ok(align::resample(&data, &plan, ranges, semantics, fill))
     }
 
     fn channel_format(&self, channel: usize) -> Result<VoxelFormat, Error> {
@@ -387,47 +396,56 @@ impl Image {
         channel: usize,
         ranges: &[Range<u32>; 3],
     ) -> Result<VoxelData, Error> {
-        match &self.inner {
-            Inner::Memory(series) => Ok(series.region(
-                time,
-                channel,
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            )),
-            Inner::Zarr(image) => Ok(image.read_region(
-                time,
-                level,
-                channel,
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            )?),
-            Inner::Tiff(image) => Ok(image.read_region(
-                time,
-                level,
-                channel,
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            )?),
-            Inner::Czi(image) => Ok(image.read_region(
-                time,
-                level,
-                channel,
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            )?),
-            Inner::Readout(image) => Ok(image.read_region(
-                time,
-                level,
-                channel,
-                ranges[0].clone(),
-                ranges[1].clone(),
-                ranges[2].clone(),
-            )?),
+        let extent = self.level_extent(level)?;
+        let fill = self.fill(channel)?;
+        let clipped = clip(ranges, extent);
+        let mut output = region::allocate(fill, ranges);
+        if clipped.iter().any(|range| range.start >= range.end) {
+            return Ok(output);
         }
+        let stored = match &self.inner {
+            Inner::Memory(series) => series.region(
+                time,
+                channel,
+                clipped[0].clone(),
+                clipped[1].clone(),
+                clipped[2].clone(),
+            ),
+            Inner::Zarr(image) => image.read_region(
+                time,
+                level,
+                channel,
+                clipped[0].clone(),
+                clipped[1].clone(),
+                clipped[2].clone(),
+            )?,
+            Inner::Tiff(image) => image.read_region(
+                time,
+                level,
+                channel,
+                clipped[0].clone(),
+                clipped[1].clone(),
+                clipped[2].clone(),
+            )?,
+            Inner::Czi(image) => image.read_region(
+                time,
+                level,
+                channel,
+                clipped[0].clone(),
+                clipped[1].clone(),
+                clipped[2].clone(),
+            )?,
+            Inner::Readout(image) => image.read_region(
+                time,
+                level,
+                channel,
+                clipped[0].clone(),
+                clipped[1].clone(),
+                clipped[2].clone(),
+            )?,
+        };
+        region::copy_intersection(&mut output, ranges, &stored, &clipped);
+        Ok(output)
     }
 
     fn resolved_region(
@@ -443,25 +461,19 @@ impl Image {
                 detail: "the requested frame does not exist".to_string(),
             });
         }
-        let Some(info) = self.pyramid.channels().get(channel) else {
+        if self.pyramid.channels().get(channel).is_none() {
             return Err(Error::Resolved {
                 detail: "the requested channel does not exist".to_string(),
             });
-        };
-        if ranges[0].start >= ranges[0].end
-            || ranges[0].end > extent.x()
-            || ranges[1].start >= ranges[1].end
-            || ranges[1].end > extent.y()
-            || ranges[2].start >= ranges[2].end
-            || ranges[2].end > extent.z()
-        {
-            return Err(Error::Resolved {
-                detail: "the region lies outside the resolved level".to_string(),
-            });
         }
-        let mut output = region::allocate(info.format(), ranges);
+        let fill = self.fill(channel)?;
+        let mut output = region::allocate(fill, ranges);
+        let clipped = clip(ranges, extent);
+        if clipped.iter().any(|range| range.start >= range.end) {
+            return Ok(output);
+        }
         let grid = BrickGrid::new(extent);
-        let (first, last) = grid.cover(ranges);
+        let (first, last) = grid.cover(&clipped);
         for z in first[2]..=last[2] {
             for y in first[1]..=last[1] {
                 for x in first[0]..=last[0] {
@@ -494,7 +506,8 @@ impl Image {
         });
         let source = reduce::Source::new(source_extent, &source_ranges);
         let format = self.channel_format(channel)?;
-        let mut data = VoxelData::blank(format, source.count());
+        let fill = self.fill(channel)?;
+        let mut data = VoxelData::filled(fill, source.count());
         let grid = BrickGrid::new(source_extent);
         let (first, last) = grid.cover(&source_ranges);
         for z in first[2]..=last[2] {
@@ -510,7 +523,9 @@ impl Image {
             .channels()
             .get(channel)
             .map_or(VoxelSemantics::Scalar, |info| info.semantics());
-        Ok(reduce::region(format, semantics, &source, &data, ranges))
+        Ok(reduce::region(
+            format, semantics, &source, &data, ranges, fill,
+        ))
     }
 
     fn held(
@@ -540,7 +555,7 @@ impl Image {
 
     fn key(&self, time: u32, level: usize, channel: usize, coord: [u32; 3]) -> Key {
         Key {
-            identity: self.identity.unwrap_or(0),
+            identity: self.namespace,
             level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
             time,
             channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
@@ -591,6 +606,15 @@ fn covered_extent(ranges: &[Range<u32>; 3]) -> Extent {
         ranges[1].end - ranges[1].start,
         ranges[2].end - ranges[2].start,
     )
+}
+
+fn clip(ranges: &[Range<u32>; 3], extent: Extent) -> [Range<u32>; 3] {
+    let limits = [extent.x(), extent.y(), extent.z()];
+    [0, 1, 2].map(|axis| {
+        let start = ranges[axis].start.min(limits[axis]);
+        let end = ranges[axis].end.min(limits[axis]);
+        start..end
+    })
 }
 
 fn geometry(pyramid: &Pyramid) -> Vec<u8> {
@@ -956,7 +980,7 @@ fn open_zarr(
 ) -> Result<(grana_zarr::Image, Vec<Series>), Error> {
     let plate = grana_zarr::group_kind(&root)? == grana_zarr::GroupKind::Plate;
     if let Some(group) = group {
-        let image = grana_zarr::Image::open_root(root.clone(), group, cache::decode_budget())?;
+        let image = grana_zarr::Image::open_root(root.clone(), group)?;
         let listed = if plate {
             vec![Series::of(image.pyramid())]
         } else if let Some(collection) = collection_of_root(&root)? {
@@ -973,7 +997,7 @@ fn open_zarr(
         });
     }
     let Some(collection) = collection_of_root(&root)? else {
-        let image = grana_zarr::Image::open_root(root, "/", cache::decode_budget())?;
+        let image = grana_zarr::Image::open_root(root, "/")?;
         let listed = single_series(image.pyramid(), location, series)?;
         return Ok((image, listed));
     };
@@ -986,7 +1010,7 @@ fn open_zarr(
                 collection.series().len()
             ),
         })?;
-    let image = grana_zarr::Image::open_root(root.clone(), entry.path(), cache::decode_budget())?;
+    let image = grana_zarr::Image::open_root(root.clone(), entry.path())?;
     let listed = collection_series(&root, &collection, series, &image)?;
     Ok((image, listed))
 }

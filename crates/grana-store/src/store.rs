@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::page::{Decode, Payload, StoreId};
 use crate::scratch::Scratch;
 
-pub const DEFAULT_BUDGET: u64 = 768 << 20;
+pub const SPILL_BUDGET: u64 = 768 << 20;
 
 const RECLAIM_FACTOR: u64 = 4;
 
@@ -41,20 +41,27 @@ struct Inner {
     length: u64,
     resident: u64,
     spilled: u64,
+    copies: u64,
     stamp: u64,
     next: u32,
     entries: HashMap<u32, Slot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Encoded {
+    offset: u64,
+    length: u64,
 }
 
 enum Slot {
     Resident {
         payload: Arc<dyn Payload>,
         bytes: u64,
+        encoded: Option<Encoded>,
         stamp: u64,
     },
     Spilled {
-        offset: u64,
-        length: u64,
+        encoded: Encoded,
         stamp: u64,
     },
 }
@@ -63,7 +70,14 @@ impl Slot {
     fn bytes(&self) -> u64 {
         match self {
             Self::Resident { bytes, .. } => *bytes,
-            Self::Spilled { length, .. } => *length,
+            Self::Spilled { encoded, .. } => encoded.length,
+        }
+    }
+
+    fn encoded(&self) -> Option<Encoded> {
+        match self {
+            Self::Resident { encoded, .. } => *encoded,
+            Self::Spilled { encoded, .. } => Some(*encoded),
         }
     }
 
@@ -80,9 +94,41 @@ impl Slot {
             }
         }
     }
+
+    fn shift(&mut self, was: u64, now: u64) {
+        match self {
+            Self::Resident {
+                encoded: Some(encoded),
+                ..
+            } => {
+                if encoded.offset == was {
+                    encoded.offset = now;
+                }
+            }
+            Self::Spilled { encoded, .. } => {
+                if encoded.offset == was {
+                    encoded.offset = now;
+                }
+            }
+            Self::Resident { encoded: None, .. } => {}
+        }
+    }
 }
 
 impl Inner {
+    fn empty() -> Self {
+        Self {
+            scratch: None,
+            length: 0,
+            resident: 0,
+            spilled: 0,
+            copies: 0,
+            stamp: 0,
+            next: 0,
+            entries: HashMap::new(),
+        }
+    }
+
     fn format(&self) -> Error {
         Error::Format { path: self.path() }
     }
@@ -100,14 +146,37 @@ impl Inner {
         Ok(self.scratch.as_mut().expect("an inner holds its scratch"))
     }
 
-    fn bytes(&self, offset: u64, length: u64) -> Result<&[u8], Error> {
-        let start = usize::try_from(offset).map_err(|_| self.format())?;
-        let end = usize::try_from(offset + length).map_err(|_| self.format())?;
+    fn bytes(&self, encoded: Encoded) -> Result<&[u8], Error> {
+        let start = usize::try_from(encoded.offset).map_err(|_| self.format())?;
+        let end = usize::try_from(encoded.offset + encoded.length).map_err(|_| self.format())?;
         self.scratch
             .as_ref()
             .and_then(Scratch::bytes)
             .and_then(|bytes| bytes.get(start..end))
             .ok_or_else(|| self.format())
+    }
+
+    fn write(&mut self, encoded: Encoded, payload: &[u8]) -> Result<(), Error> {
+        let start = usize::try_from(encoded.offset).map_err(|_| self.format())?;
+        let end = usize::try_from(encoded.offset + encoded.length).map_err(|_| self.format())?;
+        let scratch = self.scratch()?;
+        scratch.reserve(encoded.offset + encoded.length)?;
+        let path = scratch.path().to_path_buf();
+        scratch
+            .bytes_mut()?
+            .get_mut(start..end)
+            .ok_or_else(|| Error::Spill {
+                path,
+                detail: "the spill file outgrew its mapping".to_string(),
+            })?
+            .copy_from_slice(payload);
+        Ok(())
+    }
+
+    fn reseat(&mut self, id: u32, encoded: Encoded) {
+        self.stamp += 1;
+        let stamp = self.stamp;
+        self.entries.insert(id, Slot::Spilled { encoded, stamp });
     }
 }
 
@@ -140,6 +209,7 @@ impl SpillStore {
             Slot::Resident {
                 payload: Arc::new(payload),
                 bytes,
+                encoded: None,
                 stamp,
             },
         );
@@ -152,7 +222,7 @@ impl SpillStore {
         let mut inner = self.inner();
         inner.stamp += 1;
         let stamp = inner.stamp;
-        let span = match inner.entries.get_mut(&id.raw()) {
+        let encoded = match inner.entries.get_mut(&id.raw()) {
             None => return Err(Error::Unknown),
             Some(Slot::Resident {
                 payload,
@@ -167,26 +237,25 @@ impl SpillStore {
                     .map_err(|_| inner.format());
             }
             Some(Slot::Spilled {
-                offset,
-                length,
+                encoded,
                 stamp: used,
             }) => {
                 *used = stamp;
-                (*offset, *length)
+                *encoded
             }
         };
-        let payload =
-            Arc::new(T::decode(inner.bytes(span.0, span.1)?).ok_or_else(|| inner.format())?);
+        let payload = Arc::new(T::decode(inner.bytes(encoded)?).ok_or_else(|| inner.format())?);
         if let Some(slot) = inner.entries.get_mut(&id.raw())
             && matches!(slot, Slot::Spilled { .. })
         {
             *slot = Slot::Resident {
                 payload: Arc::clone(&payload) as Arc<dyn Payload>,
-                bytes: span.1,
+                bytes: encoded.length,
+                encoded: Some(encoded),
                 stamp,
             };
-            inner.resident += span.1;
-            inner.spilled = inner.spilled.saturating_sub(span.1);
+            inner.resident += encoded.length;
+            inner.spilled = inner.spilled.saturating_sub(encoded.length);
         }
         drop(inner);
         self.settle()?;
@@ -208,8 +277,23 @@ impl SpillStore {
             return;
         };
         match slot {
-            Slot::Resident { bytes, .. } => inner.resident = inner.resident.saturating_sub(bytes),
-            Slot::Spilled { length, .. } => inner.spilled = inner.spilled.saturating_sub(length),
+            Slot::Resident {
+                bytes,
+                encoded: Some(encoded),
+                ..
+            } => {
+                inner.resident = inner.resident.saturating_sub(bytes);
+                inner.copies = inner.copies.saturating_sub(encoded.length);
+            }
+            Slot::Resident {
+                bytes,
+                encoded: None,
+                ..
+            } => inner.resident = inner.resident.saturating_sub(bytes),
+            Slot::Spilled { encoded, .. } => {
+                inner.spilled = inner.spilled.saturating_sub(encoded.length);
+                inner.copies = inner.copies.saturating_sub(encoded.length);
+            }
         }
     }
 
@@ -235,43 +319,33 @@ impl SpillStore {
             let Some(id) = victim else {
                 return Ok(());
             };
-            let payload = match inner.entries.get(&id) {
-                Some(Slot::Resident { payload, .. }) => Arc::clone(payload),
+            let (payload, bytes, held) = match inner.entries.get(&id) {
+                Some(Slot::Resident {
+                    payload,
+                    bytes,
+                    encoded,
+                    ..
+                }) => (Arc::clone(payload), *bytes, *encoded),
                 _ => continue,
             };
-            let encoded = payload.encode();
-            let length = encoded.len() as u64;
-            let offset = inner.length;
-            let start = usize::try_from(offset).map_err(|_| inner.format())?;
-            let end = usize::try_from(offset + length).map_err(|_| inner.format())?;
-            let scratch = inner.scratch()?;
-            scratch.reserve(offset + length)?;
-            let path = scratch.path().to_path_buf();
-            scratch
-                .bytes_mut()?
-                .get_mut(start..end)
-                .ok_or_else(|| Error::Spill {
-                    path,
-                    detail: "the spill file outgrew its mapping".to_string(),
-                })?
-                .copy_from_slice(&encoded);
-            inner.length += length;
-            if let Some(slot) = inner.entries.get_mut(&id)
-                && matches!(slot, Slot::Resident { .. })
-            {
-                let stored = slot.bytes();
-                inner.stamp += 1;
-                let stamp = inner.stamp;
-                inner.entries.insert(
-                    id,
-                    Slot::Spilled {
-                        offset,
-                        length,
-                        stamp,
-                    },
-                );
-                inner.resident = inner.resident.saturating_sub(stored);
-                inner.spilled += length;
+            let (encoded, written) = match held {
+                Some(encoded) => (encoded, false),
+                None => {
+                    let payload = payload.encode();
+                    let encoded = Encoded {
+                        offset: inner.length,
+                        length: payload.len() as u64,
+                    };
+                    inner.write(encoded, &payload)?;
+                    inner.length += encoded.length;
+                    (encoded, true)
+                }
+            };
+            inner.reseat(id, encoded);
+            inner.resident = inner.resident.saturating_sub(bytes);
+            inner.spilled += encoded.length;
+            if written {
+                inner.copies += encoded.length;
             }
         }
         Ok(())
@@ -281,39 +355,34 @@ impl SpillStore {
         if inner.scratch.is_none() {
             return Ok(());
         }
-        let occupied = inner.spilled;
-        if inner.length <= RECLAIM_FACTOR * self.budget || occupied * 2 >= inner.length {
+        if inner.length <= RECLAIM_FACTOR * self.budget || inner.copies * 2 >= inner.length {
             return Ok(());
         }
         let mut plan = inner
             .entries
             .iter()
-            .filter_map(|(id, slot)| match slot {
-                Slot::Resident { .. } => None,
-                Slot::Spilled { offset, length, .. } => Some((*id, *offset, *length)),
-            })
+            .filter_map(|(id, slot)| slot.encoded().map(|encoded| (*id, encoded)))
             .collect::<Vec<_>>();
-        plan.sort_unstable_by_key(|(_, offset, _)| *offset);
+        plan.sort_unstable_by_key(|(_, encoded)| encoded.offset);
         let mut cursor = 0u64;
         let mut moved = Vec::with_capacity(plan.len());
-        for (id, offset, length) in plan {
-            if offset != cursor {
-                let start = usize::try_from(offset).map_err(|_| inner.format())?;
-                let end = usize::try_from(offset + length).map_err(|_| inner.format())?;
+        for (id, encoded) in plan {
+            if encoded.offset != cursor {
+                let start = usize::try_from(encoded.offset).map_err(|_| inner.format())?;
+                let end =
+                    usize::try_from(encoded.offset + encoded.length).map_err(|_| inner.format())?;
                 let target = usize::try_from(cursor).map_err(|_| inner.format())?;
                 let scratch = inner.scratch()?;
                 scratch.bytes_mut()?.copy_within(start..end, target);
             }
-            moved.push((id, offset, cursor));
-            cursor += length;
+            moved.push((id, encoded.offset, cursor));
+            cursor += encoded.length;
         }
         inner.scratch()?.shrink(cursor)?;
         inner.length = cursor;
         for (id, was, now) in moved {
-            if let Some(Slot::Spilled { offset, .. }) = inner.entries.get_mut(&id)
-                && *offset == was
-            {
-                *offset = now;
+            if let Some(slot) = inner.entries.get_mut(&id) {
+                slot.shift(was, now);
             }
         }
         Ok(())
@@ -321,19 +390,5 @@ impl SpillStore {
 
     fn inner(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|error| error.into_inner())
-    }
-}
-
-impl Inner {
-    fn empty() -> Self {
-        Self {
-            scratch: None,
-            length: 0,
-            resident: 0,
-            spilled: 0,
-            stamp: 0,
-            next: 0,
-            entries: HashMap::new(),
-        }
     }
 }

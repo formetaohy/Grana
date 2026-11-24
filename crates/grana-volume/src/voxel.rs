@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{Extent, Intensity};
+use crate::{Extent, Intensity, NoData};
 
 pub const UNIT_MAXIMUM: f32 = 65535.0;
 
@@ -37,12 +37,15 @@ pub struct VoxelUnits<'a> {
     data: &'a VoxelData,
     minimum: f32,
     scale: f32,
+    no_data: Option<NoData>,
 }
 
 pub trait VoxelValue: Copy + 'static {
     fn to_f32(self) -> f32;
     fn to_f64(self) -> f64;
     fn from_f32(value: f32) -> Self;
+    fn from_f64(value: f64) -> Self;
+    fn is_no_data(self, no_data: NoData) -> bool;
 }
 
 impl VoxelFormat {
@@ -145,19 +148,8 @@ impl VoxelData {
         (self.voxel_count() * self.format().bytes()) as u64
     }
 
-    pub fn blank(format: VoxelFormat, count: usize) -> Self {
-        match format {
-            VoxelFormat::U8 => Self::U8(vec![0; count]),
-            VoxelFormat::U16 => Self::U16(vec![0; count]),
-            VoxelFormat::U32 => Self::U32(vec![0; count]),
-            VoxelFormat::U64 => Self::U64(vec![0; count]),
-            VoxelFormat::I8 => Self::I8(vec![0; count]),
-            VoxelFormat::I16 => Self::I16(vec![0; count]),
-            VoxelFormat::I32 => Self::I32(vec![0; count]),
-            VoxelFormat::I64 => Self::I64(vec![0; count]),
-            VoxelFormat::F32 => Self::F32(vec![0.0; count]),
-            VoxelFormat::F64 => Self::F64(vec![0.0; count]),
-        }
+    pub fn filled(no_data: NoData, count: usize) -> Self {
+        no_data.filled(count)
     }
 
     pub fn reinterpret(format: VoxelFormat, bytes: &[u8]) -> Self {
@@ -410,12 +402,13 @@ impl VoxelData {
         )
     }
 
-    pub fn units(&self, intensity: Intensity) -> VoxelUnits<'_> {
+    pub fn units(&self, intensity: Intensity, no_data: Option<NoData>) -> VoxelUnits<'_> {
         let span = intensity.span();
         VoxelUnits {
             data: self,
             minimum: intensity.min(),
             scale: if span > 0.0 { UNIT_MAXIMUM / span } else { 0.0 },
+            no_data,
         }
     }
 
@@ -504,16 +497,32 @@ impl VoxelData {
         }
     }
 
+    pub fn for_each_present_value(&self, no_data: Option<NoData>, mut visit: impl FnMut(f32)) {
+        macro_rules! present {
+            ($($variant:ident),*) => {
+                match self {
+                    $(Self::$variant(data) => data.iter().for_each(|value| {
+                        if !no_data.is_some_and(|no_data| value.is_no_data(no_data)) {
+                            visit(value.to_f32());
+                        }
+                    }),)*
+                }
+            };
+        }
+        present!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+    }
+
     pub fn sample(
         &self,
         dims: [usize; 3],
         position: [f64; 3],
         filter: crate::Filter,
+        no_data: Option<NoData>,
     ) -> Option<f32> {
         macro_rules! held {
             ($($variant:ident),*) => {
                 match self {
-                    $(Self::$variant(data) => crate::resample(data, dims, position, filter),)*
+                    $(Self::$variant(data) => crate::resample(data, dims, position, filter, no_data),)*
                 }
             };
         }
@@ -533,6 +542,29 @@ impl VoxelData {
         }
         held!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
     }
+
+    pub fn copy_voxel(&mut self, target: usize, source: &Self, at: usize) {
+        assert_eq!(
+            self.format(),
+            source.format(),
+            "a voxel copy keeps its format"
+        );
+        assert!(
+            target < self.voxel_count() && at < source.voxel_count(),
+            "a copied voxel lies inside both volumes"
+        );
+        macro_rules! held {
+            ($($variant:ident),*) => {
+                match (self, source) {
+                    $( (Self::$variant(destination), Self::$variant(source)) => {
+                        destination[target] = source[at];
+                    })*
+                    _ => unreachable!("a voxel copy keeps its format"),
+                }
+            };
+        }
+        held!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+    }
 }
 
 impl VoxelUnits<'_> {
@@ -543,6 +575,7 @@ impl VoxelUnits<'_> {
         );
         let minimum = self.minimum;
         let scale = self.scale;
+        let no_data = self.no_data;
         let unit = move |value: f32| {
             if scale > 0.0 && value.is_finite() {
                 ((value - minimum) * scale).clamp(0.0, UNIT_MAXIMUM)
@@ -551,16 +584,16 @@ impl VoxelUnits<'_> {
             }
         };
         match self.data {
-            VoxelData::U8(data) => visit_range(data, range, unit, visit),
-            VoxelData::U16(data) => visit_range(data, range, unit, visit),
-            VoxelData::U32(data) => visit_range(data, range, unit, visit),
-            VoxelData::U64(data) => visit_range(data, range, unit, visit),
-            VoxelData::I8(data) => visit_range(data, range, unit, visit),
-            VoxelData::I16(data) => visit_range(data, range, unit, visit),
-            VoxelData::I32(data) => visit_range(data, range, unit, visit),
-            VoxelData::I64(data) => visit_range(data, range, unit, visit),
-            VoxelData::F32(data) => visit_range(data, range, unit, visit),
-            VoxelData::F64(data) => visit_range(data, range, unit, visit),
+            VoxelData::U8(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::U16(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::U32(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::U64(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::I8(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::I16(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::I32(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::I64(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::F32(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::F64(data) => visit_range(data, range, no_data, unit, visit),
         }
     }
 }
@@ -632,12 +665,17 @@ fn blit_rows<T: Copy>(
 fn visit_range<T: VoxelValue>(
     data: &[T],
     range: Range<usize>,
+    no_data: Option<NoData>,
     unit: impl Fn(f32) -> f32,
     mut visit: impl FnMut(f32),
 ) {
-    data[range]
-        .iter()
-        .for_each(|value| visit(unit(value.to_f32())));
+    data[range].iter().for_each(|value| {
+        if no_data.is_some_and(|no_data| value.is_no_data(no_data)) {
+            visit(0.0);
+        } else {
+            visit(unit(value.to_f32()));
+        }
+    });
 }
 
 fn extract<T: Copy>(
@@ -660,7 +698,7 @@ fn extract<T: Copy>(
 }
 
 macro_rules! value {
-    ($type:ty, $minimum:expr, $maximum:expr) => {
+    ($type:ty, $minimum:expr, $maximum:expr, $variant:ident) => {
         impl VoxelValue for $type {
             fn to_f32(self) -> f32 {
                 self as f32
@@ -673,18 +711,26 @@ macro_rules! value {
             fn from_f32(value: f32) -> Self {
                 value.round().clamp($minimum as f32, $maximum as f32) as Self
             }
+
+            fn from_f64(value: f64) -> Self {
+                value.round().clamp($minimum as f64, $maximum as f64) as Self
+            }
+
+            fn is_no_data(self, no_data: NoData) -> bool {
+                matches!(no_data, NoData::$variant(held) if held == self)
+            }
         }
     };
 }
 
-value!(u8, u8::MIN, u8::MAX);
-value!(u16, u16::MIN, u16::MAX);
-value!(u32, u32::MIN, u32::MAX);
-value!(u64, u64::MIN, u64::MAX);
-value!(i8, i8::MIN, i8::MAX);
-value!(i16, i16::MIN, i16::MAX);
-value!(i32, i32::MIN, i32::MAX);
-value!(i64, i64::MIN, i64::MAX);
+value!(u8, u8::MIN, u8::MAX, U8);
+value!(u16, u16::MIN, u16::MAX, U16);
+value!(u32, u32::MIN, u32::MAX, U32);
+value!(u64, u64::MIN, u64::MAX, U64);
+value!(i8, i8::MIN, i8::MAX, I8);
+value!(i16, i16::MIN, i16::MAX, I16);
+value!(i32, i32::MIN, i32::MAX, I32);
+value!(i64, i64::MIN, i64::MAX, I64);
 
 impl VoxelValue for f32 {
     fn to_f32(self) -> f32 {
@@ -697,6 +743,14 @@ impl VoxelValue for f32 {
 
     fn from_f32(value: f32) -> Self {
         value
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+
+    fn is_no_data(self, no_data: NoData) -> bool {
+        matches!(no_data, NoData::F32(held) if held == self || (held.is_nan() && self.is_nan()))
     }
 }
 
@@ -711,5 +765,13 @@ impl VoxelValue for f64 {
 
     fn from_f32(value: f32) -> Self {
         f64::from(value)
+    }
+
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+
+    fn is_no_data(self, no_data: NoData) -> bool {
+        matches!(no_data, NoData::F64(held) if held == self || (held.is_nan() && self.is_nan()))
     }
 }

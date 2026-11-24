@@ -426,6 +426,10 @@ impl MeshPasses {
         }
     }
 
+    pub fn set_budget(&mut self, budget: u64) {
+        self.budget = budget;
+    }
+
     pub fn clear(&mut self) {
         self.geometries.clear();
         self.rows.clear();

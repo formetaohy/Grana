@@ -1,13 +1,13 @@
 use std::ops::Range;
 
-use grana_volume::{VoxelData, VoxelFormat};
+use grana_volume::{NoData, VoxelData};
 
-pub(crate) fn allocate(format: VoxelFormat, ranges: &[Range<u32>; 3]) -> VoxelData {
+pub(crate) fn allocate(no_data: NoData, ranges: &[Range<u32>; 3]) -> VoxelData {
     let count = ranges
         .iter()
         .map(|range| u64::from(range.end - range.start))
         .product::<u64>() as usize;
-    VoxelData::blank(format, count)
+    VoxelData::filled(no_data, count)
 }
 
 pub(crate) fn copy_intersection(

@@ -627,6 +627,7 @@ fn surfaces(
                 region,
                 pyramid.channels()[channel].intensity(),
             )
+            .with_no_data(pyramid.channels()[channel].no_data())
             .with_seeds(frame_seeds, policy);
             let mask = domain.mask(roi.as_ref(), time)?;
             let set = builder.scan(

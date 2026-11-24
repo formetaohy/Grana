@@ -10,7 +10,7 @@ use grana_measure::{ColocPair, ColocSeries, Lasso};
 use grana_mesh::Format as MeshFormat;
 use grana_project::{Export, NamedView, Project, Source as ProjectSource, ViewState};
 use grana_scene::{Dataset, MaskFilter, Measure, ObjectParams, ObjectSetId, Scene, slug};
-use grana_store::DEFAULT_BUDGET;
+use grana_store::SPILL_BUDGET;
 use grana_store::SpillStore;
 use grana_volume::Pyramid;
 
@@ -67,7 +67,7 @@ fn write_dataset(task: &Task<'_>, dataset: &DatasetEntry, folder: &Path) -> Resu
         None => Source::file_series(path.to_path_buf(), scene),
     };
     let reader = Arc::new(Image::open(&source)?);
-    let store = SpillStore::temporary(DEFAULT_BUDGET)
+    let store = SpillStore::temporary(SPILL_BUDGET)
         .map_err(|error| format!("the dataset cannot page its geometry: {error}"))?;
     let name = dataset.title();
     let mut artifacts = artifacts(task.protocol, &name, task.project, task.channels);

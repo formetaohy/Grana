@@ -45,7 +45,7 @@ use grana_scene::{
     Criteria, Dataset, FilterRange, Item, Job, LassoPath, MaskExtent, Measure, ObjectFrame,
     ObjectParams, ObjectSetId, Origin, Progress, Revision, Revisions, Scene,
 };
-use grana_store::DEFAULT_BUDGET;
+use grana_store::SPILL_BUDGET;
 use grana_store::SpillStore;
 use grana_volume::{
     BrickRequest, Calibration, Damage, Fingerprint, PackedBrick, Spacing, packed_bytes,
@@ -241,7 +241,7 @@ impl Session {
             access,
             read_only: false,
             scene: None,
-            store: SpillStore::temporary(DEFAULT_BUDGET)
+            store: SpillStore::temporary(SPILL_BUDGET)
                 .expect("the geometry store needs a temporary file"),
             measure: Measure::new(),
             tasks: Tasks::default(),
@@ -682,21 +682,23 @@ impl Session {
         {
             return;
         }
-        let Some(channels) = self.source.as_ref().and_then(Loader::channels) else {
-            return;
-        };
-        let Some(decode) = channels.decode() else {
-            return;
-        };
         self.decode_reported = Some(now);
-        grana_log::info!(
-            target: "grana::stream",
-            hits = decode.hits(),
-            misses = decode.misses(),
-            hit_rate = decode.hit_rate(),
-            amplification = decode.amplification(),
-            "the decode cache reports its reuse"
-        );
+        if let Some(decode) = self
+            .source
+            .as_ref()
+            .and_then(Loader::channels)
+            .and_then(|channels| channels.decode())
+        {
+            grana_log::info!(
+                target: "grana::stream",
+                hits = decode.hits(),
+                misses = decode.misses(),
+                hit_rate = decode.hit_rate(),
+                amplification = decode.amplification(),
+                "the decode cache reports its reuse"
+            );
+        }
+        report_pools();
     }
     pub fn take_abandoned(&mut self) -> Vec<BrickRequest> {
         std::mem::take(&mut self.abandoned)
@@ -933,4 +935,23 @@ fn file_name(path: &Path) -> String {
         || path.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
+}
+
+fn report_pools() {
+    for pool in grana_store::Pool::all() {
+        let meter = pool.meter();
+        if meter.hits() + meter.misses() == 0 {
+            continue;
+        }
+        grana_log::info!(
+            target: "grana::cache",
+            pool = pool.name(),
+            share = pool.share(),
+            hits = meter.hits(),
+            misses = meter.misses(),
+            hit_rate = meter.hit_rate(),
+            evicted = meter.evicted(),
+            "the cache pool reports its reuse"
+        );
+    }
 }

@@ -2,14 +2,22 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
+use grana_store::Pool;
 use grana_volume::VoxelFormat;
 use openreadout_core::{PixelType, Plane};
 
-pub(crate) type Key = (u32, u32, u32, u32);
-
 const SHARDS: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Key {
+    pub(crate) source: u64,
+    pub(crate) level: u32,
+    pub(crate) time: u32,
+    pub(crate) channel: u32,
+    pub(crate) depth: u32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct View {
@@ -59,23 +67,6 @@ impl Cache {
             tick: 0,
             planes: HashMap::new(),
         }
-    }
-
-    pub(crate) fn get(&mut self, key: &Key) -> Option<Arc<Plane>> {
-        let used = self.advance();
-        let held = self.planes.get_mut(key)?;
-        let Held::Ready {
-            plane, used: stamp, ..
-        } = held
-        else {
-            return None;
-        };
-        *stamp = used;
-        Some(Arc::clone(plane))
-    }
-
-    pub(crate) fn put(&mut self, key: Key, plane: Arc<Plane>) {
-        self.settle(&key, plane);
     }
 
     fn claim(&mut self, key: &Key) -> Claim {
@@ -154,8 +145,17 @@ pub(crate) struct Shards {
     shards: Vec<Shard>,
 }
 
+pub(crate) fn shards() -> &'static Shards {
+    static SHARDS_HELD: OnceLock<Shards> = OnceLock::new();
+    SHARDS_HELD.get_or_init(|| {
+        let budget = usize::try_from(Pool::Readout.share())
+            .expect("the readout pool fits this platform's address space");
+        Shards::new(budget)
+    })
+}
+
 impl Shards {
-    pub(crate) fn new(budget: usize) -> Self {
+    fn new(budget: usize) -> Self {
         let each = (budget / SHARDS).max(1);
         Self {
             shards: (0..SHARDS)

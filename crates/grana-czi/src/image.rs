@@ -8,7 +8,6 @@ use grana_volume::{
     VoxelSemantics, name_of, tint_of,
 };
 
-use crate::Cache;
 use crate::Error;
 use crate::binary::u32_at;
 use crate::directory;
@@ -19,7 +18,6 @@ use crate::plane;
 use crate::segment;
 use crate::store::Store;
 
-const CACHE_BYTES: u64 = 256 << 20;
 const METADATA_XML_OFFSET: u64 = 256;
 const DISPLAY_LIMIT: f32 = 1.5;
 
@@ -66,7 +64,7 @@ pub struct Image {
     layouts: Vec<SceneLayout>,
     pyramid: Pyramid,
     store: Store,
-    cache: Cache,
+    identity: u64,
 }
 
 struct Document {
@@ -130,7 +128,7 @@ impl Image {
                 ),
             )
         })?;
-        let cache = crate::cache(CACHE_BYTES);
+        let identity = document.store.identity();
         let base = &selected.levels[0];
         let metadata = &document.metadata;
         let mut channels = Vec::with_capacity(selected.pixels.len());
@@ -140,7 +138,7 @@ impl Image {
             let embedded = display.and_then(|display| window(display.low, display.high, format));
             let measured = match embedded {
                 Some(measured) => Statistics::declared(measured, VoxelSemantics::Scalar),
-                None => probe(&document.store, path, base, &cache, format, index as u32)?,
+                None => probe(&document.store, path, identity, base, format, index as u32)?,
             };
             let source = metadata.channels.get(index);
             let name = display
@@ -176,7 +174,7 @@ impl Image {
             layouts: document.scenes,
             pyramid,
             store: document.store,
-            cache,
+            identity,
         })
     }
 
@@ -218,7 +216,13 @@ impl Image {
             y: &y,
             z: &z,
         };
-        let bytes = region(&self.store, &self.path, &level.plans, &self.cache, &request)?;
+        let bytes = region(
+            &self.store,
+            &self.path,
+            self.identity,
+            &level.plans,
+            &request,
+        )?;
         Ok(voxels(format, bytes))
     }
 
@@ -282,8 +286,8 @@ struct Request<'a> {
 fn region(
     store: &Store,
     path: &Path,
+    identity: u64,
     plans: &HashMap<PlaneKey, Plan>,
-    cache: &Cache,
     request: &Request<'_>,
 ) -> Result<Vec<u8>, Error> {
     let sample = request.format.bytes();
@@ -299,8 +303,8 @@ fn region(
         blit(
             store,
             path,
+            identity,
             plan,
-            cache,
             request,
             depth,
             &mut bytes[target..target + row * height],
@@ -312,8 +316,8 @@ fn region(
 fn blit(
     store: &Store,
     path: &Path,
+    identity: u64,
     plan: &Plan,
-    cache: &Cache,
     request: &Request<'_>,
     depth: u32,
     out: &mut [u8],
@@ -335,7 +339,7 @@ fn blit(
         let held = (depth - tile.plane) as usize;
         let tile_row = tile.width as usize * sample;
         let origin = held * tile_row * tile.height as usize;
-        let samples = samples(store, path, cache, tile)?;
+        let samples = samples(store, path, identity, tile)?;
         let columns = (right - left) as usize * sample;
         for line in top..bottom {
             let source =
@@ -351,14 +355,16 @@ fn blit(
 fn samples(
     store: &Store,
     path: &Path,
-    cache: &Cache,
+    identity: u64,
     tile: &plane::Tile,
 ) -> Result<Arc<Vec<u8>>, Error> {
-    if let Some(samples) = cache.fetch(tile.position) {
+    let cache = crate::cache();
+    let key = (identity, tile.position);
+    if let Some(samples) = cache.fetch(key) {
         return Ok(samples);
     }
     let samples = Arc::new(plane::samples(store, path, tile)?);
-    cache.insert(tile.position, Arc::clone(&samples));
+    cache.insert(key, Arc::clone(&samples));
     Ok(samples)
 }
 
@@ -398,14 +404,14 @@ fn window(low: Option<f32>, high: Option<f32>, format: VoxelFormat) -> Option<In
 fn probe(
     store: &Store,
     path: &Path,
+    identity: u64,
     level: &LevelLayout,
-    cache: &Cache,
     format: VoxelFormat,
     channel: u32,
 ) -> Result<Statistics, Error> {
     let extent = level.extent;
     let mut census = Census::of(extent, 1);
-    let measured = census.measure(|time, ranges| {
+    let measured = census.measure(None, |time, ranges| {
         let request = Request {
             format,
             time,
@@ -414,7 +420,7 @@ fn probe(
             y: &ranges[1],
             z: &ranges[2],
         };
-        region(store, path, &level.plans, cache, &request).map(|bytes| voxels(format, bytes))
+        region(store, path, identity, &level.plans, &request).map(|bytes| voxels(format, bytes))
     })?;
     Ok(measured)
 }

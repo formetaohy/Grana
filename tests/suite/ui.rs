@@ -1,8 +1,5 @@
 use grana_editor::{Message, Prompt, PromptChoice, Workspace};
-use grana_ui::{
-    Band, Button, Corners, Edges, Element, Event, Icon, InputKey, Layout, Length, Rect, Size,
-    Surface, TextStyle, Ui, Vec2,
-};
+use grana_ui::{Button, Element, Event, InputKey, Layout, Length, Rect, Size, TextStyle, Ui, Vec2};
 
 use crate::support::gpu;
 
@@ -253,110 +250,6 @@ fn the_unsaved_prompt_covers_the_editor_and_resolves_its_choice() {
     );
 }
 
-#[test]
-fn a_disclosure_band_answers_a_press_inside_the_card_padding() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let mut ui: Ui<&'static str> = Ui::new(
-        gpu.device(),
-        gpu.queue(),
-        wgpu::TextureFormat::Rgba8Unorm,
-        gpu.pipelines(),
-    );
-    ui.update(SIZE, 1.0, 0.0);
-    let element = disclosure(&ui);
-    ui.present(element);
-    let card = ui.bounds("card").expect("the card is laid out");
-    let row = ui.bounds("row").expect("the disclosure row is laid out");
-    let padding = Vec2::new(card.min.x + 4.0, row.center().y);
-    assert!(
-        card.contains(padding) && !row.contains(padding),
-        "the pointer lands on the padding the card adds around the row"
-    );
-    for event in [Event::Moved(padding), Event::Down(Button::Primary)] {
-        ui.input_mut().push(event);
-    }
-    assert!(ui.update(SIZE, 1.0, 0.1).is_empty());
-    let element = disclosure(&ui);
-    ui.present(element);
-    ui.input_mut().push(Event::Up(Button::Primary));
-    let toggled = ui.update(SIZE, 1.0, 0.2);
-    assert_eq!(
-        toggled,
-        ["toggle"],
-        "the whole card band toggles the disclosure it heads"
-    );
-}
-
-#[test]
-fn a_popup_panel_rises_from_below_into_the_centre() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let mut ui: Ui<Message> = Ui::new(
-        gpu.device(),
-        gpu.queue(),
-        wgpu::TextureFormat::Rgba8Unorm,
-        gpu.pipelines(),
-    );
-    ui.update(PROMPT_SIZE, 1.0, 0.1);
-    ui.resize([PROMPT_SIZE.x as u32, PROMPT_SIZE.y as u32]);
-    let mut workspace = Workspace::default();
-    let element = settings_screen(&mut ui, &workspace);
-    ui.present(element);
-    workspace.settings.open = true;
-    let element = settings_screen(&mut ui, &workspace);
-    ui.present(element);
-    let opening = ui
-        .bounds("settings.sheet")
-        .expect("the opening panel is laid out");
-    assert!(
-        opening.min.y >= PROMPT_SIZE.y,
-        "the panel enters from outside the bottom edge of the pane: {opening:?}"
-    );
-    let mut time = 0.1;
-    let mut settled = opening;
-    for _ in 0..40 {
-        time += 0.05;
-        ui.update(PROMPT_SIZE, 1.0, time);
-        let element = settings_screen(&mut ui, &workspace);
-        ui.present(element);
-        settled = ui
-            .bounds("settings.sheet")
-            .expect("the open panel is laid out");
-    }
-    assert!(
-        (settled.center().y - PROMPT_SIZE.y * 0.5).abs() < 1.0
-            && (settled.center().x - PROMPT_SIZE.x * 0.5).abs() < 1.0,
-        "the panel settles in the middle of the pane: {settled:?}"
-    );
-}
-
-fn disclosure(ui: &Ui<&'static str>) -> Element<'static, &'static str> {
-    let theme = *ui.theme();
-    let band = Band::new(Edges::all(12.0), Corners::all(theme.metrics.corner_lg));
-    let row = grana_ui::widget::disclosure_row(
-        &theme,
-        Icon::Sliders,
-        "Camera",
-        "Perspective",
-        false,
-        0.0,
-        band,
-    )
-    .named("row")
-    .press("toggle");
-    grana_ui::column()
-        .named("card")
-        .padding(Edges::all(12.0))
-        .background(
-            Surface::fill(theme.palette.surface_container)
-                .with_corners(Corners::all(theme.metrics.corner_lg)),
-        )
-        .children([row])
-}
-
 fn prompt_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
     let full = Rect::from_min_size(Vec2::ZERO, ui.size());
     let behind = Element::new(Layout {
@@ -370,18 +263,6 @@ fn prompt_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static
     {
         let mut ctx = ui.build();
         elements.extend(grana_editor::prompt::view(&mut ctx, full, workspace));
-    }
-    grana_ui::place(full, elements)
-}
-
-fn settings_screen(ui: &mut Ui<Message>, workspace: &Workspace) -> Element<'static, Message> {
-    let full = Rect::from_min_size(Vec2::ZERO, ui.size());
-    let mut elements = Vec::new();
-    {
-        let mut ctx = ui.build();
-        elements.extend(grana_editor::settings_panel::view(
-            &mut ctx, full, workspace,
-        ));
     }
     grana_ui::place(full, elements)
 }

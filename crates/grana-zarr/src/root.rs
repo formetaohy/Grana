@@ -1,8 +1,10 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use grana_net::{Client, Presence, Span, Target, Transfer};
+use grana_store::{LruCache, Pool};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::byte_range::{ByteRange, ByteRangeIterator};
 use zarrs::storage::{
@@ -13,7 +15,6 @@ use zarrs::storage::{
 use crate::Error;
 use crate::witness::{self, Local};
 
-const BLOCK_BUDGET: u64 = 96 << 20;
 const BLOCK_LIMIT: u64 = 64 << 20;
 
 #[derive(Clone)]
@@ -200,37 +201,6 @@ impl Witness {
     }
 }
 
-#[derive(Default)]
-struct Blocks {
-    entries: HashMap<String, Arc<Vec<u8>>>,
-    order: VecDeque<String>,
-    bytes: u64,
-}
-
-impl Blocks {
-    fn get(&self, key: &str) -> Option<Arc<Vec<u8>>> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: String, block: Arc<Vec<u8>>) {
-        if let Some(held) = self.entries.get(&key) {
-            self.bytes -= held.len() as u64;
-            self.order.retain(|held| held != &key);
-        }
-        self.bytes += block.len() as u64;
-        self.order.push_back(key.clone());
-        self.entries.insert(key, block);
-        while self.bytes > BLOCK_BUDGET {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            if let Some(block) = self.entries.remove(&oldest) {
-                self.bytes -= block.len() as u64;
-            }
-        }
-    }
-}
-
 enum Block {
     Ready(Arc<Vec<u8>>),
     Ranged,
@@ -239,10 +209,18 @@ enum Block {
 pub(crate) struct RemoteStore {
     target: Target,
     client: Arc<Client>,
-    blocks: Mutex<Blocks>,
     probes: Mutex<HashMap<String, Presence>>,
+    blocks: LruCache<String, Vec<u8>>,
     transfer: Arc<Transfer>,
 }
+
+impl Drop for RemoteStore {
+    fn drop(&mut self) {
+        LIVE.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
 
 fn shared(target: &Target) -> Arc<RemoteStore> {
     static STORES: OnceLock<Mutex<HashMap<String, Weak<RemoteStore>>>> = OnceLock::new();
@@ -257,10 +235,11 @@ fn shared(target: &Target) -> Arc<RemoteStore> {
     let store = Arc::new(RemoteStore {
         target: target.clone(),
         client: Client::shared(),
-        blocks: Mutex::new(Blocks::default()),
         probes: Mutex::new(HashMap::new()),
+        blocks: LruCache::scoped(Pool::Remote, &LIVE, |bytes: &Vec<u8>| bytes.len() as u64),
         transfer: Arc::new(Transfer::default()),
     });
+    LIVE.fetch_add(1, Ordering::Relaxed);
     stores.insert(target.display().to_string(), Arc::downgrade(&store));
     store
 }
@@ -307,17 +286,19 @@ impl RemoteStore {
         Ok(self.probe(key.as_str())?.size())
     }
 
+    fn name(&self, key: &StoreKey) -> String {
+        let mut name = self.target.display().to_string();
+        name.push('\u{0}');
+        name.push_str(key.as_str());
+        name
+    }
+
     fn block(&self, key: &StoreKey) -> Result<Option<Block>, StorageError> {
-        let name = key.as_str().to_string();
-        if let Some(block) = self
-            .blocks
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&name)
-        {
+        let name = self.name(key);
+        if let Some(block) = self.blocks.fetch(name.clone()) {
             return Ok(Some(Block::Ready(block)));
         }
-        match self.probe(&name)? {
+        match self.probe(key.as_str())? {
             Presence::Missing => Ok(None),
             Presence::Object {
                 size: Some(size), ..
@@ -327,10 +308,7 @@ impl RemoteStore {
                     return Ok(None);
                 };
                 let block = Arc::new(bytes);
-                self.blocks
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .insert(name, Arc::clone(&block));
+                self.blocks.insert(name, Arc::clone(&block));
                 Ok(Some(Block::Ready(block)))
             }
         }

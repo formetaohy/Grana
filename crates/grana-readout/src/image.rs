@@ -1,10 +1,11 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use grana_volume::{
-    Calibration, ChannelInfo, Extent, Level, Pyramid, Spacing, Statistics, VoxelData, VoxelFormat,
-    name_of, tint_of,
+    Calibration, ChannelInfo, Extent, Level, NoData, Pyramid, Spacing, Statistics, VoxelData,
+    VoxelFormat, name_of, tint_of,
 };
 use openreadout_core::region::{self, ResolutionLevel};
 use openreadout_core::{ImageInfo, PixelType, Plane, PlaneIndex};
@@ -17,7 +18,8 @@ use crate::probe;
 use crate::reader::{self, Readers};
 use crate::scene::{self, Scene};
 
-const CACHE_BYTES: usize = 256 << 20;
+const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 const RED: [f32; 3] = [1.0, 0.0, 0.0];
 const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
@@ -35,7 +37,7 @@ pub struct Image {
     views: Vec<View>,
     pyramid: Pyramid,
     readers: Readers,
-    cache: plane::Shards,
+    source: u64,
 }
 
 impl Image {
@@ -62,8 +64,8 @@ impl Image {
         let frames = scene.frames();
         let interval = interval(image);
         let mut dataset = document.dataset;
-        let mut probe_cache = plane::Cache::new(CACHE_BYTES);
-        let probes = probe::statistics(path, &mut *dataset, image, &views, &mut probe_cache)?;
+        let source = source_identity(path, image.index)?;
+        let probes = probe::statistics(path, &mut *dataset, image, &views, source)?;
         let channels = views
             .iter()
             .enumerate()
@@ -86,7 +88,7 @@ impl Image {
             views,
             pyramid,
             readers: Readers::new(path.to_path_buf(), dataset, reader::limit()),
-            cache: plane::Shards::new(CACHE_BYTES),
+            source,
         })
     }
 
@@ -130,7 +132,7 @@ impl Image {
         let width = (ranges[0].end - ranges[0].start) as usize;
         let height = (ranges[1].end - ranges[1].start) as usize;
         let depth = (ranges[2].end - ranges[2].start) as usize;
-        let mut data = VoxelData::blank(view.format, width * height * depth);
+        let mut data = VoxelData::filled(NoData::zero(view.format), width * height * depth);
         match &mut data {
             VoxelData::U8(values) => self.read_planes(time, level, view, &ranges, values)?,
             VoxelData::U16(values) => self.read_planes(time, level, view, &ranges, values)?,
@@ -229,27 +231,28 @@ impl Image {
     }
 
     fn plane(&self, time: u32, level: usize, view: View, z: u32) -> Result<Arc<Plane>, Error> {
-        let key = (
-            u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
+        let key = plane::Key {
+            source: self.source,
+            level: u32::try_from(level).expect("a pyramid holds fewer than 4G levels"),
             time,
-            view.channel,
-            z,
-        );
-        self.cache.fetch(&key, || self.load_plane(key, view))
+            channel: view.channel,
+            depth: z,
+        };
+        plane::shards().fetch(&key, || self.load_plane(key, view))
     }
 
     fn load_plane(&self, key: plane::Key, view: View) -> Result<Arc<Plane>, Error> {
-        let extent = self.extent(key.0 as usize)?;
+        let extent = self.extent(key.level as usize)?;
         let plane = self.readers.with(|dataset| {
             dataset
                 .read_plane_level(
                     self.index,
                     PlaneIndex {
                         c: view.channel,
-                        z: key.3,
-                        t: key.1,
+                        z: key.depth,
+                        t: key.time,
                     },
-                    key.0,
+                    key.level,
                 )
                 .map_err(|error| Error::read(&self.path, error.to_string()))
         })?;
@@ -385,6 +388,28 @@ fn positive(value: Option<f64>) -> Option<f32> {
 
 fn interval(image: &ImageInfo) -> f32 {
     positive(image.time_increment_s).unwrap_or(1.0)
+}
+
+fn source_identity(path: &Path, index: u32) -> Result<u64, Error> {
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let metadata = std::fs::metadata(path).map_err(|error| Error::read(path, error.to_string()))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos() as u64);
+    let hash = mix(FNV_BASE, resolved.to_string_lossy().as_bytes());
+    let hash = mix(hash, &metadata.len().to_le_bytes());
+    let hash = mix(hash, &modified.to_le_bytes());
+    Ok(mix(hash, &u64::from(index).to_le_bytes()))
+}
+
+fn mix(hash: u64, bytes: &[u8]) -> u64 {
+    let mut hash = hash;
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 fn color(value: &str) -> Option<[f32; 3]> {

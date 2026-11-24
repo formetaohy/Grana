@@ -4,13 +4,12 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use grana_volume::{
-    Calibration, Census, ChannelInfo, Extent, Intensity, Level, Placement, Pyramid, Spacing,
-    Statistics, VoxelData, VoxelFormat, VoxelSemantics, name_of, tint_of,
+    Calibration, Census, ChannelInfo, Extent, Intensity, Level, NoData, Placement, Pyramid,
+    Spacing, Statistics, VoxelData, VoxelFormat, VoxelSemantics, name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
 
-use crate::Cache;
 use crate::directory::{self, Directory};
 use crate::error::Error;
 use crate::fileset::{File, Fileset};
@@ -18,8 +17,6 @@ use crate::page::{Page, Plane, Source as PageSource};
 use crate::planes::Planes;
 use crate::store::Store;
 use crate::tag::{TAG_IMAGE_DESCRIPTION, TAG_RESOLUTION_UNIT, TAG_X_RESOLUTION, TAG_Y_RESOLUTION};
-
-const CACHE_BYTES: u64 = 128 << 20;
 
 const RED: [f32; 3] = [1.0, 0.0, 0.0];
 const GREEN: [f32; 3] = [0.0, 1.0, 0.0];
@@ -72,7 +69,6 @@ pub struct Image {
     series: Vec<Series>,
     files: Fileset,
     stamp: u64,
-    cache: Cache,
 }
 
 struct LevelPages {
@@ -100,7 +96,7 @@ struct Request {
 
 impl Image {
     pub fn open(path: &Path, series: usize) -> Result<Self, Error> {
-        let first = File::open(path, crate::fileset::Caches::new())?;
+        let first = File::open(path)?;
         let described = metadata(&first, path)?;
         if described.binary_only {
             return Err(Error::unsupported(
@@ -275,7 +271,6 @@ impl Image {
             }
             None => (fallback, [0.0; 3], derived),
         };
-        let cache = crate::cache(CACHE_BYTES);
         let mut channels = Vec::with_capacity(sizes[1] as usize);
         for index in 0..sizes[1] {
             let info = ome.and_then(|ome| ome.channels.get(index as usize));
@@ -287,7 +282,7 @@ impl Image {
                 .and_then(|channel| channel.tint)
                 .unwrap_or_else(|| sample_tint(samples, index));
             let window = window(lookup, index as usize, path)?;
-            let sampled = sample_range(&files, &levels, &cache, index, sizes[0])?;
+            let sampled = sample_range(&files, &levels, index, sizes[0])?;
             let sampled = sampled.ok_or_else(|| {
                 Error::metadata(path, "a TIFF channel exposes no voxel to census")
             })?;
@@ -331,7 +326,6 @@ impl Image {
             series: declared,
             files,
             stamp,
-            cache,
         })
     }
 
@@ -362,7 +356,6 @@ impl Image {
     ) -> Result<VoxelData, Error> {
         region(
             &self.files,
-            &self.cache,
             &self.levels,
             &Request {
                 time,
@@ -890,12 +883,7 @@ fn sample_tint(samples: u32, index: u32) -> [f32; 3] {
     }
 }
 
-fn region(
-    files: &Fileset,
-    cache: &Cache,
-    levels: &[LevelPages],
-    request: &Request,
-) -> Result<VoxelData, Error> {
+fn region(files: &Fileset, levels: &[LevelPages], request: &Request) -> Result<VoxelData, Error> {
     let Some(level) = levels.get(request.level) else {
         return Err(Error::Region {
             path: PathBuf::new(),
@@ -935,7 +923,7 @@ fn region(
         path: PathBuf::new(),
         detail: "the region holds more voxels than this platform addresses".to_string(),
     })?;
-    let mut data = VoxelData::blank(level.format, count);
+    let mut data = VoxelData::filled(NoData::zero(level.format), count);
     for z in request.z.clone() {
         let raster = level.planes.index(request.time, request.channel, z);
         let slot = *level.slots.get(raster).ok_or_else(|| Error::Region {
@@ -947,9 +935,8 @@ fn region(
         let layout = volume.layout(slot.page, level.depth)?;
         let source = PageSource {
             store: &volume.store,
-            cache,
             path: &volume.path,
-            file: slot.file,
+            identity: volume.identity(),
         };
         let plane = Plane {
             layout: &layout,
@@ -961,7 +948,7 @@ fn region(
             x: (request.x.start, request.x.end),
             y: (request.y.start, request.y.end),
         };
-        let mut held = VoxelData::blank(level.format, (width * height) as usize);
+        let mut held = VoxelData::filled(NoData::zero(level.format), (width * height) as usize);
         page.read_plane(&plane, &mut held)?;
         data.blit(
             &held,
@@ -977,7 +964,6 @@ fn region(
 fn sample_range(
     files: &Fileset,
     levels: &[LevelPages],
-    cache: &Cache,
     channel: u32,
     frames: u32,
 ) -> Result<Option<Statistics>, Error> {
@@ -985,10 +971,9 @@ fn sample_range(
         return Ok(None);
     };
     let mut census = Census::of(level.extent, frames);
-    let measured = census.measure(|time, ranges| {
+    let measured = census.measure(None, |time, ranges| {
         region(
             files,
-            cache,
             levels,
             &Request {
                 time,

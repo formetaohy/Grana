@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use grana_volume::{
-    Calibration, Census, ChannelInfo, Intensity, Pyramid, Statistics, VoxelData, VoxelFormat,
-    VoxelSemantics, name_of, tint_of,
+    Calibration, Census, ChannelInfo, Intensity, NoData, Pyramid, Statistics, VoxelData,
+    VoxelFormat, VoxelSemantics, name_of, tint_of,
 };
 use serde_json::{Map, Value};
 use zarrs::array::chunk_grid::api::ChunkShapeTraits;
@@ -22,13 +22,14 @@ use crate::metadata::{self, ChannelMetadata};
 use crate::outline::Outline;
 use crate::root::Root;
 use crate::scene::Scene;
-use crate::tile::{self, Decode, Tiles};
+use crate::tile::{Decode, Tiles};
 
 struct LevelArray {
     path: String,
     array: Arc<Array<dyn ReadableStorageTraits>>,
     layout: Layout,
     unit: [u32; 3],
+    no_data: NoData,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,32 +60,33 @@ pub struct GroupImage {
     systems: Vec<metadata::System>,
     intrinsic: Option<String>,
     tiles: Tiles,
+    identity: Option<u64>,
 }
 
 impl Image {
     pub fn open(path: &Path) -> Result<Self, Error> {
-        Self::open_root(Root::local(path)?, "/", tile::DEFAULT_BYTES)
+        Self::open_root(Root::local(path)?, "/")
     }
 
     pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
-        Self::open_root(Root::local(path)?, group, tile::DEFAULT_BYTES)
+        Self::open_root(Root::local(path)?, group)
     }
 
     pub fn outline(root: &Root, group: &str) -> Result<Outline, Error> {
         GroupImage::outline(root, group)
     }
 
-    pub fn open_root(root: Root, group: &str, bytes: u64) -> Result<Self, Error> {
+    pub fn open_root(root: Root, group: &str) -> Result<Self, Error> {
         let attributes = crate::hcs::attributes(&root, group)?;
         let fields = crate::hcs::fields(&attributes);
         if fields.contains_key("multiscales") {
-            let image = GroupImage::open(&root, group, attributes, Footprint::Display, bytes)?;
+            let image = GroupImage::open(&root, group, attributes, Footprint::Display)?;
             return Ok(Self {
                 kind: Kind::Group(image),
             });
         }
         if fields.contains_key("scene") {
-            let scene = Scene::open(root, group, &attributes, bytes)?;
+            let scene = Scene::open(root, group, &attributes)?;
             return Ok(Self {
                 kind: Kind::Scene(scene),
             });
@@ -169,18 +171,12 @@ impl GroupImage {
     pub fn open_group(path: &Path, group: &str) -> Result<Self, Error> {
         let root = Root::local(path)?;
         let attributes = crate::hcs::attributes(&root, group)?;
-        Self::open(
-            &root,
-            group,
-            attributes,
-            Footprint::Display,
-            tile::DEFAULT_BYTES,
-        )
+        Self::open(&root, group, attributes, Footprint::Display)
     }
 
-    pub(crate) fn open_member(root: &Root, group: &str, bytes: u64) -> Result<Self, Error> {
+    pub(crate) fn open_member(root: &Root, group: &str) -> Result<Self, Error> {
         let attributes = crate::hcs::attributes(root, group)?;
-        Self::open(root, group, attributes, Footprint::Source, bytes)
+        Self::open(root, group, attributes, Footprint::Source)
     }
 
     pub(crate) fn open(
@@ -188,7 +184,6 @@ impl GroupImage {
         group: &str,
         attributes: Map<String, Value>,
         footprint: Footprint,
-        bytes: u64,
     ) -> Result<Self, Error> {
         let tag = root.tag(group);
         let metadata = metadata::parse(&tag, &attributes)?;
@@ -197,12 +192,12 @@ impl GroupImage {
             Footprint::Source => &metadata.source.datasets,
         };
         let readable: Arc<dyn ReadableStorageTraits> = root.readable();
-        let tiles = Tiles::new(bytes);
         let mut levels = Vec::with_capacity(datasets.len());
         let mut channel_count = None;
         let mut frames = None;
         let mut interval = None;
         let mut format = None;
+        let mut no_data = None;
         for dataset in datasets {
             let array_path = crate::hcs::join(group, &dataset.path);
             let array = Arc::new(open_array(readable.clone(), &array_path)?);
@@ -213,6 +208,17 @@ impl GroupImage {
                     return Err(Error::Unsupported {
                         path: tag.clone(),
                         detail: "the resolution levels disagree on the voxel data type".to_string(),
+                    });
+                }
+                Some(_) => {}
+            }
+            let level_no_data = declared_no_data(&array_path, &array, level_format)?;
+            match no_data {
+                None => no_data = Some(level_no_data),
+                Some(known) if known != level_no_data => {
+                    return Err(Error::Unsupported {
+                        path: tag.clone(),
+                        detail: "the resolution levels disagree on the fill value".to_string(),
                     });
                 }
                 Some(_) => {}
@@ -263,6 +269,7 @@ impl GroupImage {
                 unit: unit_shape(&array, &layout),
                 array,
                 layout,
+                no_data: level_no_data,
             });
         }
         assert!(
@@ -278,16 +285,21 @@ impl GroupImage {
             });
         }
         let format = format.expect("a multiscale image has at least one dataset");
+        let no_data = no_data.expect("a multiscale image has at least one dataset");
         let semantics = if metadata.label_image {
             VoxelSemantics::Label
         } else {
             VoxelSemantics::Scalar
         };
+        let origin = root.tag(group);
+        let identity = dataset_digest(root.path(), &levels);
+        let tiles = Tiles::new();
         let channels = channels(
             &tiles,
-            &root.tag(group),
+            &origin,
             &metadata.channels,
             format,
+            no_data,
             &levels,
             semantics,
         )?;
@@ -335,6 +347,7 @@ impl GroupImage {
             systems: metadata.systems,
             intrinsic: metadata.source.name,
             tiles,
+            identity,
         })
     }
 
@@ -397,15 +410,7 @@ impl GroupImage {
     }
 
     pub fn identity(&self) -> Option<u64> {
-        let levels = self
-            .levels
-            .iter()
-            .map(|level| {
-                let metadata = serde_json::to_vec(level.array.metadata()).ok()?;
-                Some((level.path.clone(), metadata))
-            })
-            .collect::<Option<Vec<_>>>()?;
-        crate::identity::dataset(self.root.path(), &levels)
+        self.identity
     }
 
     pub fn stamps(
@@ -520,6 +525,7 @@ impl GroupImage {
             layout: &level.layout,
             path: &level.path,
             shape: level.unit,
+            no_data: level.no_data,
         };
         let data = self.tiles.read(&unit, time, channel as u32, &ranges)?;
         let expected =
@@ -631,6 +637,18 @@ fn levels_ordered(levels: &[LevelArray]) -> bool {
     })
 }
 
+fn dataset_digest(directory: Option<&Path>, levels: &[LevelArray]) -> Option<u64> {
+    let metadata = levels
+        .iter()
+        .map(|level| {
+            let array = serde_json::to_vec(level.array.metadata())
+                .expect("the array metadata of a level serializes to json");
+            (level.path.clone(), array)
+        })
+        .collect::<Vec<_>>();
+    crate::identity::dataset(directory, &metadata)
+}
+
 fn open_array(
     store: Arc<dyn ReadableStorageTraits>,
     path: &str,
@@ -734,6 +752,7 @@ fn channels(
     origin: &str,
     metadata: &[ChannelMetadata],
     format: VoxelFormat,
+    no_data: NoData,
     levels: &[LevelArray],
     semantics: VoxelSemantics,
 ) -> Result<Vec<ChannelInfo>, Error> {
@@ -772,7 +791,7 @@ fn channels(
             let statistics = match data_range {
                 Some(data) => Statistics::declared(data, semantics),
                 None => {
-                    let sampled = sample_range(tiles, levels, index as usize, frames)?;
+                    let sampled = sample_range(tiles, levels, index as usize, frames, no_data)?;
                     let sampled = sampled.ok_or_else(|| Error::Metadata {
                         path: origin.to_string(),
                         detail: format!("the channel {index} exposes no voxel to census"),
@@ -781,6 +800,7 @@ fn channels(
                 }
             };
             let info = ChannelInfo::new(name, tint, statistics, format);
+            let info = info.with_no_data(no_data);
             Ok(match omero_window {
                 Some(window) => info.with_window(window),
                 None => info,
@@ -794,6 +814,7 @@ fn sample_range(
     levels: &[LevelArray],
     channel: usize,
     frames: u32,
+    no_data: NoData,
 ) -> Result<Option<Statistics>, Error> {
     let index = levels.len() - 1;
     let level = levels.last().expect("a multiscale image has a level");
@@ -803,11 +824,48 @@ fn sample_range(
         layout: &level.layout,
         path: &level.path,
         shape: level.unit,
+        no_data: level.no_data,
     };
     let mut census = Census::of(level.layout.extent, frames);
-    let measured =
-        census.measure(|time, ranges| tiles.read(&unit, time, channel as u32, &ranges))?;
+    let measured = census.measure(no_data.declared(), |time, ranges| {
+        tiles.read(&unit, time, channel as u32, &ranges)
+    })?;
     Ok(Some(measured))
+}
+
+fn declared_no_data(
+    path: &str,
+    array: &Array<dyn ReadableStorageTraits>,
+    format: VoxelFormat,
+) -> Result<NoData, Error> {
+    let fill = array.fill_value();
+    let bytes = fill.as_ne_bytes();
+    if bytes.len() != format.bytes() {
+        return Err(Error::Unsupported {
+            path: path.to_string(),
+            detail: "the fill value does not hold one sample of the voxel data type".to_string(),
+        });
+    }
+    macro_rules! exact {
+        ($width:expr, $type:ty, $variant:ident) => {{
+            let at: [u8; $width] = bytes
+                .try_into()
+                .expect("a checked fill value holds one sample");
+            NoData::$variant(<$type>::from_ne_bytes(at))
+        }};
+    }
+    Ok(match format {
+        VoxelFormat::U8 => exact!(1, u8, U8),
+        VoxelFormat::U16 => exact!(2, u16, U16),
+        VoxelFormat::U32 => exact!(4, u32, U32),
+        VoxelFormat::U64 => exact!(8, u64, U64),
+        VoxelFormat::I8 => exact!(1, i8, I8),
+        VoxelFormat::I16 => exact!(2, i16, I16),
+        VoxelFormat::I32 => exact!(4, i32, I32),
+        VoxelFormat::I64 => exact!(8, i64, I64),
+        VoxelFormat::F32 => exact!(4, f32, F32),
+        VoxelFormat::F64 => exact!(8, f64, F64),
+    })
 }
 
 fn valid(range: [f32; 2]) -> Option<Intensity> {

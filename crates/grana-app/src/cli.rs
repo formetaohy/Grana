@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use grana_pipeline::{Batch, BatchEvent, Control, Outcome, Plan, discover};
 use grana_protocol::Protocol;
@@ -10,6 +10,19 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use crate::app::App;
 use crate::capture::OfflineCapture;
 use crate::render::Request;
+
+pub(crate) fn configure_budget() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let bytes = grana_gpu::physical_memory().expect("the system reports its physical memory");
+        grana_store::Budget::shared().set_total(bytes);
+        grana_log::info!(
+            target: "grana::cache",
+            total = bytes,
+            "the cache ledger reports its total"
+        );
+    });
+}
 
 pub fn gui(capture: Option<PathBuf>, startup: Option<String>) -> ExitCode {
     open(capture, startup, Access::Author)
@@ -31,6 +44,7 @@ pub fn update_assist(arguments: &[String]) -> ExitCode {
 }
 
 fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> ExitCode {
+    configure_budget();
     grana_log::info!(
         target: "grana::app",
         viewer = !access.author(),
@@ -71,12 +85,6 @@ pub fn clear_cache() -> ExitCode {
     }
 }
 
-fn tune_decode() {
-    if let Ok(headless) = grana_gpu::Headless::shared() {
-        grana_image::set_decode_budget(grana_render::texture_budget(headless.memory()) / 2);
-    }
-}
-
 pub fn batch(
     protocol: &Path,
     datasets: &Path,
@@ -85,7 +93,7 @@ pub fn batch(
     project: bool,
     channels: bool,
 ) -> ExitCode {
-    tune_decode();
+    configure_budget();
     let protocol = match Protocol::read(protocol) {
         Ok(protocol) => protocol,
         Err(error) => {
@@ -191,7 +199,7 @@ pub fn batch(
 }
 
 pub fn render(arguments: &[String]) -> Option<ExitCode> {
-    tune_decode();
+    configure_budget();
     let mut paths = Vec::new();
     let mut width = None;
     let mut height = None;

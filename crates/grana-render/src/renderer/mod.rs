@@ -113,6 +113,12 @@ pub(super) fn carried_frame(time: u32, frames: u32) -> u32 {
     (time + 1) % frames
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reset {
+    Dataset,
+    Residency,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct SliceTargets<'a> {
     pub(crate) color: &'a TextureView,
@@ -179,12 +185,14 @@ pub struct Renderer {
     motion: Option<u64>,
     budget: u64,
     total: u64,
+    ceiling: u64,
     frames: u64,
     requested: u64,
+    demand: budget::FrameDemand,
     residence: Residence,
     prefetch: bool,
     transparent: bool,
-    translucent: Option<(u64, bool)>,
+    transparency: Option<(u64, bool)>,
     exporting: bool,
     temporal: temporal::Resolve,
     convergence: temporal::Convergence,
@@ -260,12 +268,14 @@ impl Renderer {
             motion: None,
             budget,
             total: budget,
+            ceiling: budget,
             frames: budget,
             requested: budget,
+            demand: budget::FrameDemand::full(),
             residence: Residence::new(),
             prefetch: false,
             transparent: false,
-            translucent: None,
+            transparency: None,
             exporting: false,
             temporal,
             convergence,
@@ -328,6 +338,7 @@ impl Renderer {
                 device,
                 pyramid,
                 reserve::Allocation::Export { slots, ceiling },
+                Reset::Dataset,
             )?;
         }
         self.frames = ceiling.saturating_sub(self.budget);
@@ -343,9 +354,14 @@ impl Renderer {
         device: &Device,
         pyramid: &Pyramid,
         allocation: reserve::Allocation,
+        reset: Reset,
     ) -> Result<(), String> {
         self.resources = None;
-        self.targets.clear();
+        if reset == Reset::Dataset {
+            self.targets.clear();
+            self.meshes = None;
+            self.sections.clear();
+        }
         let resources = Resources::new(
             device,
             &self.layouts,
@@ -355,15 +371,24 @@ impl Renderer {
             allocation,
             pyramid,
         )?;
-        self.requested = resources.requested();
+        let proven = resources.requested();
+        if let reserve::Allocation::Display(requested) = allocation
+            && proven < requested
+        {
+            self.ceiling = proven;
+        }
+        self.requested = proven;
         self.budget = resources.reserved();
+        let surface = resources.surface_bytes();
+        if let Some(meshes) = self.meshes.as_mut() {
+            meshes.set_budget(surface);
+        }
         self.residence.setup(device, resources.slots(), pyramid);
         self.resources = Some(resources);
-        self.time = 0;
-        if let Some(meshes) = self.meshes.as_mut() {
-            meshes.clear();
+        if reset == Reset::Residency {
+            return Ok(());
         }
-        self.sections.clear();
+        self.time = 0;
         self.sliced = false;
         self.viewport = None;
         self.present_region = None;
@@ -376,11 +401,17 @@ impl Renderer {
         Ok(())
     }
 
-    fn fit(&mut self, device: &Device, size: [u32; 2]) -> Result<(), String> {
+    fn fit(
+        &mut self,
+        device: &Device,
+        size: [u32; 2],
+        demand: budget::FrameDemand,
+    ) -> Result<(), String> {
         if self.exporting {
             return Ok(());
         }
-        let split = budget::split(self.total, size);
+        self.demand = demand;
+        let split = budget::split(self.total, self.ceiling, budget::Frames::of(size, demand));
         self.frames = split.frames;
         if split.residency.abs_diff(self.requested).saturating_mul(4) > self.total {
             let pyramid = self.resources.as_ref().map(|held| held.pyramid.clone());
@@ -389,6 +420,7 @@ impl Renderer {
                     device,
                     &pyramid,
                     reserve::Allocation::Display(split.residency),
+                    Reset::Residency,
                 )?;
             }
         }
@@ -396,7 +428,7 @@ impl Renderer {
     }
 
     fn fragment_allowance(&self, size: [u32; 2]) -> u64 {
-        budget::fragment_allowance(self.frames, size)
+        budget::fragment_allowance(self.frames, size, self.demand)
     }
 
     pub fn set_transparent(&mut self, transparent: bool) {
@@ -466,12 +498,22 @@ impl Renderer {
         size: [u32; 2],
     ) -> Result<(), String> {
         assert!(budget > 0, "a renderer needs a texture budget");
-        let split = budget::split(budget, size);
+        self.ceiling = if budget > self.total {
+            budget
+        } else {
+            self.ceiling.min(budget)
+        };
         self.total = budget;
+        let split = budget::split(
+            self.total,
+            self.ceiling,
+            budget::Frames::of(size, self.demand),
+        );
         self.install(
             device,
             pyramid,
             reserve::Allocation::Display(split.residency),
+            Reset::Dataset,
         )?;
         self.frames = split.frames;
         Ok(())
@@ -492,7 +534,9 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         let size = frame.size;
-        self.fit(device, size)?;
+        let transparent = self.transparency(&frame);
+        let shot = render::Shot::of(&frame, transparent);
+        self.fit(device, size, shot.demand())?;
         let (mut target, created) = self
             .targets
             .take(device, &self.layouts, &self.present, size);
@@ -500,7 +544,7 @@ impl Renderer {
             self.residence.forget_settled();
         }
         self.residence.set_cap(frame.level_cap);
-        let info = self.render(device, queue, &mut target, frame);
+        let info = self.render(device, queue, &mut target, frame, shot);
         self.targets.put(target);
         info
     }

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
+use grana_store::Pool;
 use grana_volume::{Extent, VoxelData, VoxelFormat};
 
 const MAGIC: [u8; 8] = *b"GRANATIL";
@@ -15,10 +16,8 @@ const HEADER: usize = 80;
 const TRAILER: usize = 4;
 const SUFFIX: &str = "tile";
 const STAGING: &str = "staging";
-const BUDGET: u64 = 4 << 30;
-const RETAIN: u64 = 3 << 30;
-const MEMORY_BUDGET: u64 = 256 << 20;
-const DECODE_BUDGET: u64 = 512 << 20;
+const DISK_BUDGET: u64 = 4 << 30;
+const DISK_RETAIN: u64 = 3 << 30;
 const OVERRIDE: &str = "GRANA_PYRAMID_CACHE";
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -26,17 +25,6 @@ const CRC_SEED: u32 = 0xffff_ffff;
 const CRC_POLYNOMIAL: u32 = 0xedb8_8320;
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
-
-static DECODE: AtomicU64 = AtomicU64::new(DECODE_BUDGET);
-
-pub fn decode_budget() -> u64 {
-    DECODE.load(Ordering::Relaxed)
-}
-
-pub fn set_decode_budget(bytes: u64) {
-    assert!(bytes > 0, "a decode cache holds at least one byte");
-    DECODE.store(bytes, Ordering::Relaxed);
-}
 
 type Accounting = Arc<Mutex<Option<u64>>>;
 
@@ -61,8 +49,15 @@ pub(crate) struct Shape {
 
 pub(crate) type Cache = grana_store::LruCache<Key, VoxelData>;
 
-pub(crate) fn bricks() -> Cache {
-    Cache::new(MEMORY_BUDGET, size)
+pub(crate) fn bricks() -> &'static Cache {
+    static BRICKS: OnceLock<Cache> = OnceLock::new();
+    BRICKS.get_or_init(|| Cache::pooled(Pool::Brick, size))
+}
+
+pub(crate) fn anonymous() -> u64 {
+    static ORDINAL: AtomicU64 = AtomicU64::new(0);
+    let ordinal = ORDINAL.fetch_add(1, Ordering::Relaxed);
+    mix(mix(FNV_BASE, b"grana-anonymous"), &ordinal.to_le_bytes())
 }
 
 pub(crate) struct Store {
@@ -203,7 +198,7 @@ impl Store {
         let mut guard = self.bytes.lock().unwrap_or_else(|error| error.into_inner());
         let total = guard.get_or_insert_with(|| self.scan());
         *total = total.saturating_add(length);
-        if *total > BUDGET {
+        if *total > DISK_BUDGET {
             self.evict(total);
         }
     }
@@ -216,7 +211,7 @@ impl Store {
         let mut entries = self.entries();
         entries.sort_by_key(|entry| entry.0);
         for (_, length, path) in entries {
-            if *total <= RETAIN {
+            if *total <= DISK_RETAIN {
                 break;
             }
             if std::fs::remove_file(&path).is_ok() {

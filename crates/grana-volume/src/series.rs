@@ -115,7 +115,12 @@ impl VolumeSeries {
                         held.folded(frame.channels()[index].statistics())
                     });
                 let channel = &first.channels()[index];
-                ChannelInfo::new(channel.name(), channel.tint(), statistics, channel.format())
+                let info =
+                    ChannelInfo::new(channel.name(), channel.tint(), statistics, channel.format());
+                match channel.no_data() {
+                    Some(no_data) => info.with_no_data(no_data),
+                    None => info,
+                }
             })
             .collect();
         Pyramid::new(

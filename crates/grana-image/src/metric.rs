@@ -72,12 +72,7 @@ impl Metric {
         ranges: &[Range<u32>; 3],
         warp: &Warp,
     ) -> Result<VoxelData, Error> {
-        let Some(format) = image
-            .pyramid()
-            .channels()
-            .get(channel)
-            .map(|info| info.format())
-        else {
+        let Ok(fill) = image.fill(channel) else {
             return Err(Error::Resolved {
                 detail: "the requested channel does not exist".to_string(),
             });
@@ -90,7 +85,7 @@ impl Metric {
             source.extent().z(),
         ];
         let Some(gather) = gather(source, target, ranges, warp, limits) else {
-            return Ok(align::zeros(format, ranges));
+            return Ok(align::filled(fill, ranges));
         };
         let data = image.read_region(time, level, channel, &gather, &Warp::IDENTITY)?;
         let view = View {

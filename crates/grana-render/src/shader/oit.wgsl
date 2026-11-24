@@ -14,7 +14,7 @@ fn oit_index(origin: vec2<i32>, size: vec2<i32>, pixel: vec2<i32>) -> i32 {
 }
 
 fn oit_claim(index: u32, layers: u32, epoch: u32) -> u32 {
-    let claim = epoch << OIT_COUNT_EPOCH_SHIFT;
+    let claim = epoch << OIT_EPOCH_SHIFT;
     atomicMax(&oit_counts[index], claim);
     let slot = atomicAdd(&oit_counts[index], 1u) - claim;
     if (slot < layers) {

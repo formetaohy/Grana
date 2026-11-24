@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::{Intensity, VoxelData, VoxelSemantics};
+use crate::{Intensity, NoData, VoxelData, VoxelSemantics};
 
 const LABEL_LIMIT: u32 = 256;
 
@@ -31,11 +31,11 @@ impl Statistics {
         }
     }
 
-    pub fn census(data: &VoxelData) -> Self {
+    pub fn census(data: &VoxelData, no_data: Option<NoData>) -> Self {
         let mut values = BTreeSet::new();
         let mut minimum = f64::INFINITY;
         let mut maximum = f64::NEG_INFINITY;
-        data.for_each_value(|value| {
+        data.for_each_present_value(no_data, |value| {
             let value = f64::from(value);
             if !value.is_finite() {
                 return;

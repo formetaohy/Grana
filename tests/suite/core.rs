@@ -1,6 +1,9 @@
+use grana_image::{Image, Source};
 use grana_volume::{
-    BrickCoord, BrickGrid, Channel, Extent, Intensity, PADDED_SIDE, Spacing, Volume, VoxelData,
+    BrickCoord, BrickGrid, Channel, Extent, Intensity, NoData, PADDED_SIDE, Spacing, Volume,
+    VolumeSeries, VoxelData,
 };
+use grana_warp::Warp;
 
 #[test]
 fn builds_padded_bricks_from_a_volume() {
@@ -65,4 +68,102 @@ fn builds_padded_bricks_from_a_volume() {
     assert_eq!(values.len(), 4 * 3);
     assert_eq!(values[0], 7 + 4 + 20 + 100);
     assert_eq!(values[values.len() - 1], 7 + 7 + 40 + 100);
+}
+
+#[test]
+fn grades_missing_voxels_out_of_statistics_and_derived_levels() {
+    let extent = Extent::new(64, 64, 64);
+    let absent = NoData::F32(-1.0);
+    let mut values = (0..extent.voxel_count())
+        .map(|index| 2.0 + (index % 1000) as f32 * 1.0e-6)
+        .collect::<Vec<f32>>();
+    values[0] = -1.0;
+    let channel =
+        Channel::new("signal", [1.0, 1.0, 1.0], VoxelData::F32(values)).with_no_data(absent);
+    let volume = Volume::new(extent, Spacing::new(1.0, 1.0, 1.0), vec![channel]);
+    let image = Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+        .expect("the synthetic series opens");
+    let info = &image.pyramid().channels()[0];
+    assert_eq!(info.no_data(), Some(absent));
+    assert_eq!(
+        info.statistics().intensity().min(),
+        2.0,
+        "the census leaves the declared no-data value out"
+    );
+    assert!(info.statistics().intensity().max() < 2.01);
+
+    let ranges = [60..68, 0..2, 0..2];
+    let data = image
+        .read_region(0, 0, 0, &ranges, &Warp::IDENTITY)
+        .expect("a region across the volume edge reads");
+    let VoxelData::F32(read) = data else {
+        panic!("the read keeps the voxel format");
+    };
+    for z in 0..2u32 {
+        for y in 0..2u32 {
+            for x in 0..8u32 {
+                let index = (x + 8 * (y + 2 * z)) as usize;
+                let value = read[index];
+                if x < 4 {
+                    let voxel = (x + 60) as usize + 64 * (y as usize + 64 * z as usize);
+                    let expected = 2.0 + (voxel % 1000) as f32 * 1.0e-6;
+                    assert_eq!(value, expected, "inside voxel {x},{y},{z}");
+                } else {
+                    assert_eq!(value, -1.0, "the region outside the extent holds the fill");
+                }
+            }
+        }
+    }
+
+    let derived = image
+        .read_region(0, 1, 0, &[0..4, 0..4, 0..4], &Warp::IDENTITY)
+        .expect("a derived level reads");
+    let VoxelData::F32(level) = derived else {
+        panic!("the derived level keeps the voxel format");
+    };
+    assert!(
+        (level[0] - 2.0).abs() < 1.0e-3,
+        "a reduced voxel averages only the voxels that hold data"
+    );
+    assert!(
+        level.iter().all(|value| (value - 2.0).abs() < 1.0e-3),
+        "every reduced voxel leaves the no-data value out"
+    );
+    assert!(NoData::F32(f32::NAN).matches_sample(f32::NAN));
+}
+
+#[test]
+fn keeps_a_shifted_region_at_its_intensity_across_the_volume_edge() {
+    let extent = Extent::new(32, 32, 16);
+    let values = (0..extent.voxel_count())
+        .map(|index| 2.0 + (index % 1000) as f32 * 1.0e-6)
+        .collect::<Vec<f32>>();
+    let channel = Channel::new("signal", [1.0, 1.0, 1.0], VoxelData::F32(values));
+    let volume = Volume::new(extent, Spacing::new(1.0, 1.0, 1.0), vec![channel]);
+    let image = Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+        .expect("the synthetic series opens");
+    let warp = Warp::shift([3.5, 0.0, 0.0]);
+    let shifted = image
+        .read_region(0, 0, 0, &[28..29, 8..9, 4..5], &warp)
+        .expect("a warped voxel reads");
+    let source = image
+        .read_region(0, 0, 0, &[31..32, 8..9, 4..5], &Warp::IDENTITY)
+        .expect("the source voxel reads");
+    let (VoxelData::F32(shifted), VoxelData::F32(source)) = (shifted, source) else {
+        panic!("the reads keep the voxel format");
+    };
+    assert_eq!(
+        shifted[0], source[0],
+        "a half covered tap renormalises instead of dimming the edge voxel"
+    );
+    let beyond = image
+        .read_region(0, 0, 0, &[29..32, 8..9, 4..5], &warp)
+        .expect("a region past the source edge reads");
+    let VoxelData::F32(beyond) = beyond else {
+        panic!("the read keeps the voxel format");
+    };
+    assert!(
+        beyond.iter().all(|value| *value == 0.0),
+        "a voxel whose taps all leave the volume holds the fill"
+    );
 }

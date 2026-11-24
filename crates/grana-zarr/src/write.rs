@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_archive::{Block, Fill, Filler, ImageSpec, Written};
-use grana_volume::{Level, Placement, VoxelData, VoxelFormat};
+use grana_volume::{Level, NoData, Placement, VoxelData, VoxelFormat};
 use serde_json::{Value, json};
 use zarrs::array::codec::ZstdCodec;
 use zarrs::array::{Array, ArrayBuilder, ArrayBytes, ArraySubset, FillValue, data_type};
@@ -226,7 +226,7 @@ fn staged(
     if (0..3).all(|axis| located.length[axis] == extent[axis]) {
         return Ok(data);
     }
-    let mut staged = VoxelData::blank(sample, block.voxels());
+    let mut staged = VoxelData::filled(NoData::zero(sample), block.voxels());
     staged_into(&mut staged, extent, located.length, &data);
     Ok(staged)
 }
@@ -264,7 +264,7 @@ fn derived(
     if (0..3).all(|axis| located.length[axis] == extent[axis]) {
         return Ok(sampled);
     }
-    let mut staged = VoxelData::blank(sample, block.voxels());
+    let mut staged = VoxelData::filled(NoData::zero(sample), block.voxels());
     staged_into(&mut staged, extent, located.length, &sampled);
     Ok(staged)
 }

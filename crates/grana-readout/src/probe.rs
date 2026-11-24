@@ -5,7 +5,7 @@ use grana_volume::{Extent, Statistics, VoxelData};
 use openreadout_core::{Dataset, ImageInfo, PixelType, Plane, PlaneIndex};
 
 use crate::error::Error;
-use crate::plane::{Cache, View};
+use crate::plane::{self, Key, View};
 
 const STEP: u32 = 4;
 
@@ -14,15 +14,15 @@ pub(crate) fn statistics(
     dataset: &mut dyn Dataset,
     info: &ImageInfo,
     views: &[View],
-    cache: &mut Cache,
+    source: u64,
 ) -> Result<Vec<Statistics>, Error> {
     let extent = Extent::new(info.size_x.max(1), info.size_y.max(1), info.size_z.max(1));
     let census = grana_volume::Census::of(extent, 1);
     let blocks = census.blocks().to_vec();
     let mut ranges = Vec::with_capacity(views.len());
     for view in views {
-        let plane = plane_at(path, dataset, info, view, 0, cache)?;
-        let mut measured = Statistics::census(&samples(&plane, view.sample));
+        let plane = plane_at(path, dataset, info, view, 0, source)?;
+        let mut measured = Statistics::census(&samples(&plane, view.sample), None);
         for block in &blocks {
             let block_extent = Extent::new(
                 block[0].end - block[0].start,
@@ -33,7 +33,7 @@ pub(crate) fn statistics(
                 continue;
             }
             let strided = strided(&plane, view.sample, block);
-            measured = measured.folded(Statistics::census(&strided));
+            measured = measured.folded(Statistics::census(&strided, None));
         }
         ranges.push(measured);
     }
@@ -46,37 +46,40 @@ fn plane_at(
     info: &ImageInfo,
     view: &View,
     depth: u32,
-    cache: &mut Cache,
+    source: u64,
 ) -> Result<Arc<Plane>, Error> {
-    let key = (0, 0, view.channel, depth);
-    if let Some(plane) = cache.get(&key) {
-        return Ok(plane);
-    }
-    let plane = dataset
-        .read_plane(
-            info.index,
-            PlaneIndex {
-                c: view.channel,
-                z: depth,
-                t: 0,
-            },
-        )
-        .map_err(|error| Error::read(path, error.to_string()))?;
-    if plane.data.len() != plane.expected_len() {
-        return Err(Error::read(
-            path,
-            "a censused plane holds an unexpected size",
-        ));
-    }
-    if usize::try_from(plane.samples_per_pixel).map_or(true, |samples| view.sample >= samples) {
-        return Err(Error::read(
-            path,
-            "a censused plane lacks the declared samples",
-        ));
-    }
-    let plane = Arc::new(plane);
-    cache.put(key, Arc::clone(&plane));
-    Ok(plane)
+    let key = Key {
+        source,
+        level: 0,
+        time: 0,
+        channel: view.channel,
+        depth,
+    };
+    plane::shards().fetch(&key, || {
+        let plane = dataset
+            .read_plane(
+                info.index,
+                PlaneIndex {
+                    c: view.channel,
+                    z: depth,
+                    t: 0,
+                },
+            )
+            .map_err(|error| Error::read(path, error.to_string()))?;
+        if plane.data.len() != plane.expected_len() {
+            return Err(Error::read(
+                path,
+                "a censused plane holds an unexpected size",
+            ));
+        }
+        if usize::try_from(plane.samples_per_pixel).map_or(true, |samples| view.sample >= samples) {
+            return Err(Error::read(
+                path,
+                "a censused plane lacks the declared samples",
+            ));
+        }
+        Ok(Arc::new(plane))
+    })
 }
 
 fn samples(plane: &Plane, sample: usize) -> VoxelData {

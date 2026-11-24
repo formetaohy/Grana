@@ -11,7 +11,6 @@ mod series;
 mod source;
 
 pub use cache::default_root as cache_root;
-pub use cache::{decode_budget, set_decode_budget};
 pub use error::Error;
 pub use fingerprint::FINGERPRINT_COVERAGE;
 pub use grana_zarr::{Decode, Field, Label, Labels, Plate, Transfer, Well};

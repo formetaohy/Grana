@@ -1,18 +1,14 @@
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use grana_store::LruCache;
-use grana_volume::{Extent, VoxelData};
+use grana_store::{LruCache, Pool};
+use grana_volume::{Extent, NoData, VoxelData};
 use zarrs::array::{Array, ArraySubset};
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::Error;
 use crate::axes::Layout;
-
-pub const DEFAULT_BYTES: u64 = 512 << 20;
-
-const MINIMUM_SHARE: u64 = 4;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Decode {
@@ -85,9 +81,10 @@ impl Block {
     }
 }
 
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) struct Tiles {
     blocks: LruCache<Key, Block>,
-    bytes: u64,
     hits: AtomicU64,
     misses: AtomicU64,
     decoded: AtomicU64,
@@ -100,14 +97,20 @@ pub(crate) struct Unit<'a> {
     pub(crate) layout: &'a Layout,
     pub(crate) path: &'a str,
     pub(crate) shape: [u32; 3],
+    pub(crate) no_data: NoData,
+}
+
+impl Drop for Tiles {
+    fn drop(&mut self) {
+        LIVE.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl Tiles {
-    pub(crate) fn new(bytes: u64) -> Self {
-        let bytes = bytes.max(1 << 20);
+    pub(crate) fn new() -> Self {
+        LIVE.fetch_add(1, Ordering::Relaxed);
         Self {
-            blocks: LruCache::new(bytes, |block: &Block| block.data.bytes()),
-            bytes,
+            blocks: LruCache::scoped(Pool::Decode, &LIVE, |block: &Block| block.data.bytes()),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             decoded: AtomicU64::new(0),
@@ -139,9 +142,10 @@ impl Tiles {
             .product::<u64>();
         self.requested
             .fetch_add(voxels * format.bytes() as u64, Ordering::Relaxed);
-        let mut output = VoxelData::blank(format, voxels as usize);
+        let mut output = VoxelData::filled(unit.no_data, voxels as usize);
+        let cache = &self.blocks;
         let shape = unit.shape;
-        let cacheable = unit_voxels(shape) * format.bytes() as u64 <= self.bytes / MINIMUM_SHARE;
+        let cacheable = unit_voxels(shape) * format.bytes() as u64 <= cache.shard_bytes();
         let first = [0, 1, 2].map(|axis| ranges[axis].start / shape[axis]);
         let last = [0, 1, 2].map(|axis| (ranges[axis].end - 1) / shape[axis]);
         for z in first[2]..=last[2] {
@@ -155,7 +159,7 @@ impl Tiles {
                         channel,
                         coord,
                     };
-                    let block = match self.blocks.fetch(key) {
+                    let block = match cache.fetch(key) {
                         Some(block) => {
                             self.hits.fetch_add(1, Ordering::Relaxed);
                             block
@@ -173,7 +177,7 @@ impl Tiles {
                                 ),
                             });
                             if cacheable {
-                                self.blocks.insert(key, Arc::clone(&block));
+                                cache.insert(key, Arc::clone(&block));
                             }
                             block
                         }

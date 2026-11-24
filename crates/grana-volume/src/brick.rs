@@ -188,20 +188,8 @@ impl BrickData {
     }
 }
 
-pub fn blank_brick(format: crate::VoxelFormat) -> VoxelData {
-    let voxels = (PADDED_SIDE as usize).pow(3);
-    match format {
-        crate::VoxelFormat::U8 => VoxelData::U8(vec![0; voxels]),
-        crate::VoxelFormat::U16 => VoxelData::U16(vec![0; voxels]),
-        crate::VoxelFormat::U32 => VoxelData::U32(vec![0; voxels]),
-        crate::VoxelFormat::U64 => VoxelData::U64(vec![0; voxels]),
-        crate::VoxelFormat::I8 => VoxelData::I8(vec![0; voxels]),
-        crate::VoxelFormat::I16 => VoxelData::I16(vec![0; voxels]),
-        crate::VoxelFormat::I32 => VoxelData::I32(vec![0; voxels]),
-        crate::VoxelFormat::I64 => VoxelData::I64(vec![0; voxels]),
-        crate::VoxelFormat::F32 => VoxelData::F32(vec![0.0; voxels]),
-        crate::VoxelFormat::F64 => VoxelData::F64(vec![0.0; voxels]),
-    }
+pub fn blank_brick(no_data: crate::NoData) -> VoxelData {
+    VoxelData::filled(no_data, (PADDED_SIDE as usize).pow(3))
 }
 
 pub fn pad_brick(

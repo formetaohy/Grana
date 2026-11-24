@@ -1,6 +1,6 @@
 use crate::{
-    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid,
-    Spacing, Statistics, VoxelData, VoxelFormat, brick::pad_brick,
+    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Extent, Intensity, Level, NoData,
+    Pyramid, Spacing, Statistics, VoxelData, VoxelFormat, brick::pad_brick,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -9,6 +9,7 @@ pub struct Channel {
     tint: [f32; 3],
     statistics: Statistics,
     data: VoxelData,
+    no_data: Option<NoData>,
 }
 
 impl Channel {
@@ -17,13 +18,32 @@ impl Channel {
             tint.iter().all(|component| (0.0..=1.0).contains(component)),
             "a channel tint is an srgb triple"
         );
-        let statistics = Statistics::census(&data);
+        let statistics = Statistics::census(&data, None);
         Self {
             name: name.into(),
             tint,
             statistics,
             data,
+            no_data: None,
         }
+    }
+
+    pub fn with_no_data(mut self, no_data: NoData) -> Self {
+        assert_eq!(
+            no_data.format(),
+            self.data.format(),
+            "a channel no-data value holds the format of its volume"
+        );
+        let declared = no_data.declared();
+        if declared.is_some() {
+            self.statistics = Statistics::census(&self.data, declared);
+        }
+        self.no_data = declared;
+        self
+    }
+
+    pub fn no_data(&self) -> Option<NoData> {
+        self.no_data
     }
 
     pub fn name(&self) -> &str {
@@ -100,12 +120,16 @@ impl Volume {
             .channels
             .iter()
             .map(|channel| {
-                ChannelInfo::new(
+                let info = ChannelInfo::new(
                     channel.name(),
                     channel.tint(),
                     channel.statistics(),
                     channel.format(),
-                )
+                );
+                match channel.no_data() {
+                    Some(no_data) => info.with_no_data(no_data),
+                    None => info,
+                }
             })
             .collect();
         Pyramid::new(vec![level], 1, channels, 1, 1.0, Calibration::Recorded)

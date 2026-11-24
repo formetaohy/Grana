@@ -17,6 +17,7 @@ pub(super) struct Shot {
     pub(super) assured: bool,
     pub(super) stale: bool,
     pub(super) slice: bool,
+    pub(super) transparent: bool,
     pub(super) translucent: bool,
     pub(super) surfaces: bool,
     pub(super) splats: bool,
@@ -24,7 +25,7 @@ pub(super) struct Shot {
 }
 
 impl Shot {
-    fn of(frame: &Frame<'_, '_>, translucent: bool) -> Self {
+    pub(super) fn of(frame: &Frame<'_, '_>, transparent: bool) -> Self {
         let slice = frame.camera.slice().is_some();
         Self {
             view: View::new(
@@ -38,7 +39,8 @@ impl Shot {
             assured: frame.delivery.assures(),
             stale: frame.delivery.shows_stale(),
             slice,
-            translucent,
+            transparent,
+            translucent: transparent && !slice,
             surfaces: !frame.scene.layers.is_empty(),
             splats: !frame.scene.splats.is_empty(),
             volume: frame
@@ -46,6 +48,14 @@ impl Shot {
                 .channels
                 .iter()
                 .any(|row| row.visible && row.opacity > 0.0),
+        }
+    }
+
+    pub(super) fn demand(self) -> budget::FrameDemand {
+        budget::FrameDemand {
+            surfaces: self.surfaces,
+            volume: self.volume,
+            transparent: self.transparent,
         }
     }
 }
@@ -80,13 +90,12 @@ impl Renderer {
         queue: &Queue,
         target: &mut FrameTarget,
         frame: Frame<'_, '_>,
+        shot: Shot,
     ) -> Result<FrameInfo, String> {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("grana.frame"),
         });
         self.info.drawn = false;
-        let translucent = self.translucent(&frame);
-        let shot = Shot::of(&frame, translucent);
         let mut prepared = match self.prepare(device, queue, &mut encoder, target, &frame, shot) {
             Ok(prepared) => prepared,
             Err(Halt::Blank) => {
@@ -133,27 +142,24 @@ impl Renderer {
         self.convergence.register();
     }
 
-    fn translucent(&mut self, frame: &Frame<'_, '_>) -> bool {
-        if frame.camera.slice().is_some() {
-            return false;
-        }
+    pub(super) fn transparency(&mut self, frame: &Frame<'_, '_>) -> bool {
         if !frame.scene.splats.is_empty() {
             return true;
         }
         let version = frame.scene.versions.appearance();
-        if let Some((held, translucent)) = self.translucent
+        if let Some((held, transparent)) = self.transparency
             && held == version
         {
-            return translucent;
+            return transparent;
         }
-        let translucent = frame
+        let transparent = frame
             .scene
             .layers
             .iter()
             .flat_map(|layer| layer.styles.iter())
             .any(|style| style.visible() && style.transparent());
-        self.translucent = Some((version, translucent));
-        translucent
+        self.transparency = Some((version, transparent));
+        transparent
     }
 
     fn prepare(
@@ -265,7 +271,7 @@ impl Renderer {
                 Ok(ray) => ray,
                 Err(detail) => return Err(Halt::Fail(detail)),
             };
-        let layers = shot.translucent.then_some(crate::fragment::LAYERS);
+        let layers = shot.transparent.then_some(crate::fragment::LAYERS);
         if let Err(detail) = allocate::targets(
             device,
             layouts,

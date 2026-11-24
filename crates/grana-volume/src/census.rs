@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use crate::{Extent, Intensity, Statistics, VoxelData};
+use crate::{Extent, Intensity, NoData, Statistics, VoxelData};
 
 const VOXEL_BUDGET: u64 = 4 << 20;
 
@@ -35,6 +35,7 @@ impl Census {
 
     pub fn measure<E>(
         &mut self,
+        no_data: Option<NoData>,
         mut read: impl FnMut(u32, [Range<u32>; 3]) -> Result<VoxelData, E>,
     ) -> Result<Statistics, E> {
         let mut minimum = f64::INFINITY;
@@ -44,7 +45,7 @@ impl Census {
             let time = sample * self.frames / self.samples;
             for block in &self.blocks {
                 let data = read(time, block.clone())?;
-                data.for_each_value(|value| {
+                data.for_each_present_value(no_data, |value| {
                     let value = f64::from(value);
                     if !value.is_finite() {
                         return;
