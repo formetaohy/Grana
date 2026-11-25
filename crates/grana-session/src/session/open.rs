@@ -717,24 +717,27 @@ impl Session {
                 } => {
                     if !self.stale(generation) {
                         self.in_flight.remove(&request);
+                        let now = Instant::now();
                         let failure = match self.failed.entry(request) {
                             Entry::Occupied(entry) => entry.into_mut(),
                             Entry::Vacant(entry) => entry.insert(Failure {
                                 attempts: 0,
-                                retry_at: Instant::now(),
+                                retry_at: now,
+                                asked: false,
                             }),
                         };
                         failure.attempts += 1;
-                        let exhausted = !retryable || failure.attempts >= RETRY_LIMIT;
-                        failure.retry_at = Instant::now() + Failure::backoff(failure.attempts);
-                        if exhausted {
-                            self.failed.remove(&request);
-                            self.abandoned.push(request);
-                            grana_log::warn!(target: "grana::session", %detail, "a volume region could not be read");
+                        failure.asked = !retryable;
+                        failure.retry_at = now + Failure::backoff(failure.attempts);
+                        self.abandoned.push(request);
+                        if !retryable {
+                            grana_log::warn!(target: "grana::session", %detail, "a volume region cannot be read");
                         }
-                        self.message = Some(Message::error(format!(
-                            "a volume region could not be read: {detail}"
-                        )));
+                        if failure.attempts == 1 {
+                            self.message = Some(Message::error(format!(
+                                "a volume region could not be read: {detail}"
+                            )));
+                        }
                     }
                 }
                 LoaderEvent::Failed(detail) => {

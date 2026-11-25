@@ -77,6 +77,13 @@ pub struct ViewInfo {
     pub visible: usize,
     pub demand: usize,
     pub resident: usize,
+    pub unavailable: usize,
+}
+
+impl ViewInfo {
+    pub fn complete(self) -> bool {
+        self.resident.saturating_add(self.unavailable) >= self.demand
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -658,6 +665,14 @@ impl Renderer {
         resources.abandon(requests, &mut self.residence, self.time);
     }
 
+    pub fn retry(&mut self, requests: &[BrickRequest]) {
+        let Some(resources) = self.resources.as_mut() else {
+            return;
+        };
+        resources.forget_unavailable(requests);
+        self.residence.revalidate();
+    }
+
     pub fn statistics(&self) -> Statistics {
         let (copies, staged, payload) = self
             .resources
@@ -667,6 +682,10 @@ impl Renderer {
             .resources
             .as_ref()
             .map_or(0, |resources| resources.atlas.evictions());
+        let unavailable = self
+            .resources
+            .as_ref()
+            .map_or(0, |resources| resources.unavailable(self.time));
         let (prefetched, prefetch_hits) = self.residence.prefetch_counts();
         let (residency, atlas, records, surfaces) =
             self.resources
@@ -696,6 +715,7 @@ impl Renderer {
             atlas,
             records,
             surfaces,
+            unavailable,
         }
     }
 

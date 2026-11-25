@@ -182,6 +182,10 @@ impl Engine {
         Ok(Some(requests))
     }
 
+    pub fn retry(&mut self, requests: &[BrickRequest]) {
+        self.renderer.retry(requests);
+    }
+
     pub fn upload(&mut self, bricks: &[(BrickRequest, PackedBrick)]) {
         self.renderer.upload(bricks);
         self.generation = self.renderer.generation();
@@ -383,7 +387,7 @@ impl Engine {
         if delivery.awaits() {
             return info.drawn && !info.fading;
         }
-        info.refined() && !info.fading && info.view.resident >= info.view.demand
+        info.refined() && !info.fading && info.view.complete()
     }
 
     pub fn request_pick(&mut self, device: &Device, queue: &Queue, point: [u32; 2]) -> bool {

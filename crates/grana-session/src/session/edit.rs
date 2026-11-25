@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use super::*;
 
@@ -9,7 +9,6 @@ use grana_scene::{ObjectKind, ObjectSet, Provenance, SurfaceEdit, SurfaceEditKin
 type Deletions = (ObjectSetId, Vec<(u32, Vec<ObjectId>)>);
 type Edited = Vec<grana_pipeline::run::EditedFrame>;
 type EditTask = Progress<Result<Edited, String>>;
-type EditStart = (EditTask, usize, usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Refresh {
@@ -21,6 +20,7 @@ enum Refresh {
 #[derive(Default)]
 pub(super) struct Edits {
     queue: VecDeque<Queued>,
+    deferred: HashMap<ObjectSetId, Queued>,
     running: Option<Running>,
 }
 
@@ -32,8 +32,6 @@ struct Queued {
 
 struct Running {
     queued: Queued,
-    strokes: usize,
-    edits: usize,
     task: EditTask,
 }
 
@@ -49,29 +47,53 @@ pub(super) enum Follow {
     Refresh,
 }
 
+fn absorb(held: &mut Queued, newer: Queued) {
+    held.rollback = newer.rollback;
+    if matches!(held.follow, Follow::Refresh) {
+        held.follow = newer.follow;
+    }
+}
+
 impl Edits {
     fn push(&mut self, queued: Queued) {
-        self.queue.push_back(queued);
+        if self
+            .running
+            .as_ref()
+            .is_some_and(|running| running.queued.set == queued.set)
+        {
+            match self.deferred.entry(queued.set) {
+                Entry::Occupied(mut held) => absorb(held.get_mut(), queued),
+                Entry::Vacant(held) => {
+                    held.insert(queued);
+                }
+            }
+            return;
+        }
+        match self.queue.iter().position(|held| held.set == queued.set) {
+            Some(position) => absorb(&mut self.queue[position], queued),
+            None => self.queue.push_back(queued),
+        }
     }
 
-    fn involves(&self, set: ObjectSetId) -> bool {
-        self.running
-            .as_ref()
-            .is_some_and(|running| running.queued.set == set)
-            || self.queue.iter().any(|queued| queued.set == set)
+    fn release(&mut self, set: ObjectSetId) {
+        if let Some(queued) = self.deferred.remove(&set) {
+            self.push(queued);
+        }
     }
 
     pub(super) fn busy(&self) -> bool {
-        self.running.is_some() || !self.queue.is_empty()
+        self.running.is_some() || !self.queue.is_empty() || !self.deferred.is_empty()
     }
 
     pub(super) fn clear(&mut self) {
         self.queue.clear();
+        self.deferred.clear();
         self.running = None;
     }
 
     pub(super) fn retain(&mut self, keep: impl Fn(ObjectSetId) -> bool) {
         self.queue.retain(|queued| keep(queued.set));
+        self.deferred.retain(|set, _| keep(*set));
         if self
             .running
             .as_ref()
@@ -543,9 +565,6 @@ impl Session {
     }
 
     pub(super) fn enqueue_edit(&mut self, set: ObjectSetId, rollback: Rollback, follow: Follow) {
-        if self.edits.involves(set) {
-            return;
-        }
         self.edits.push(Queued {
             set,
             rollback,
@@ -567,7 +586,9 @@ impl Session {
                     .running
                     .take()
                     .expect("the finished edit holds its request");
-                self.finish_edit(running.queued, running.strokes, running.edits, outcome);
+                let set = running.queued.set;
+                self.finish_edit(running.queued, outcome);
+                self.edits.release(set);
                 repaint = true;
                 continue;
             }
@@ -575,13 +596,8 @@ impl Session {
                 break;
             };
             match self.start_edit(&queued) {
-                Ok((task, strokes, edits)) => {
-                    self.edits.running = Some(Running {
-                        queued,
-                        strokes,
-                        edits,
-                        task,
-                    });
+                Ok(task) => {
+                    self.edits.running = Some(Running { queued, task });
                     repaint = true;
                 }
                 Err(detail) => {
@@ -593,7 +609,7 @@ impl Session {
         repaint
     }
 
-    fn start_edit(&self, queued: &Queued) -> Result<EditStart, String> {
+    fn start_edit(&self, queued: &Queued) -> Result<EditTask, String> {
         let Some(scene) = self.scene.as_ref() else {
             return Err("the scene left before its edit started".to_string());
         };
@@ -612,8 +628,6 @@ impl Session {
             .get(source)
             .map(|object| object.source())
             .ok_or_else(|| "the edited object set left the scene".to_string())?;
-        let strokes = provenance.strokes().len();
-        let edits = provenance.edits().len();
         let task = match provenance {
             Provenance::Edited { edits, .. } => {
                 let store = Some(self.store.clone());
@@ -652,16 +666,10 @@ impl Session {
             }
             _ => return Err("the object set carries no edits".to_string()),
         };
-        Ok((task, strokes, edits))
+        Ok(task)
     }
 
-    fn finish_edit(
-        &mut self,
-        queued: Queued,
-        strokes: usize,
-        edits: usize,
-        outcome: Result<Edited, String>,
-    ) {
+    fn finish_edit(&mut self, queued: Queued, outcome: Result<Edited, String>) {
         let frames = match outcome {
             Ok(frames) => frames,
             Err(detail) => {
@@ -728,24 +736,7 @@ impl Session {
             self.advance_step();
             self.drive_recipe();
         }
-        self.refresh_running_edit(&queued, strokes, edits);
         self.touch();
-    }
-
-    fn refresh_running_edit(&mut self, queued: &Queued, strokes: usize, edits: usize) {
-        let current = self
-            .scene
-            .as_ref()
-            .and_then(|scene| scene.objects.get(queued.set))
-            .map(|object| {
-                (
-                    object.provenance().strokes().len(),
-                    object.provenance().edits().len(),
-                )
-            });
-        if current != Some((strokes, edits)) && current.is_some() {
-            self.enqueue_edit(queued.set, Rollback::Keep, Follow::Refresh);
-        }
     }
 
     fn rollback_edit(&mut self, queued: &Queued) {

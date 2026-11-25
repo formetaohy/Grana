@@ -127,21 +127,21 @@ impl Offline {
         }
         if let Err(detail) =
             self.renderer
-                .reserve(&self.device, &pyramid, needed, size, EXPORT_CEILING)
+                .reserve(&self.device, &pyramid, needed.detail, size, EXPORT_CEILING)
         {
             return Outcome::Failed { detail };
         }
         let first = self.renderer.first_level();
-        if first > needed.level {
+        if first > needed.detail.level {
             return Outcome::Failed {
                 detail: format!(
                     "an export at this size needs level {} but the renderer addresses levels {first} and coarser",
-                    needed.level
+                    needed.detail.level
                 ),
             };
         }
         self.renderer.begin_export();
-        let mut export = match Export::start(&self.device, self.format, plan) {
+        let mut export = match Export::start(&self.device, self.format, plan, needed.levels) {
             Ok(export) => export,
             Err(detail) => return Outcome::Failed { detail },
         };

@@ -54,7 +54,6 @@ const EXPORT_POLL: Duration = Duration::from_millis(200);
 const PLAYBACK_INTERVAL: Duration = Duration::from_millis(90);
 const ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const INTERACTION_HOLD: Duration = Duration::from_millis(220);
-const RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_REPAINT_DELAY: Duration = Duration::from_secs(3600);
 const CAPTURE_BUDGET: Duration = Duration::from_secs(240);
 const TOOL_CLICK_SLOP: f32 = 3.0;
@@ -429,7 +428,7 @@ impl App {
         self.elapsed_frames += 1;
         let info = self.frame_info();
         let loaded = self.session.scene().is_some();
-        let streamed = info.view.resident >= info.view.demand;
+        let streamed = info.view.complete();
         let settled =
             loaded && streamed && info.refined() && !info.fading && !self.session.previewing();
         let occupied = self.streaming();

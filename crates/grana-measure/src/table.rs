@@ -1450,10 +1450,6 @@ impl Table {
         self.basis.clone()
     }
 
-    pub(crate) fn source(&self, column: usize) -> Option<usize> {
-        self.sources.get(column).copied().flatten()
-    }
-
     pub fn columns(&self) -> &[Column] {
         &self.columns
     }

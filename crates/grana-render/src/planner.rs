@@ -368,6 +368,7 @@ pub(crate) fn decode_plan(
             visible,
             demand,
             resident: demand - requests.len(),
+            unavailable: 0,
         },
         requests,
         missing,

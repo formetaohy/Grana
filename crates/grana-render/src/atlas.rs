@@ -125,88 +125,136 @@ impl Space {
 }
 
 #[derive(Default)]
-struct HollowFrame {
+struct BrickFrame {
     words: Vec<u64>,
     count: usize,
 }
 
-impl HollowFrame {
+impl BrickFrame {
     fn holds(&self, index: usize) -> bool {
         self.words
             .get(index / u64::BITS as usize)
             .is_some_and(|word| word & (1u64 << (index % u64::BITS as usize)) != 0)
     }
 
-    fn set(&mut self, index: usize) {
+    fn set(&mut self, index: usize) -> bool {
         let word = index / u64::BITS as usize;
         if self.words.len() <= word {
             self.words.resize(word + 1, 0);
         }
         let bit = 1u64 << (index % u64::BITS as usize);
-        if self.words[word] & bit == 0 {
-            self.words[word] |= bit;
-            self.count += 1;
+        if self.words[word] & bit != 0 {
+            return false;
         }
+        self.words[word] |= bit;
+        self.count += 1;
+        true
     }
 
-    fn clear(&mut self, index: usize) {
+    fn clear(&mut self, index: usize) -> bool {
         let word = index / u64::BITS as usize;
         if self.words.len() <= word {
-            return;
+            return false;
         }
         let bit = 1u64 << (index % u64::BITS as usize);
-        if self.words[word] & bit != 0 {
-            self.words[word] &= !bit;
-            self.count -= 1;
+        if self.words[word] & bit == 0 {
+            return false;
         }
+        self.words[word] &= !bit;
+        self.count -= 1;
+        true
     }
 }
 
-struct Hollows {
-    frames: HashMap<(u32, usize), HollowFrame>,
-    remembered: Vec<u32>,
+#[derive(Default)]
+struct Frames {
+    frames: HashMap<(u32, usize), BrickFrame>,
 }
 
-impl Hollows {
-    fn new() -> Self {
-        Self {
-            frames: HashMap::new(),
-            remembered: Vec::new(),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.frames.clear();
-        self.remembered.clear();
-    }
-
+impl Frames {
     fn holds(&self, time: u32, level: usize, index: usize) -> bool {
         self.frames
             .get(&(time, level))
             .is_some_and(|frame| frame.holds(index))
     }
 
-    fn assign(&mut self, time: u32, level: usize, index: usize) -> Vec<u32> {
-        if self.holds(time, level, index) {
-            return Vec::new();
-        }
-        let forgotten = self.remember(time);
-        self.frames.entry((time, level)).or_default().set(index);
-        forgotten
+    fn set(&mut self, time: u32, level: usize, index: usize) -> bool {
+        self.frames.entry((time, level)).or_default().set(index)
     }
 
-    fn release(&mut self, time: u32, level: usize, index: usize) -> bool {
+    fn clear(&mut self, time: u32, level: usize, index: usize) -> bool {
         let Some(frame) = self.frames.get_mut(&(time, level)) else {
             return false;
         };
-        if !frame.holds(index) {
+        if !frame.clear(index) {
             return false;
         }
-        frame.clear(index);
         if frame.count == 0 {
             self.frames.remove(&(time, level));
         }
         true
+    }
+
+    fn reset(&mut self) {
+        self.frames.clear();
+    }
+
+    fn drop_frame(&mut self, time: u32) {
+        self.frames.retain(|(held, _), _| *held != time);
+    }
+
+    fn retain_from(&mut self, time: u32) {
+        self.frames.retain(|(held, _), _| *held >= time);
+    }
+
+    fn marks(&self, time: u32) -> usize {
+        self.frames
+            .iter()
+            .filter(|((held, _), _)| *held == time)
+            .map(|(_, frame)| frame.count)
+            .sum()
+    }
+
+    fn words(&self, time: u32, level: usize) -> Option<&[u64]> {
+        self.frames
+            .get(&(time, level))
+            .map(|frame| frame.words.as_slice())
+    }
+}
+
+struct Hollows {
+    frames: Frames,
+    remembered: Vec<u32>,
+}
+
+impl Hollows {
+    fn new() -> Self {
+        Self {
+            frames: Frames::default(),
+            remembered: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frames.reset();
+        self.remembered.clear();
+    }
+
+    fn holds(&self, time: u32, level: usize, index: usize) -> bool {
+        self.frames.holds(time, level, index)
+    }
+
+    fn assign(&mut self, time: u32, level: usize, index: usize) -> Vec<u32> {
+        if self.frames.holds(time, level, index) {
+            return Vec::new();
+        }
+        let forgotten = self.remember(time);
+        self.frames.set(time, level, index);
+        forgotten
+    }
+
+    fn release(&mut self, time: u32, level: usize, index: usize) -> bool {
+        self.frames.clear(time, level, index)
     }
 
     fn remember(&mut self, time: u32) -> Vec<u32> {
@@ -217,16 +265,14 @@ impl Hollows {
         let mut forgotten = Vec::new();
         while self.remembered.len() > HOLLOW_FRAMES {
             let dropped = self.remembered.remove(0);
-            self.frames.retain(|(held, _), _| *held != dropped);
+            self.frames.drop_frame(dropped);
             forgotten.push(dropped);
         }
         forgotten
     }
 
     fn words(&self, time: u32, level: usize) -> Option<&[u64]> {
-        self.frames
-            .get(&(time, level))
-            .map(|frame| frame.words.as_slice())
+        self.frames.words(time, level)
     }
 }
 
@@ -253,6 +299,7 @@ pub(crate) struct Atlas {
     slots: Vec<Slot>,
     frames: HashMap<(u32, usize), Frame>,
     hollow: Hollows,
+    unavailable: Frames,
     hand: usize,
     hold_generation: u8,
     versions: Vec<u32>,
@@ -386,6 +433,7 @@ impl Atlas {
             slots: vec![Slot::EMPTY; capacity],
             frames: HashMap::new(),
             hollow: Hollows::new(),
+            unavailable: Frames::default(),
             hand: 0,
             hold_generation: 0,
             versions: vec![0; capacity],
@@ -505,7 +553,31 @@ impl Atlas {
     }
 
     pub fn assign_hollow(&mut self, time: u32, level: usize, index: usize) -> Vec<u32> {
+        self.unavailable.clear(time, level, index);
         self.hollow.assign(time, level, index)
+    }
+
+    pub fn is_unavailable(&self, time: u32, level: usize, index: usize) -> bool {
+        self.unavailable.holds(time, level, index)
+    }
+
+    pub fn assign_unavailable(&mut self, time: u32, level: usize, index: usize) {
+        if self.hollow.holds(time, level, index) {
+            return;
+        }
+        self.unavailable.set(time, level, index);
+    }
+
+    pub fn retry(&mut self, time: u32, level: usize, index: usize) {
+        self.unavailable.clear(time, level, index);
+    }
+
+    pub fn retire(&mut self, time: u32) {
+        self.unavailable.retain_from(time);
+    }
+
+    pub fn unavailable_marks(&self, time: u32) -> usize {
+        self.unavailable.marks(time)
     }
 
     pub fn remember(&mut self, time: u32) -> Vec<u32> {
@@ -518,6 +590,7 @@ impl Atlas {
         self.slots.fill(Slot::EMPTY);
         self.frames.clear();
         self.hollow.clear();
+        self.unavailable.reset();
         self.hand = 0;
         self.hold_generation = 0;
         self.identity.clear();
@@ -701,6 +774,7 @@ impl Atlas {
             frames,
             identity,
             hollow,
+            unavailable,
             ..
         } = self;
         assert!(
@@ -708,6 +782,7 @@ impl Atlas {
             "an allocated brick slot is vacant"
         );
         hollow.release(brick.time, brick.level, brick.index);
+        unavailable.clear(brick.time, brick.level, brick.index);
         identity.insert((brick.time, brick.level, brick.index), slot);
         let frame = frames.entry((brick.time, brick.level)).or_insert(Frame {
             head: ABSENT,

@@ -16,4 +16,5 @@ pub struct Statistics {
     pub atlas: u64,
     pub records: u64,
     pub surfaces: u64,
+    pub unavailable: u64,
 }

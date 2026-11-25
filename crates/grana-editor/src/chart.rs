@@ -149,6 +149,15 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
     }
 }
 
+fn trend_unit(language: Language, population: grana_measure::Population) -> Option<&'static str> {
+    match population {
+        grana_measure::Population::Object => Some(grana_i18n::measure::unit_objects(language)),
+        grana_measure::Population::Track => Some(grana_i18n::measure::unit_tracks(language)),
+        grana_measure::Population::Molecule => Some(grana_i18n::measure::unit_molecules(language)),
+        grana_measure::Population::Frame => None,
+    }
+}
+
 fn range(filters: &[grana_measure::Filter], column: usize) -> Option<(f32, f32)> {
     filters
         .iter()
@@ -203,15 +212,18 @@ fn caption(plot: &Plot, table: &Table, language: Language) -> String {
             }
         }
         Plot::Trend(trend) => {
-            if trend.gated() < trend.total() {
-                grana_i18n::measure::gated_values_over_frames(
-                    language,
-                    trend.gated(),
-                    trend.total(),
-                    trend.frames(),
-                )
-            } else {
-                grana_i18n::measure::values_over_frames(language, trend.total(), trend.frames())
+            let (gated, total, frames) = (trend.gated(), trend.total(), trend.frames());
+            match (trend_unit(language, trend.population()), gated < total) {
+                (Some(unit), true) => {
+                    grana_i18n::measure::gated_trend_caption(language, unit, gated, total, frames)
+                }
+                (Some(unit), false) => {
+                    grana_i18n::measure::trend_caption(language, unit, total, frames)
+                }
+                (None, true) => {
+                    grana_i18n::measure::gated_values_over_frames(language, gated, total, frames)
+                }
+                (None, false) => grana_i18n::measure::values_over_frames(language, total, frames),
             }
         }
         Plot::Ripley(ripley) => crate::plot::ripley_caption(language, ripley),

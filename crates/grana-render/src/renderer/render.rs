@@ -221,6 +221,7 @@ impl Renderer {
                 .map(|slice| slice.plane(frame.camera.pivot())),
         );
         let forgotten = resources.atlas.remember(frame.time);
+        resources.retire(frame.time);
         resources.drop_hollows(&forgotten);
         let outlook = residence.adapt(Adapt {
             pyramid: &resources.pyramid,

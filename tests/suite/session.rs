@@ -2253,7 +2253,7 @@ fn reads_each_streamed_brick_once() {
             )
             .expect("the viewport draws");
         let info = engine.info();
-        if info.drawn && info.view.demand > 0 && info.view.resident == info.view.demand {
+        if info.drawn && info.view.demand > 0 && info.view.complete() {
             break;
         }
         assert!(

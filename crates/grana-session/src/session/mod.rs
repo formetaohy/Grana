@@ -89,22 +89,27 @@ const DRAIN: Duration = Duration::from_millis(2);
 
 const RETRY_FLOOR: Duration = Duration::from_millis(250);
 
-const RETRY_CEILING: Duration = Duration::from_secs(8);
+const RETRY_CEILING: Duration = Duration::from_secs(60);
 
-const RETRY_LIMIT: u32 = 6;
+const RETRY_STEPS: u32 = 8;
 
 const DECODE_REPORT: Duration = Duration::from_secs(1);
 
 struct Failure {
     attempts: u32,
     retry_at: Instant,
+    asked: bool,
 }
 
 impl Failure {
     fn backoff(attempts: u32) -> Duration {
         RETRY_FLOOR
-            .saturating_mul(1 << attempts.min(5))
+            .saturating_mul(1 << attempts.min(RETRY_STEPS))
             .min(RETRY_CEILING)
+    }
+
+    fn waiting(&self) -> bool {
+        !self.asked
     }
 }
 
@@ -152,6 +157,7 @@ pub struct Session {
     in_flight: HashSet<BrickRequest>,
     plan: u64,
     abandoned: Vec<BrickRequest>,
+    retries: Vec<BrickRequest>,
     reads_started: u64,
     reads_delivered: u64,
     decode_reported: Option<Instant>,
@@ -254,6 +260,7 @@ impl Session {
             in_flight: HashSet::new(),
             plan: 0,
             abandoned: Vec::new(),
+            retries: Vec::new(),
             reads_started: 0,
             reads_delivered: 0,
             decode_reported: None,
@@ -420,6 +427,7 @@ impl Session {
         }
         self.in_flight.clear();
         self.abandoned.clear();
+        self.retries.clear();
         self.failed.clear();
         self.bricks.clear();
     }
@@ -705,6 +713,25 @@ impl Session {
     pub fn take_abandoned(&mut self) -> Vec<BrickRequest> {
         std::mem::take(&mut self.abandoned)
     }
+    pub fn take_retries(&mut self) -> Vec<BrickRequest> {
+        std::mem::take(&mut self.retries)
+    }
+    fn advance_retries(&mut self) {
+        let now = Instant::now();
+        let mut due = Vec::new();
+        for (request, failure) in &mut self.failed {
+            if !failure.waiting() || now < failure.retry_at {
+                continue;
+            }
+            failure.asked = true;
+            failure.retry_at = now + Failure::backoff(failure.attempts);
+            due.push(*request);
+        }
+        self.retries.extend(due);
+    }
+    pub fn retrying(&self) -> bool {
+        self.retry_wait().is_some()
+    }
     pub fn reads(&self) -> Reads {
         Reads {
             started: self.reads_started,
@@ -786,6 +813,7 @@ impl Session {
     }
     pub fn poll(&mut self) -> bool {
         self.network.sample(Instant::now());
+        self.advance_retries();
         let mut repaint = self.poll_source();
         let (completions, stepped) = self.tasks.poll();
         for completion in completions {
@@ -881,7 +909,8 @@ impl Session {
                     continue;
                 }
                 if let Some(failure) = failed.get(request)
-                    && (failure.attempts >= RETRY_LIMIT || now < failure.retry_at)
+                    && !failure.asked
+                    && now < failure.retry_at
                 {
                     continue;
                 }
@@ -911,6 +940,7 @@ impl Session {
         let now = Instant::now();
         self.failed
             .values()
+            .filter(|failure| failure.waiting())
             .map(|failure| failure.retry_at.saturating_duration_since(now))
             .min()
     }

@@ -1,4 +1,4 @@
-﻿mod child;
+mod child;
 mod classifier;
 mod cluster;
 mod coloc;
@@ -44,7 +44,7 @@ pub use nearest::Nearest;
 pub use pair::PairExport;
 pub use plot::{
     DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries, Histogram, MeasureView,
-    Plot, PlotAxis, Scatter, Summary, Trend, TrendPoint,
+    Plot, PlotAxis, Population, Scatter, Summary, Trend, TrendPoint,
 };
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;

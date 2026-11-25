@@ -13,7 +13,7 @@ pub use distribution::{DENSITY_POINTS, Distribution, DistributionGroup, Distribu
 pub use histogram::Histogram;
 pub use scatter::Scatter;
 pub use summary::Summary;
-pub use trend::{Trend, TrendPoint};
+pub use trend::{Population, Trend, TrendPoint};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeasureView {

@@ -53,6 +53,10 @@ impl App {
         if !abandoned.is_empty() {
             engine.abandon(&abandoned);
         }
+        let retries = session.take_retries();
+        if !retries.is_empty() {
+            engine.retry(&retries);
+        }
         let time = session.scene().map_or(0, |scene| scene.time());
         if let Some(requests) =
             engine.poll_requests(surface.device(), time, session.pending_requests())?
@@ -203,16 +207,17 @@ impl App {
             || self.workspace.playback.playing
             || self.session.working()
             || self.session.inquiry_pending()
+            || self.session.retrying()
             || engine.is_some_and(|engine| engine.requests_pending() || engine.pick_pending())
-            || (self.session.scene().is_some() && info.view.resident < info.view.demand)
+            || (self.session.scene().is_some() && !info.view.complete())
     }
 
     pub(super) fn stream_poll(&self) -> Duration {
         if self.session.pending() > 0 {
             return STREAM_POLL;
         }
-        self.session.retry_wait().map_or(STREAM_POLL, |wait| {
-            wait.clamp(STREAM_POLL, super::RETRY_INTERVAL)
-        })
+        self.session
+            .retry_wait()
+            .map_or(STREAM_POLL, |wait| wait.max(STREAM_POLL))
     }
 }

@@ -8,6 +8,7 @@ pub const SCORE_LABEL: &str = "classifier";
 const REGULARIZATION: f64 = 0.05;
 const ITERATIONS: usize = 32;
 const MINIMUM_SAMPLES: usize = 2;
+const FOLDS: usize = 5;
 const SCALE_FLOOR: f64 = 1.0e-6;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -90,65 +91,18 @@ impl Classifier {
                 labels.len()
             ));
         }
-        let count = samples.len();
-        let width = features.len();
-        let mut mean = vec![0.0f64; width];
-        for sample in &samples {
-            for (slot, value) in sample.iter().enumerate() {
-                mean[slot] += value;
-            }
-        }
-        for value in &mut mean {
-            *value /= count as f64;
-        }
-        let mut scale = vec![0.0f64; width];
-        for sample in &samples {
-            for (slot, value) in sample.iter().enumerate() {
-                scale[slot] += (value - mean[slot]).powi(2);
-            }
-        }
-        for value in &mut scale {
-            *value = (*value / count as f64).sqrt().max(SCALE_FLOOR);
-        }
-        let design = samples
-            .iter()
-            .map(|sample| {
-                let mut row = Vec::with_capacity(width + 1);
-                row.push(1.0f64);
-                for (slot, value) in sample.iter().enumerate() {
-                    row.push((value - mean[slot]) / scale[slot]);
-                }
-                row
-            })
-            .collect::<Vec<_>>();
-        let weights = class_weights(&labels, positives, negatives);
-        let mut coefficients = vec![0.0f64; width + 1];
-        for _ in 0..ITERATIONS {
-            let (gradient, hessian) = derivatives(&design, &labels, &weights, &coefficients);
-            let Some(step) = solve(&hessian, &gradient) else {
-                break;
-            };
-            let mut converged = true;
-            for (coefficient, delta) in coefficients.iter_mut().zip(&step) {
-                *coefficient -= delta;
-                converged &= delta.abs() < 1.0e-8;
-            }
-            if converged {
-                break;
-            }
-        }
-        let mut classifier = Self {
+        let fit = fit(&samples, &labels).expect("a gated sample holds both classes");
+        let accuracy = cross_validated(&samples, &labels, positives, negatives);
+        Ok(Self {
             features: features.to_vec(),
-            mean,
-            scale,
-            weights: coefficients[1..].to_vec(),
-            bias: coefficients[0],
+            mean: fit.mean,
+            scale: fit.scale,
+            weights: fit.weights,
+            bias: fit.bias,
             positives,
             negatives,
-            accuracy: 0.0,
-        };
-        classifier.accuracy = classifier.balanced_accuracy(&design, &labels);
-        Ok(classifier)
+            accuracy,
+        })
     }
 
     pub fn features(&self) -> &[Measurement] {
@@ -280,18 +234,117 @@ impl Classifier {
             Err("a classifier records a finite accuracy".to_string())
         }
     }
+}
 
-    fn balanced_accuracy(&self, design: &[Vec<f64>], labels: &[bool]) -> f32 {
+struct Fit {
+    mean: Vec<f64>,
+    scale: Vec<f64>,
+    weights: Vec<f64>,
+    bias: f64,
+}
+
+fn fit(samples: &[Vec<f64>], labels: &[bool]) -> Option<Fit> {
+    let count = samples.len();
+    let positives = labels.iter().filter(|label| **label).count();
+    let negatives = count.checked_sub(positives)?;
+    if positives == 0 || negatives == 0 || count == 0 {
+        return None;
+    }
+    let width = samples[0].len();
+    let mut mean = vec![0.0f64; width];
+    for sample in samples {
+        for (slot, value) in sample.iter().enumerate() {
+            mean[slot] += value;
+        }
+    }
+    for value in &mut mean {
+        *value /= count as f64;
+    }
+    let mut scale = vec![0.0f64; width];
+    for sample in samples {
+        for (slot, value) in sample.iter().enumerate() {
+            scale[slot] += (value - mean[slot]).powi(2);
+        }
+    }
+    for value in &mut scale {
+        *value = (*value / count as f64).sqrt().max(SCALE_FLOOR);
+    }
+    let design = samples
+        .iter()
+        .map(|sample| {
+            let mut row = Vec::with_capacity(width + 1);
+            row.push(1.0f64);
+            for (slot, value) in sample.iter().enumerate() {
+                row.push((value - mean[slot]) / scale[slot]);
+            }
+            row
+        })
+        .collect::<Vec<_>>();
+    let weights = class_weights(labels, positives, negatives);
+    let mut coefficients = vec![0.0f64; width + 1];
+    for _ in 0..ITERATIONS {
+        let (gradient, hessian) = derivatives(&design, labels, &weights, &coefficients);
+        let Some(step) = solve(&hessian, &gradient) else {
+            break;
+        };
+        let mut converged = true;
+        for (coefficient, delta) in coefficients.iter_mut().zip(&step) {
+            *coefficient -= delta;
+            converged &= delta.abs() < 1.0e-8;
+        }
+        if converged {
+            break;
+        }
+    }
+    Some(Fit {
+        mean,
+        scale,
+        weights: coefficients[1..].to_vec(),
+        bias: coefficients[0],
+    })
+}
+
+fn cross_validated(
+    samples: &[Vec<f64>],
+    labels: &[bool],
+    positives: usize,
+    negatives: usize,
+) -> f32 {
+    let folds = FOLDS.min(positives).min(negatives).max(1);
+    let mut held = vec![0usize; samples.len()];
+    let mut kept = 0usize;
+    let mut excluded = 0usize;
+    for (row, label) in labels.iter().enumerate() {
+        if *label {
+            held[row] = kept % folds;
+            kept += 1;
+        } else {
+            held[row] = excluded % folds;
+            excluded += 1;
+        }
+    }
+    let mut sensitivity = 0.0f32;
+    let mut specificity = 0.0f32;
+    let mut evaluated = 0usize;
+    for fold in 0..folds {
+        let training = (0..samples.len())
+            .filter(|row| held[*row] != fold)
+            .map(|row| samples[row].clone())
+            .collect::<Vec<_>>();
+        let training_labels = (0..labels.len())
+            .filter(|row| held[*row] != fold)
+            .map(|row| labels[row])
+            .collect::<Vec<_>>();
+        let Some(fit) = fit(&training, &training_labels) else {
+            continue;
+        };
         let mut kept = (0usize, 0usize);
         let mut excluded = (0usize, 0usize);
-        for (row, label) in design.iter().zip(labels) {
-            let logit = self.bias
-                + row[1..]
-                    .iter()
-                    .zip(&self.weights)
-                    .map(|(value, weight)| value * weight)
-                    .sum::<f64>();
-            let predicted = logit >= 0.0;
+        for (row, label) in labels.iter().enumerate() {
+            if held[row] != fold {
+                continue;
+            }
+            let predicted = logit(&fit, &samples[row]) >= 0.0;
             if *label {
                 kept.1 += 1;
                 kept.0 += usize::from(predicted);
@@ -300,10 +353,26 @@ impl Classifier {
                 excluded.0 += usize::from(!predicted);
             }
         }
-        let sensitivity = ratio(kept);
-        let specificity = ratio(excluded);
-        0.5 * (sensitivity + specificity)
+        sensitivity += ratio(kept);
+        specificity += ratio(excluded);
+        evaluated += 1;
     }
+    if evaluated == 0 {
+        return 0.0;
+    }
+    let evaluated = evaluated as f32;
+    0.5 * (sensitivity / evaluated + specificity / evaluated)
+}
+
+fn logit(fit: &Fit, sample: &[f64]) -> f64 {
+    fit.bias
+        + fit
+            .weights
+            .iter()
+            .zip(sample)
+            .enumerate()
+            .map(|(slot, (weight, value))| weight * (value - fit.mean[slot]) / fit.scale[slot])
+            .sum::<f64>()
 }
 
 fn ratio(counts: (usize, usize)) -> f32 {

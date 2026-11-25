@@ -2181,8 +2181,13 @@ fn abandons_the_bricks_a_reader_cannot_supply() {
             .expect("the changed frame draws");
         if info.settled {
             assert_eq!(
-                info.view.resident, info.view.demand,
-                "an abandoned region stays missing"
+                info.view.resident + info.view.unavailable,
+                info.view.demand,
+                "an abandoned region is unfetchable rather than missing"
+            );
+            assert!(
+                info.view.unavailable > 0,
+                "an abandoned region is reported as unfetchable"
             );
             break;
         }

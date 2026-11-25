@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::mask::Mask;
 use crate::sample::Sample;
-use crate::table::Table;
+use crate::table::{Group, Table};
 
 pub const DENSITY_POINTS: usize = 64;
 
@@ -155,7 +155,8 @@ impl Distribution {
 impl Table {
     pub(crate) fn distribution(&self, column: usize, gated: &Mask) -> Distribution {
         let (low, high) = super::extent(self, column);
-        let timed = (0..self.rows()).all(|row| self.observation(row).time().is_some());
+        let timed = self.group() != Group::Molecule
+            && (0..self.rows()).all(|row| self.observation(row).time().is_some());
         let distinct = timed && {
             let mut times = (0..self.rows())
                 .filter_map(|row| self.observation(row).time())
@@ -235,6 +236,8 @@ fn distribution_label(table: &Table) -> String {
         "All objects".to_string()
     } else if (0..table.rows()).any(|row| table.observation(row).track().is_some()) {
         "All tracks".to_string()
+    } else if (0..table.rows()).any(|row| table.observation(row).molecule().is_some()) {
+        "All molecules".to_string()
     } else {
         "All frames".to_string()
     }

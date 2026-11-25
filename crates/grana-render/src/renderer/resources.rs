@@ -211,7 +211,6 @@ impl Resources {
         self.shadow.forget();
         self.summary = None;
     }
-
     pub(super) fn scopes(&self, damages: &[Damage]) -> Vec<(Region, ChannelSet)> {
         damages
             .iter()
@@ -507,15 +506,8 @@ impl Resources {
             pyramid,
             arena,
             atlas,
-            bricks: tables,
-            shadow,
-            upload,
             ..
         } = self;
-        let content = residence.content();
-        let mut generation = residence.generation();
-        let mut settled = Vec::new();
-        let mut forgotten = Vec::new();
         residence.discard(requests);
         for request in requests {
             let BrickRequest {
@@ -539,29 +531,46 @@ impl Resources {
                 continue;
             }
             let index = BrickGrid::new(extent).index(coord);
-            if atlas.slot(held, level, index).is_some() || atlas.is_hollow(held, level, index) {
-                settled.push(*request);
+            if atlas.slot(held, level, index).is_some() {
                 continue;
             }
-            forgotten.extend(atlas.assign_hollow(held, level, index));
-            if let Some(table) = tables[level]
-                .as_mut()
-                .filter(|table| table.time() == Some(held))
-            {
-                table.set_record(arena, index, BrickRecord::hollow(held, content));
-                shadow.mark(level, index);
+            atlas.assign_unavailable(held, level, index);
+            residence.abandoned(*request);
+        }
+    }
+
+    pub(super) fn retire(&mut self, time: u32) {
+        self.atlas.retire(time);
+    }
+
+    pub(super) fn forget_unavailable(&mut self, requests: &[BrickRequest]) {
+        let Self {
+            pyramid,
+            arena,
+            atlas,
+            ..
+        } = self;
+        for request in requests {
+            let BrickRequest {
+                time, level, coord, ..
+            } = *request;
+            if level >= pyramid.level_count() || level < arena.first() {
+                continue;
             }
-            generation += 1;
-            settled.push(*request);
+            let extent = pyramid.level(level).extent();
+            if coord.x() >= extent.x().div_ceil(BRICK_SIDE)
+                || coord.y() >= extent.y().div_ceil(BRICK_SIDE)
+                || coord.z() >= extent.z().div_ceil(BRICK_SIDE)
+            {
+                continue;
+            }
+            let index = BrickGrid::new(extent).index(coord);
+            atlas.retry(time, level, index);
         }
-        forget_hollows(tables, arena, upload, &forgotten);
-        for table in tables.iter_mut().flatten() {
-            table.flush(upload, arena);
-        }
-        residence.set_generation(generation);
-        for request in settled {
-            residence.supply(request);
-        }
+    }
+
+    pub(super) fn unavailable(&self, time: u32) -> u64 {
+        self.atlas.unavailable_marks(time) as u64
     }
 }
 

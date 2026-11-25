@@ -128,12 +128,17 @@ labels! {
     aggregate_median => "Median" / "中位数";
     all_objects => "All objects" / "所有对象";
     all_tracks => "All tracks" / "所有轨迹";
+    all_molecules => "All molecules" / "所有分子";
+    unit_objects => "object·frames" / "对象·帧";
+    unit_tracks => "track·frames" / "轨迹·帧";
+    unit_molecules => "molecule·frames" / "分子·帧";
 }
 
 pub fn distribution_group(language: Language, label: &str) -> String {
     match label {
         "All objects" => all_objects(language).to_string(),
         "All tracks" => all_tracks(language).to_string(),
+        "All molecules" => all_molecules(language).to_string(),
         _ => match label.strip_prefix("Frame ") {
             Some(number) => match number.parse::<u32>() {
                 Ok(number) => frame(language, number),
@@ -202,6 +207,8 @@ messages! {
     scatter_title(vertical: &str, horizontal: &str) => "{vertical} against {horizontal}" / "{vertical} 对 {horizontal}";
     distribution_title(column: &str) => "Distribution of {column}" / "{column} 分布";
     trend_title(column: &str) => "Trend of {column}" / "{column} 趋势";
+    trend_caption(unit: &str, count: u64, frames: u32) => "{count} {unit} · {frames}f" / "{count} {unit} · {frames} 帧";
+    gated_trend_caption(unit: &str, gated: u64, total: u64, frames: u32) => "{gated}/{total} {unit} · {frames}f" / "{gated}/{total} {unit} · {frames} 帧";
     ripley_summary(frames: u32, objects: u64) => "{frames}f · {objects} objects" / "{frames} 帧 · {objects} 个对象";
     ripley_single(single: u32) => "{single} single-object frames" / "{single} 帧仅一个对象";
     ripley_envelope(simulations: u32) => "CSR 95% · {simulations}" / "CSR 95% · {simulations}";

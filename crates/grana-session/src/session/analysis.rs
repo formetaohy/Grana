@@ -764,7 +764,7 @@ impl Session {
                     .and_then(|set| set.classifier())
                     .map(|classifier| {
                         format!(
-                            "trained a classifier on {} measurements · {:.0}% balanced fit",
+                            "trained a classifier on {} measurements · {:.0}% held-out balanced accuracy",
                             classifier.features().len(),
                             classifier.accuracy() * 100.0
                         )

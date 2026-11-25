@@ -55,7 +55,12 @@ pub struct Plan {
     pub region: Region,
 }
 
-pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<grana_render::Detail, String> {
+pub(crate) struct Needed {
+    pub detail: grana_render::Detail,
+    pub levels: Vec<usize>,
+}
+
+pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<Needed, String> {
     if plan.poses.is_empty() {
         return Err("an export holds at least one pose".to_string());
     }
@@ -69,13 +74,15 @@ pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<grana_render::
         level: pyramid.level_count() - 1,
         bricks: 0,
     };
+    let mut levels = Vec::with_capacity(plan.poses.len());
     for pose in &plan.poses {
         let camera = camera(&pose.camera);
         let held = grana_render::residency(pyramid, &camera, size, plan.region);
         detail.bricks = detail.bricks.max(held.detail.bricks);
         detail.level = detail.level.min(held.detail.level);
+        levels.push(held.detail.level);
     }
-    Ok(detail)
+    Ok(Needed { detail, levels })
 }
 
 pub(crate) fn validate(plan: &Plan) -> Result<(), String> {

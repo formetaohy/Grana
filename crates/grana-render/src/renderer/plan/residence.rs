@@ -86,6 +86,7 @@ struct Missing {
     order: Vec<BrickRequest>,
     ordered: bool,
     absent: [usize; BAND],
+    unfetchable: HashMap<usize, usize>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -111,6 +112,7 @@ impl Missing {
         self.order.clear();
         self.ordered = true;
         self.absent = [0; BAND];
+        self.unfetchable.clear();
     }
 
     fn clear(&mut self) {
@@ -133,6 +135,7 @@ impl Missing {
             self.bands = demand.bands.iter().map(|band| band.info.level).collect();
         }
         self.epoch = self.epoch.wrapping_add(1);
+        self.unfetchable.clear();
         for band in &demand.bands {
             for index in &band.indices {
                 self.demands(band.info.level, *index);
@@ -147,6 +150,10 @@ impl Missing {
                     self.supply(level, *index);
                     continue;
                 }
+                if atlas.is_unavailable(time, level, *index as usize) {
+                    self.unfetchable_mark(level, *index);
+                    continue;
+                }
                 let shown = level
                     .checked_sub(ladder.base)
                     .filter(|band| *band < ladder.count)
@@ -155,6 +162,18 @@ impl Missing {
             }
         }
         self.prune();
+    }
+
+    fn unfetchable(&self, level: usize) -> usize {
+        self.unfetchable.get(&level).copied().unwrap_or(0)
+    }
+
+    fn unfetchable_mark(&mut self, level: usize, index: u32) {
+        if let Some(held) = self.wanted.remove(&(level, index)) {
+            self.absent[held.band] -= 1;
+            self.ordered = false;
+        }
+        *self.unfetchable.entry(level).or_default() += 1;
     }
 
     fn demands(&mut self, level: usize, index: u32) {
@@ -652,10 +671,6 @@ impl Residence {
         for band in &bands {
             atlas.touch(key.time, band.info.level, band.indices.iter().copied());
         }
-        self.settled = bands
-            .iter()
-            .all(|band| demands_complete(band, key.assured))
-            .then_some(key);
         if self
             .demand
             .as_ref()
@@ -665,6 +680,17 @@ impl Residence {
         }
         let demand = ResidencyDemand { key, bands };
         self.missing.apply(&demand, atlas);
+        self.settled = demand
+            .bands
+            .iter()
+            .enumerate()
+            .all(|(band, held)| {
+                self.missing.absent[band] == 0
+                    && held.info.resident + self.missing.unfetchable(held.info.level)
+                        == held.info.demand
+                    && (!key.assured || held.info.visible == held.info.demand)
+            })
+            .then_some(key);
         self.demand = Some(demand);
         self.measure_prefetch(pyramid, key.time);
         let preview = key.prefetch_digest();
@@ -775,7 +801,12 @@ impl Residence {
         for (band, held) in demand.bands.iter().enumerate() {
             view.visible += held.info.visible;
             view.demand += held.info.demand;
-            view.resident += held.info.demand - self.missing.absent[band];
+            let unfetchable = self.missing.unfetchable(held.info.level);
+            view.unavailable += unfetchable;
+            view.resident += held
+                .info
+                .demand
+                .saturating_sub(self.missing.absent[band] + unfetchable);
         }
         self.refreshes.retain(|request| {
             let grid = BrickGrid::new(pyramid.level(request.level).extent());
@@ -845,6 +876,17 @@ impl Residence {
             .supply(request.level, grid.index(request.coord) as u32);
     }
 
+    pub(crate) fn abandoned(&mut self, request: BrickRequest) {
+        if self.missing.time != Some(request.time) {
+            return;
+        }
+        let Some(grid) = self.grids.get(request.level) else {
+            return;
+        };
+        self.missing
+            .unfetchable_mark(request.level, grid.index(request.coord) as u32);
+    }
+
     pub(crate) fn release(&mut self, pyramid: &Pyramid, time: u32, level: usize, index: usize) {
         if self.missing.time != Some(time) {
             return;
@@ -873,12 +915,6 @@ impl Residence {
     pub(crate) fn revalidate(&mut self) {
         self.restaged = true;
     }
-}
-
-fn demands_complete(demand: &Demand, assured: bool) -> bool {
-    demand.requests.is_empty()
-        && demand.info.resident == demand.info.demand
-        && (!assured || demand.info.visible == demand.info.demand)
 }
 
 struct Prefetch<'a> {
@@ -943,6 +979,7 @@ fn carry(
         }
         if atlas.slot(time, level, *index as usize).is_some()
             || atlas.is_hollow(time, level, *index as usize)
+            || atlas.is_unavailable(time, level, *index as usize)
         {
             continue;
         }

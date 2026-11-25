@@ -35,6 +35,7 @@ pub(crate) struct Export {
     drawn: u32,
     viewport: grana_engine::Viewport,
     lens: Option<(Camera, u32)>,
+    levels: Vec<usize>,
     transparent: bool,
     figure: Option<Format>,
     draw: (Texture, TextureView),
@@ -50,6 +51,7 @@ impl Export {
         device: &Device,
         format: wgpu::TextureFormat,
         plan: Plan,
+        levels: Vec<usize>,
     ) -> Result<Self, String> {
         let Plan {
             destination,
@@ -157,6 +159,7 @@ impl Export {
             drawn: 0,
             viewport,
             lens,
+            levels,
             transparent,
             figure,
             draw: (draw, draw_view),
@@ -238,6 +241,16 @@ impl Export {
         self.attempts += 1;
         if info.truncated {
             return self.fail(truncation(&info));
+        }
+        if info.drawn
+            && let Some(needed) = self.levels.get(self.frame)
+            && info.view.level > *needed
+        {
+            return self.fail(format!(
+                "the export reached level {} while frame {} needs level {needed}; the residency cannot hold the detail this export promises",
+                info.view.level,
+                self.frame + 1
+            ));
         }
         if info.drawn {
             self.drawn = info.age;

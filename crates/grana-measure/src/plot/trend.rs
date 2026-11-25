@@ -1,8 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::mask::Mask;
 use crate::sample::Sample;
 use crate::table::{Group, Table};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Population {
+    Object,
+    Track,
+    Frame,
+    Molecule,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrendPoint {
@@ -49,11 +57,16 @@ pub struct Trend {
     total: u64,
     gated: u64,
     frames: u32,
+    population: Population,
 }
 
 impl Trend {
     pub fn column(&self) -> usize {
         self.column
+    }
+
+    pub fn population(&self) -> Population {
+        self.population
     }
 
     pub fn points(&self) -> &[TrendPoint] {
@@ -125,79 +138,33 @@ impl Table {
             total,
             gated: gated_count,
             frames,
+            population: self.population(),
+        }
+    }
+
+    fn population(&self) -> Population {
+        match self.group() {
+            Group::Object => Population::Object,
+            Group::Track => Population::Track,
+            Group::Timepoint => Population::Frame,
+            Group::Molecule => Population::Molecule,
         }
     }
 
     fn trend_buckets(&self, column: usize, gated: &Mask) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
-        if let Some(basis) = self.basis() {
-            if let Some(source) = self.source(column) {
-                return self.raw_buckets(basis, source, gated);
-            }
-            if self.group() == Group::Track
-                && let Some(buckets) = self.lifetime_buckets(column, gated)
-            {
-                return buckets;
-            }
+        match self.group() {
+            Group::Object | Group::Timepoint => self.row_buckets(column, gated),
+            Group::Track | Group::Molecule => self.lifetime_buckets(column, gated),
         }
-        self.row_buckets(column, gated)
     }
 
-    fn raw_buckets(
-        &self,
-        basis: &Table,
-        source: usize,
-        gated: &Mask,
-    ) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
-        let frames = match self.group() {
-            Group::Object | Group::Track | Group::Molecule => BTreeSet::new(),
-            Group::Timepoint => gated
-                .iter()
-                .filter_map(|row| self.observation(row).time())
-                .collect::<BTreeSet<_>>(),
-        };
-        let tracks = match self.group() {
-            Group::Object | Group::Timepoint | Group::Molecule => BTreeSet::new(),
-            Group::Track => gated
-                .iter()
-                .filter_map(|row| self.observation(row).track())
-                .collect::<BTreeSet<_>>(),
-        };
-        let values = basis.materialize(source);
-        let mut buckets = BTreeMap::<u32, Vec<f64>>::new();
-        let mut total = 0u64;
-        let mut span = 0u32;
-        for row in 0..basis.rows() {
-            let Some(time) = basis.observation(row).time() else {
-                continue;
-            };
-            span = span.max(time + 1);
-            let Some(value) = values[row].present() else {
-                continue;
-            };
-            total += 1;
-            let admitted = match self.group() {
-                Group::Object => true,
-                Group::Timepoint => frames.contains(&time),
-                Group::Track => basis
-                    .observation(row)
-                    .track()
-                    .is_some_and(|track| tracks.contains(&track)),
-                Group::Molecule => true,
-            };
-            if admitted {
-                buckets.entry(time).or_default().push(f64::from(value));
-            }
-        }
-        (buckets, total, span)
-    }
-
-    fn lifetime_buckets(
-        &self,
-        column: usize,
-        gated: &Mask,
-    ) -> Option<(BTreeMap<u32, Vec<f64>>, u64, u32)> {
-        let first = self.column("first_frame")?;
-        let last = self.column("last_frame")?;
+    fn lifetime_buckets(&self, column: usize, gated: &Mask) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
+        let first = self
+            .column("first_frame")
+            .expect("a grouped table spans the frames of its rows");
+        let last = self
+            .column("last_frame")
+            .expect("a grouped table spans the frames of its rows");
         let values = self.materialize(column);
         let first = self.materialize(first);
         let last = self.materialize(last);
@@ -225,7 +192,7 @@ impl Table {
                 buckets.entry(time).or_default().push(f64::from(value));
             }
         }
-        Some((buckets, total, span))
+        (buckets, total, span)
     }
 
     fn row_buckets(&self, column: usize, gated: &Mask) -> (BTreeMap<u32, Vec<f64>>, u64, u32) {
