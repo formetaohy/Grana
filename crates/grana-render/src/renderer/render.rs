@@ -221,7 +221,6 @@ impl Renderer {
                 .map(|slice| slice.plane(frame.camera.pivot())),
         );
         let forgotten = resources.atlas.remember(frame.time);
-        resources.retire(frame.time);
         resources.drop_hollows(&forgotten);
         let outlook = residence.adapt(Adapt {
             pyramid: &resources.pyramid,
@@ -238,6 +237,7 @@ impl Renderer {
             prefetch: frame.delivery.prefetches(),
             hollow: Some(crate::hollow::Cursor::new(&resources.atlas, frame.time)),
         });
+        resources.retire(frame.time, outlook.ladder.base, outlook.ladder.count);
         let channel = channel_style(scene.channels);
         if residence.style_outdated(channel) {
             resources.scene.publish(

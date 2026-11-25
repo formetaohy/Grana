@@ -79,7 +79,7 @@ fn cell_span(base: vec3<f32>, coord: vec3<u32>, far: vec3<f32>, voxel: vec3<f32>
     return box_exit(low, high, voxel, rate);
 }
 
-fn tap_fetch(pack: u32, texel: vec3<u32>, local: vec3<f32>) -> vec4<f32> {
+fn tap_blend(pack: u32, texel: vec3<u32>, local: vec3<f32>) -> vec4<f32> {
     let low = texel + vec3<u32>(floor(local));
     let weight = local - floor(local);
     let x00 = textureLoad(atlases[pack], low, 0);
@@ -93,6 +93,28 @@ fn tap_fetch(pack: u32, texel: vec3<u32>, local: vec3<f32>) -> vec4<f32> {
     let near = mix(mix(x00, x10, weight.x), mix(x01, x11, weight.x), weight.y);
     let far = mix(mix(y00, y10, weight.x), mix(y01, y11, weight.x), weight.y);
     return mix(near, far, weight.z);
+}
+
+fn nearest_components(mask: u32) -> vec4<bool> {
+    return vec4<bool>(
+        (mask & 1u) != 0u,
+        (mask & 2u) != 0u,
+        (mask & 4u) != 0u,
+        (mask & 8u) != 0u,
+    );
+}
+
+fn tap_fetch(pack: u32, texel: vec3<u32>, local: vec3<f32>) -> vec4<f32> {
+    let mask = pack_nearest(pack);
+    if (mask == 0u) {
+        return tap_blend(pack, texel, local);
+    }
+    let snapped = texel + vec3<u32>(floor(local + vec3<f32>(0.5)));
+    let exact = textureLoad(atlases[pack], snapped, 0);
+    if (mask == PACK_MASK) {
+        return exact;
+    }
+    return select(tap_blend(pack, texel, local), exact, nearest_components(mask));
 }
 
 fn tap_sample(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {

@@ -45,7 +45,8 @@ struct ChannelData {
     lut_row: f32,
     threshold: f32,
     mode: f32,
-    pad: vec2<f32>,
+    nearest: f32,
+    reserved: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
@@ -201,6 +202,8 @@ fn channel_tau(index: u32, unit: f32) -> vec4<f32> {
 
 const PACK: u32 = 4u;
 
+const PACK_MASK: u32 = 15u;
+
 const CHANNEL_LIMIT: u32 = 16u;
 
 const PACK_LIMIT: u32 = CHANNEL_LIMIT / PACK;
@@ -219,6 +222,21 @@ fn projection() -> bool {
 
 fn pack_active(pack: u32) -> bool {
     return (frame.packs.y & (1u << pack)) != 0u;
+}
+
+fn channel_nearest(index: u32) -> bool {
+    return channels[index].nearest > 0.5;
+}
+
+fn pack_nearest(pack: u32) -> u32 {
+    var mask = 0u;
+    for (var component = 0u; component < PACK; component += 1u) {
+        let channel = pack * PACK + component;
+        if (channel_active(channel) && channel_nearest(channel)) {
+            mask |= 1u << component;
+        }
+    }
+    return mask;
 }
 
 fn region_active() -> bool {

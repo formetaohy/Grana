@@ -103,6 +103,7 @@ pub struct ChannelMetadata {
     pub tint: [f32; 3],
     pub data: Option<[f32; 2]>,
     pub window: Option<[f32; 2]>,
+    pub color_table: Option<grana_volume::ColorTable>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,7 +165,20 @@ pub fn parse(path: &str, attributes: &Map<String, Value>) -> Result<Metadata, Er
             datasets: datasets.clone(),
         },
     };
-    let channels = channels(path, fields.get("omero"))?;
+    let mut channels = channels(path, fields.get("omero"))?;
+    for (channel, color_table) in color_tables(path, attributes)? {
+        let Some(held) = channels.get_mut(channel) else {
+            return Err(metadata_error(
+                path,
+                format!(
+                    "the grana metadata colours the channel {channel} and the omero metadata describes {} channels",
+                    channels.len()
+                ),
+            ));
+        };
+        held.color_table = Some(color_table);
+        held.window = None;
+    }
     Ok(Metadata {
         name: multiscales
             .get("name")
@@ -202,6 +216,17 @@ fn calibration(path: &str, attributes: &Map<String, Value>) -> Result<Option<Cal
                 format!("the grana metadata names the unknown calibration `{name}`"),
             )
         })
+}
+
+fn color_tables(
+    path: &str,
+    attributes: &Map<String, Value>,
+) -> Result<Vec<(usize, grana_volume::ColorTable)>, Error> {
+    let value = attributes
+        .get(grana_archive::ANNOTATION)
+        .and_then(Value::as_object)
+        .and_then(|entry| entry.get(grana_archive::COLOR_TABLES));
+    grana_archive::color_tables_from(value).map_err(|detail| metadata_error(path, detail))
 }
 
 fn minor_version(path: &str, version: &str) -> Result<u32, Error> {
@@ -891,6 +916,7 @@ fn channels(path: &str, omero: Option<&Value>) -> Result<Vec<ChannelMetadata>, E
                 tint,
                 data: window.0,
                 window: window.1,
+                color_table: None,
             })
         })
         .collect()

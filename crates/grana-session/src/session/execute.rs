@@ -363,9 +363,13 @@ impl Session {
             }
             Command::SetTransfer { channel, transfer } => {
                 if let Some(scene) = self.scene.as_mut()
-                    && let Some(target) = scene.channels.get_mut(channel)
+                    && channel < scene.channels.len()
                 {
-                    target.set_transfer(transfer);
+                    assert!(
+                        scene.dataset.channels()[channel].color_table().is_none(),
+                        "an indexed channel shows the palette of its source"
+                    );
+                    scene.channels[channel].set_transfer(transfer);
                 }
             }
             Command::SetVolumeMode { channel, mode } => {

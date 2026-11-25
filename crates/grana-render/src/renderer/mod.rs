@@ -64,6 +64,8 @@ const FADE_DRAWS: f32 = 10.0;
 
 const PICK_LIFETIME: u64 = 2;
 
+const MINIMUM_EXPORT_SLOTS: usize = 2;
+
 const UNIT: f32 = 65535.0;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -113,6 +115,7 @@ pub struct Requests {
     pub epoch: u64,
     pub volume: Vec<BrickRequest>,
     pub prefetch: Vec<BrickRequest>,
+    pub unavailable: Vec<BrickRequest>,
     pub view: ViewInfo,
 }
 
@@ -200,6 +203,9 @@ pub struct Renderer {
     transparent: bool,
     transparency: Option<(u64, bool)>,
     exporting: bool,
+    wanted: usize,
+    reclaim: bool,
+    degraded: Option<String>,
     temporal: temporal::Resolve,
     convergence: temporal::Convergence,
     fade: Option<Fade>,
@@ -291,6 +297,9 @@ impl Renderer {
             transparent: false,
             transparency: None,
             exporting: false,
+            wanted: 0,
+            reclaim: false,
+            degraded: None,
             temporal,
             convergence,
             fade: None,
@@ -353,28 +362,39 @@ impl Renderer {
         size: [u32; 2],
         ceiling: u64,
     ) -> Result<(), String> {
-        let allocation = reserve::Allocation::Export {
-            slots: detail.bricks + 1,
-        };
-        let reservation = reserve::Reservation::of(
-            pyramid,
-            allocation,
-            resources::slot_bytes(pyramid),
-            device.limits().max_texture_dimension_3d,
-        )?;
+        let slot_bytes = resources::slot_bytes(pyramid);
+        let max_dimension = device.limits().max_texture_dimension_3d;
         let frames = budget::Frames::of(size, budget::FrameDemand::full());
         let splats = budget::splat_budget(self.total);
+        let wanted = detail.bricks + 1;
+        let mut slots = wanted;
+        let reservation = loop {
+            let reservation = reserve::Reservation::of(
+                pyramid,
+                reserve::Allocation::Export { slots },
+                slot_bytes,
+                max_dimension,
+            )?;
+            let held = reservation
+                .bytes()
+                .saturating_add(frames.bytes())
+                .saturating_add(splats);
+            if held <= ceiling {
+                break reservation;
+            }
+            if slots <= MINIMUM_EXPORT_SLOTS {
+                return Err(format!(
+                    "an export at this size needs more than the {:.1} GiB export ceiling for a single brick",
+                    ceiling as f64 / (1u64 << 30) as f64
+                ));
+            }
+            slots = ((slots as u64).saturating_mul(ceiling) / held)
+                .clamp(MINIMUM_EXPORT_SLOTS as u64, slots as u64 - 1) as usize;
+        };
         let held = reservation
             .bytes()
             .saturating_add(frames.bytes())
             .saturating_add(splats);
-        if held > ceiling {
-            return Err(format!(
-                "an export at this size needs {:.1} GiB of graphics memory at full detail, above the {:.1} GiB export ceiling",
-                held as f64 / (1u64 << 30) as f64,
-                ceiling as f64 / (1u64 << 30) as f64
-            ));
-        }
         if !self.claim.resize(held) {
             return Err(format!(
                 "the graphics device cannot hold both the export and the running analyses, so the export cannot reserve its {:.1} MiB of textures",
@@ -382,10 +402,72 @@ impl Renderer {
             ));
         }
         if self.slots() < reservation.slots().capacity() || self.first_level() > detail.level {
-            self.install(device, pyramid, allocation, Reset::Dataset)?;
+            self.install(
+                device,
+                pyramid,
+                reserve::Allocation::Export { slots },
+                Reset::Dataset,
+            )?;
         }
         self.frames = frames.bytes();
+        self.wanted = wanted;
+        self.degraded = None;
+        self.reclaim = false;
         Ok(())
+    }
+
+    pub fn degraded(&self) -> Option<&str> {
+        self.degraded.as_deref()
+    }
+
+    fn degrade(&mut self, slot_bytes: u64) {
+        if self.degraded.is_some() {
+            return;
+        }
+        let need = self.wanted as u64 * slot_bytes;
+        self.degraded = Some(format!(
+            "this export shows {} bricks at its full detail and needs {:.1} MiB for them, more than the graphics device leaves for it; lower the export resolution",
+            self.wanted,
+            need as f64 / (1u64 << 20) as f64
+        ));
+    }
+
+    fn grow(&mut self, device: &Device) {
+        let Some(resources) = self.resources.as_ref() else {
+            return;
+        };
+        let pyramid = resources.pyramid.clone();
+        let slot_bytes = resources.slot_bytes;
+        let slots = (resources.slots() * 2).min(self.wanted);
+        let Ok(reservation) = reserve::Reservation::of(
+            &pyramid,
+            reserve::Allocation::Export { slots },
+            slot_bytes,
+            device.limits().max_texture_dimension_3d,
+        ) else {
+            self.degrade(slot_bytes);
+            return;
+        };
+        let held = reservation
+            .bytes()
+            .saturating_add(self.frames)
+            .saturating_add(self.splat_budget());
+        if !self.claim.resize(held) {
+            self.degrade(slot_bytes);
+            return;
+        }
+        self.resources = None;
+        if self
+            .install(
+                device,
+                &pyramid,
+                reserve::Allocation::Export { slots },
+                Reset::Dataset,
+            )
+            .is_err()
+        {
+            self.degrade(slot_bytes);
+        }
     }
 
     fn install(
@@ -606,6 +688,10 @@ impl Renderer {
             "an exposure scales radiance by a positive factor"
         );
         let size = frame.size;
+        if self.reclaim {
+            self.reclaim = false;
+            self.grow(device);
+        }
         let transparent = self.transparency(&frame);
         let shot = render::Shot::of(&frame, transparent);
         self.fit(device, size, shot.demand())?;
@@ -658,6 +744,14 @@ impl Renderer {
         self.uploads += uploaded.written as u64;
         if !uploaded.denied.is_empty() {
             self.residence.denied(&uploaded.denied);
+            if self.exporting {
+                let slot_bytes = self.resources.as_ref().map_or(0, |held| held.slot_bytes);
+                if self.slots() < self.wanted {
+                    self.reclaim = true;
+                } else {
+                    self.degrade(slot_bytes);
+                }
+            }
         }
         let mut unplaced = uploaded.dropped;
         unplaced.extend(uploaded.denied);
@@ -697,10 +791,7 @@ impl Renderer {
             .resources
             .as_ref()
             .map_or(0, |resources| resources.atlas.evictions());
-        let unavailable = self
-            .resources
-            .as_ref()
-            .map_or(0, |resources| resources.unavailable(self.time));
+        let unavailable = self.info.view.unavailable as u64;
         let (prefetched, prefetch_hits) = self.residence.prefetch_counts();
         let (residency, atlas, records, surfaces) =
             self.resources

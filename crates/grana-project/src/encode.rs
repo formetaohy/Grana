@@ -386,7 +386,13 @@ impl Encode for ChannelState {
         writer.bool(self.enabled);
         writer.f32(self.opacity);
         self.window.encode(writer);
-        self.transfer.encode(writer);
+        match &self.transfer {
+            Some(transfer) => {
+                writer.bool(true);
+                transfer.encode(writer);
+            }
+            None => writer.bool(false),
+        }
         writer.u8(self.volume.mode().index() as u8);
         writer.f32(self.volume.isovalue());
     }

@@ -539,8 +539,8 @@ impl Resources {
         }
     }
 
-    pub(super) fn retire(&mut self, time: u32) {
-        self.atlas.retire(time);
+    pub(super) fn retire(&mut self, time: u32, base: usize, count: usize) {
+        self.atlas.retire(time, base, count);
     }
 
     pub(super) fn forget_unavailable(&mut self, requests: &[BrickRequest]) {
@@ -567,10 +567,6 @@ impl Resources {
             let index = BrickGrid::new(extent).index(coord);
             atlas.retry(time, level, index);
         }
-    }
-
-    pub(super) fn unavailable(&self, time: u32) -> u64 {
-        self.atlas.unavailable_marks(time) as u64
     }
 
     pub(super) fn forget_unavailable_time(&mut self, time: u32) {

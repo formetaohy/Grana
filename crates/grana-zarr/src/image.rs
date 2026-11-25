@@ -784,6 +784,13 @@ fn channels(
             let tint = metadata
                 .map(|metadata| metadata.tint)
                 .unwrap_or_else(|| tint_of(index));
+            if let Some(color_table) = metadata.and_then(|metadata| metadata.color_table.clone()) {
+                return Ok(
+                    ChannelInfo::declared(name, tint, color_table.indices(), format)
+                        .with_color_table(color_table)
+                        .with_no_data(no_data),
+                );
+            }
             let data_range = metadata.and_then(|metadata| metadata.data).and_then(valid);
             let omero_window = metadata
                 .and_then(|metadata| metadata.window)

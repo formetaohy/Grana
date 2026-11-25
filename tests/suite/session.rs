@@ -61,6 +61,7 @@ fn detects_surfaces_masks_a_channel_and_captures() {
         0,
         &[BrickRequest::new(0, 0, BrickCoord::new(1, 0, 0))],
         &[],
+        &[],
     );
     let deadline = Instant::now() + Duration::from_secs(30);
     let bricks = loop {
@@ -2110,6 +2111,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                         requests.epoch,
                         &requests.volume,
                         &requests.prefetch,
+                        &requests.unavailable,
                     );
                 }
                 let bricks = session.take_bricks();
@@ -2237,6 +2239,7 @@ fn reads_each_streamed_brick_once() {
                 requests.epoch,
                 &requests.volume,
                 &requests.prefetch,
+                &requests.unavailable,
             );
         }
         engine
@@ -2338,7 +2341,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
     let bricks = (0..64)
         .map(|_| BrickRequest::new(0, 0, BrickCoord::new(0, 0, 0)))
         .collect::<Vec<_>>();
-    session.request(0, 0, &bricks, &[]);
+    session.request(0, 0, &bricks, &[], &[]);
     assert!(session.pending() > 0, "the brick reads are in flight");
     session.execute(Command::Undo);
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -2350,7 +2353,7 @@ fn drops_volume_reads_that_predate_a_content_change() {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    session.request(0, 0, &bricks[..1], &[]);
+    session.request(0, 0, &bricks[..1], &[], &[]);
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         session.poll();

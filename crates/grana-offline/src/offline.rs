@@ -175,6 +175,12 @@ impl Offline {
                 export.discard();
                 return Outcome::Failed { detail };
             }
+            if let Some(detail) = self.renderer.degraded() {
+                export.discard();
+                return Outcome::Failed {
+                    detail: detail.to_string(),
+                };
+            }
             let rendered = &prepared.as_ref().expect("the prepared scene is ready").2;
             match export.render(
                 &mut self.renderer,

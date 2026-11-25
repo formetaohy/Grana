@@ -57,7 +57,7 @@ pub struct ChannelState {
     pub enabled: bool,
     pub opacity: f32,
     pub window: Intensity,
-    pub transfer: TransferFunction,
+    pub transfer: Option<TransferFunction>,
     pub volume: VolumeStyle,
 }
 
@@ -120,11 +120,15 @@ impl Scene {
             channels: self
                 .channels
                 .iter()
-                .map(|channel| ChannelState {
+                .enumerate()
+                .map(|(index, channel)| ChannelState {
                     enabled: channel.enabled,
                     opacity: channel.opacity,
                     window: channel.window,
-                    transfer: channel.transfer().clone(),
+                    transfer: match self.dataset.channels()[index].color_table() {
+                        Some(_) => None,
+                        None => Some(channel.transfer().clone()),
+                    },
                     volume: channel.volume(),
                 })
                 .collect(),
@@ -186,15 +190,16 @@ impl Scene {
             channel.enabled = source.enabled;
             channel.opacity = source.opacity;
             channel.set_volume(source.volume);
-            match info.color_table() {
-                Some(_) => {
+            match (info.color_table(), source.transfer) {
+                (Some(_), _) => {
                     channel.window = info.display();
                     channel.set_transfer(crate::scene::initial_transfer(info));
                 }
-                None => {
+                (None, Some(transfer)) => {
                     channel.window = source.window;
-                    channel.set_transfer(source.transfer);
+                    channel.set_transfer(transfer);
                 }
+                (None, None) => panic!("a scene state carries the transfer of every plain channel"),
             }
         }
         self.selected = state.selected;

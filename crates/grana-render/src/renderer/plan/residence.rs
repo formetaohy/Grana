@@ -87,6 +87,7 @@ struct Missing {
     ordered: bool,
     absent: [usize; BAND],
     unfetchable: HashMap<usize, usize>,
+    marked: Vec<BrickRequest>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -113,6 +114,7 @@ impl Missing {
         self.ordered = true;
         self.absent = [0; BAND];
         self.unfetchable.clear();
+        self.marked.clear();
     }
 
     fn clear(&mut self) {
@@ -136,6 +138,7 @@ impl Missing {
         }
         self.epoch = self.epoch.wrapping_add(1);
         self.unfetchable.clear();
+        self.marked.clear();
         for band in &demand.bands {
             for index in &band.indices {
                 self.demands(band.info.level, *index);
@@ -152,6 +155,7 @@ impl Missing {
                 }
                 if atlas.is_unavailable(time, level, *index as usize) {
                     self.unfetchable_mark(level, *index);
+                    self.marked.push(held.requests[position]);
                     continue;
                 }
                 let shown = level
@@ -792,6 +796,7 @@ impl Residence {
         let mut requests = Requests {
             time: demand.key.time,
             epoch: self.plan,
+            unavailable: self.missing.marked.clone(),
             ..Default::default()
         };
         let mut view = ViewInfo {

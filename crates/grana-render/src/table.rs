@@ -1,6 +1,6 @@
 use bytemuck::cast_slice;
 use grana_gpu::Table;
-use grana_volume::{CHANNEL_LIMIT, Intensity, PACK, PACK_LIMIT, Pyramid};
+use grana_volume::{CHANNEL_LIMIT, Intensity, PACK, PACK_LIMIT, Pyramid, VoxelSemantics};
 use half::f16;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferUsages, Device,
@@ -31,7 +31,8 @@ struct ChannelData {
     lut_row: f32,
     threshold: f32,
     mode: f32,
-    pad: [f32; 2],
+    nearest: f32,
+    reserved: f32,
 }
 
 #[repr(C)]
@@ -302,7 +303,12 @@ fn channel_data(
                 lut_row: (index as f32 + 0.5) / rows.len() as f32,
                 threshold,
                 mode: mode.index() as f32,
-                pad: [0.0; 2],
+                nearest: if matches!(pyramid.channels()[index].semantics(), VoxelSemantics::Label) {
+                    1.0
+                } else {
+                    0.0
+                },
+                reserved: 0.0,
             }
         })
         .collect();

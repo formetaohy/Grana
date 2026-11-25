@@ -508,7 +508,11 @@ impl Decode for ChannelState {
         let enabled = reader.bool()?;
         let opacity = unit(reader.f32()?)?;
         let window = Intensity::decode(reader)?;
-        let transfer = TransferFunction::decode(reader)?;
+        let transfer = if reader.bool()? {
+            Some(TransferFunction::decode(reader)?)
+        } else {
+            None
+        };
         let mode = VolumeMode::from_index(reader.u8()? as usize).ok_or(FAULT_TAG)?;
         let isovalue = reader.f32()?;
         if !(0.0..=1.0).contains(&isovalue) {

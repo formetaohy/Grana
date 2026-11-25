@@ -2149,12 +2149,58 @@ fn refuses_a_transparency_store_that_cannot_hold_the_layers_it_needs() {
 }
 
 #[test]
-fn abandons_the_bricks_a_reader_cannot_supply() {
+fn claims_an_export_the_ceiling_cannot_hold_at_full_detail() {
     let Some(gpu) = gpu() else {
         return;
     };
     let volume = bricked_volume(None);
     let pyramid = volume.pyramid();
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let detail = grana_render::Detail {
+        level: 0,
+        bricks: 100_000,
+    };
+    let ceiling = renderer.frames() + renderer.splat_budget() + (32 << 20);
+    renderer
+        .reserve(gpu.device(), &pyramid, detail, [SIDE, SIDE], ceiling)
+        .expect("an export claims the bricks its ceiling can hold rather than refusing outright");
+    assert!(
+        renderer.slots() > 1 && renderer.slots() < detail.bricks,
+        "the claim follows the ceiling and not the brick count of the whole ladder"
+    );
+    assert!(
+        renderer.degraded().is_none(),
+        "a fresh claim reports no degradation before a brick is denied"
+    );
+}
+
+#[test]
+fn abandons_the_bricks_a_reader_cannot_supply() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let fine = volume.pyramid().level(0);
+    let extent = fine.extent();
+    let spacing = fine.spacing();
+    let pyramid = Pyramid::new(
+        vec![
+            fine,
+            Level::new(
+                Extent::new(
+                    extent.x().div_ceil(2),
+                    extent.y().div_ceil(2),
+                    extent.z().div_ceil(2),
+                ),
+                Spacing::new(spacing.x() * 2.0, spacing.y() * 2.0, spacing.z() * 2.0),
+            ),
+        ],
+        1,
+        volume.pyramid().channels().to_vec(),
+        1,
+        1.0,
+        Calibration::Recorded,
+    );
     let transfers = pyramid
         .channels()
         .iter()
@@ -2213,7 +2259,7 @@ fn abandons_the_bricks_a_reader_cannot_supply() {
         delivery: grana_render::Delivery::Immediate,
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    loop {
+    let base = loop {
         if let Some(requests) = next_demand(&gpu, &mut renderer) {
             assert!(
                 requests.volume.is_empty(),
@@ -2234,13 +2280,57 @@ fn abandons_the_bricks_a_reader_cannot_supply() {
                 info.view.unavailable > 0,
                 "an abandoned region is reported as unfetchable"
             );
-            break;
+            break info.view.level;
         }
         assert!(
             std::time::Instant::now() < deadline,
             "the view never settles over an abandoned region"
         );
+    };
+    let mut wide = Camera::new(35.0);
+    wide.fit(Vec3::from(volume.world_extent()) * 16.0, 1.0);
+    let far = View {
+        target: &view_texture,
+        camera: &wide,
+        region: Region::none(),
+        scene: &held,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let mut coarse = base;
+    for _ in 0..16 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), frame(&far))
+            .expect("the coarse frame draws");
+        next_demand(&gpu, &mut renderer);
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&far))
+            .expect("the coarse frame draws");
+        coarse = info.view.level;
+        if coarse > base {
+            break;
+        }
     }
+    assert!(
+        coarse > base,
+        "a sixteenfold wider view addresses a coarser level than the abandoned one"
+    );
+    let mut reissued = Vec::new();
+    for _ in 0..8 {
+        renderer
+            .draw(gpu.device(), gpu.queue(), frame(&changed))
+            .expect("the restored frame draws");
+        if let Some(requests) = next_demand(&gpu, &mut renderer) {
+            reissued.extend(requests.volume);
+        }
+        if reissued.iter().any(|request| missing.contains(request)) {
+            break;
+        }
+    }
+    assert!(
+        reissued.iter().any(|request| missing.contains(request)),
+        "an unreadable mark only outlives the level that demanded it"
+    );
 }
 
 #[test]

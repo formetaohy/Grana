@@ -12,7 +12,7 @@ use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_leve
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
     Basis, Calibration, Channel, ColorTable, Extent, Intensity, Level, Region, Spacing, Volume,
-    VolumeSeries, VoxelData, VoxelFormat, VoxelSemantics,
+    VolumeSeries, VoxelData, VoxelSemantics,
 };
 use grana_zarr::write_image;
 
@@ -2083,69 +2083,93 @@ fn reads_a_tiff_stack_past_the_page_limit() {
 }
 
 #[test]
-fn round_trips_an_indexed_channel_through_the_archive() {
-    let temp = Temp::new("suite-ome-tiff-indexed");
-    let levels = [Level::new(
-        Extent::new(48, 40, 2),
-        Spacing::new(0.2, 0.2, 0.5),
-    )];
+fn round_trips_an_indexed_channel_through_every_archive() {
+    let temp = Temp::new("suite-indexed-archive");
+    let extent = Extent::new(48, 40, 1);
     let color_table = ColorTable::new(vec![[0.0, 0.0, 0.0], [1.0, 0.1, 0.2], [0.2, 0.9, 0.3]]);
-    let channels = [WriteChannel {
-        name: "labels",
-        tint: [0.8, 0.8, 0.8],
-        data: color_table.indices(),
-        window: color_table.indices(),
-        color_table: Some(&color_table),
-    }];
-    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
-        let mut values = vec![0u8; block.voxels()];
-        for (position, value) in values.iter_mut().enumerate() {
-            *value = (position % 3) as u8;
-        }
-        Ok(VoxelData::U8(values))
-    };
-    let mut progress = |_, _| {};
-    let path = temp.path().join("labels.ome.tif");
-    grana_tiff::write_archive(
-        &path,
-        &mut ImageSpec {
-            name: "labels",
-            channels: &channels,
-            levels: &levels,
-            placement: [0.0; 3],
-            frames: 1,
-            interval: None,
-            sample: VoxelFormat::U8,
-            calibration: Calibration::Recorded,
-            fill: Fill::EveryLevel(&fill),
-            cancel: &AtomicBool::new(false),
-            progress: &mut progress,
-        },
-    )
-    .expect("the indexed archive writes");
-    let image = grana_tiff::Image::open(&path, 0).expect("the indexed archive opens");
-    assert_eq!(
-        image.pyramid().channels().len(),
-        1,
-        "an indexed channel keeps its single sample through the archive"
+    let values = (0..(48 * 40))
+        .map(|position| (position % 3) as u8)
+        .collect::<Vec<_>>();
+    let volume = Volume::new(
+        extent,
+        Spacing::new(0.2, 0.2, 0.5),
+        vec![
+            Channel::new("labels", [0.8, 0.8, 0.8], VoxelData::U8(values.clone()))
+                .with_color_table(color_table.clone()),
+        ],
     );
-    let held = &image.pyramid().channels()[0];
-    assert_eq!(held.semantics(), VoxelSemantics::Label);
-    let read = held
-        .color_table()
-        .expect("the archive writes the colour map of its indexed channel");
-    for (held, expected) in read.colors()[..3].iter().zip(&color_table.colors()[..3]) {
-        for channel in 0..3 {
-            assert!(
-                (held[channel] - expected[channel]).abs() < 1.0e-4,
-                "the archive keeps every colour map entry"
-            );
+    let image = Arc::new(
+        Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+            .expect("the indexed image opens"),
+    );
+    for name in ["labels.ome.tif", "labels.ome.zarr"] {
+        let mut progress = |_, _| {};
+        let summary = grana_pipeline::write_dataset(
+            DatasetSpec {
+                path: temp.path().join(name),
+                name: "labels".to_string(),
+                channels: vec![ChannelLayer {
+                    index: 0,
+                    name: "labels".to_string(),
+                    tint: [0.8, 0.8, 0.8],
+                    data: color_table.indices(),
+                    window: color_table.indices(),
+                    color_table: Some(color_table.clone()),
+                }],
+                levels: image.pyramid().levels().to_vec(),
+                origins: vec![[0, 0, 0]; image.pyramid().level_count()],
+                placement: [0.0; 3],
+                frames: 1,
+                interval: 1.0,
+                calibration: Calibration::Recorded,
+                drift: Vec::new(),
+                labels: Vec::new(),
+            },
+            &Channels::stored(Arc::clone(&image)),
+            &AtomicBool::new(false),
+            &mut progress,
+        )
+        .expect("the indexed dataset exports");
+        let (held, plane) = if name.ends_with(".zarr") {
+            let read = grana_zarr::Image::open(summary.path()).expect("the indexed archive opens");
+            let plane = read
+                .read_region(0, 0, 0, 0..6, 0..1, 0..1)
+                .expect("the indexed plane reads");
+            (read.pyramid().channels()[0].clone(), plane)
+        } else {
+            let read =
+                grana_tiff::Image::open(summary.path(), 0).expect("the indexed archive opens");
+            let plane = read
+                .read_region(0, 0, 0, 0..6, 0..1, 0..1)
+                .expect("the indexed plane reads");
+            (read.pyramid().channels()[0].clone(), plane)
+        };
+        assert_eq!(
+            held.semantics(),
+            VoxelSemantics::Label,
+            "{name} keeps an indexed channel a single label sample"
+        );
+        let read = held
+            .color_table()
+            .unwrap_or_else(|| panic!("{name} keeps the colour table of its indexed channel"));
+        assert!(
+            read.colors().len() >= color_table.colors().len(),
+            "{name} keeps at least the colours of its indexed channel"
+        );
+        for (held, expected) in read.colors().iter().zip(color_table.colors()) {
+            for channel in 0..3 {
+                assert!(
+                    (held[channel] - expected[channel]).abs() < 1.0e-4,
+                    "{name} keeps the colour `{expected:?}` and reads `{held:?}`"
+                );
+            }
         }
+        assert_eq!(
+            plane,
+            VoxelData::U8(values[..6].to_vec()),
+            "{name} keeps the indices of its indexed channel"
+        );
     }
-    let plane = image
-        .read_region(0, 0, 0, 0..6, 0..1, 0..1)
-        .expect("the indexed plane reads");
-    assert_eq!(plane, VoxelData::U8(vec![0, 1, 2, 0, 1, 2]));
 }
 
 #[test]

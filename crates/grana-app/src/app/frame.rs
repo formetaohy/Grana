@@ -72,6 +72,7 @@ impl App {
                 requests.epoch,
                 if current { &requests.volume } else { &[] },
                 &requests.prefetch,
+                &requests.unavailable,
             );
         }
         let view = session.take_view();

@@ -207,16 +207,8 @@ impl Frames {
         self.frames.retain(|(held, _), _| *held != time);
     }
 
-    fn retain_from(&mut self, time: u32) {
-        self.frames.retain(|(held, _), _| *held >= time);
-    }
-
-    fn marks(&self, time: u32) -> usize {
-        self.frames
-            .iter()
-            .filter(|((held, _), _)| *held == time)
-            .map(|(_, frame)| frame.count)
-            .sum()
+    fn retain(&mut self, keep: impl Fn(u32, usize) -> bool) {
+        self.frames.retain(|(time, level), _| keep(*time, *level));
     }
 
     fn words(&self, time: u32, level: usize) -> Option<&[u64]> {
@@ -580,12 +572,10 @@ impl Atlas {
         self.unavailable.clear_time(time);
     }
 
-    pub fn retire(&mut self, time: u32) {
-        self.unavailable.retain_from(time);
-    }
-
-    pub fn unavailable_marks(&self, time: u32) -> usize {
-        self.unavailable.marks(time)
+    pub fn retire(&mut self, time: u32, base: usize, count: usize) {
+        self.unavailable.retain(|held, level| {
+            held > time || (held == time && (base..base + count).contains(&level))
+        });
     }
 
     pub fn remember(&mut self, time: u32) -> Vec<u32> {

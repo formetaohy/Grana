@@ -1,9 +1,15 @@
-use grana_volume::{Basis, Calibration, Extent, Level, Spacing};
-use serde_json::{Map, Value};
+use grana_volume::{Basis, Calibration, ColorTable, Extent, Level, Spacing};
+use serde_json::{Map, Value, json};
 
 pub const ANNOTATION: &str = "grana";
 
+pub const COLOR_TABLES: &str = "channels";
+
 const MARKER: &str = "1";
+
+const CHANNEL: &str = "channel";
+
+const COLORS: &str = "colors";
 
 const LABELS: [&str; 5] = [
     "recorded",
@@ -33,6 +39,84 @@ pub fn annotation_values(calibration: Calibration) -> Map<String, Value> {
         Value::String(calibration_name(calibration).to_string()),
     );
     values
+}
+
+pub fn color_table_values(tables: &[Option<&ColorTable>]) -> Value {
+    let channels = tables
+        .iter()
+        .enumerate()
+        .filter_map(|(channel, table)| {
+            let table = (*table)?;
+            let colors = table
+                .colors()
+                .iter()
+                .map(|color| Value::Array(color.iter().map(|component| srgb(*component)).collect()))
+                .collect::<Vec<_>>();
+            Some(json!({ CHANNEL: channel, COLORS: colors }))
+        })
+        .collect::<Vec<_>>();
+    Value::Array(channels)
+}
+
+pub fn color_tables_from(value: Option<&Value>) -> Result<Vec<(usize, ColorTable)>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let entries = value
+        .as_array()
+        .ok_or_else(|| "the archive colour tables are not a list".to_string())?;
+    let mut tables: Vec<(usize, ColorTable)> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let channel = entry
+            .get(CHANNEL)
+            .and_then(Value::as_u64)
+            .and_then(|channel| usize::try_from(channel).ok())
+            .ok_or_else(|| "a colour table names no channel".to_string())?;
+        if tables.iter().any(|(held, _)| *held == channel) {
+            return Err(format!(
+                "the archive names the colour table of channel {channel} twice"
+            ));
+        }
+        let colors = entry
+            .get(COLORS)
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("the colour table of channel {channel} holds no colours"))?;
+        let mut table = Vec::with_capacity(colors.len());
+        for color in colors {
+            let components = color
+                .as_array()
+                .filter(|components| components.len() == 3)
+                .ok_or_else(|| format!("a colour of channel {channel} is not an srgb triple"))?;
+            let mut held = [0.0f32; 3];
+            for (value, component) in held.iter_mut().zip(components) {
+                *value = srgb_of(component).ok_or_else(|| {
+                    format!("a colour of channel {channel} is not a sixteen bit srgb triple")
+                })?;
+            }
+            table.push(held);
+        }
+        if !(2..=ColorTable::LIMIT).contains(&table.len()) {
+            return Err(format!(
+                "the colour table of channel {channel} holds {} colours",
+                table.len()
+            ));
+        }
+        tables.push((channel, ColorTable::new(table)));
+    }
+    tables.sort_by_key(|(channel, _)| *channel);
+    Ok(tables)
+}
+
+fn srgb(component: f32) -> Value {
+    let scaled = (component.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16;
+    Value::from(scaled)
+}
+
+fn srgb_of(value: &Value) -> Option<f32> {
+    let scaled = value
+        .as_u64()
+        .filter(|value| *value <= u64::from(u16::MAX))?;
+    Some(scaled as f32 / f32::from(u16::MAX))
 }
 
 pub fn calibration_from<'a>(

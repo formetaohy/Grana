@@ -569,10 +569,19 @@ fn attributes(spec: &ImageSpec<'_>) -> serde_json::Map<String, Value> {
     });
     let mut attributes = serde_json::Map::new();
     attributes.insert("ome".to_string(), ome);
-    attributes.insert(
-        grana_archive::ANNOTATION.to_string(),
-        Value::Object(grana_archive::annotation_values(spec.calibration)),
-    );
+    let mut grana = grana_archive::annotation_values(spec.calibration);
+    let tables = spec
+        .channels
+        .iter()
+        .map(|channel| channel.color_table)
+        .collect::<Vec<_>>();
+    if tables.iter().any(Option::is_some) {
+        grana.insert(
+            grana_archive::COLOR_TABLES.to_string(),
+            grana_archive::color_table_values(&tables),
+        );
+    }
+    attributes.insert(grana_archive::ANNOTATION.to_string(), Value::Object(grana));
     attributes
 }
 

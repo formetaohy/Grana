@@ -896,6 +896,7 @@ impl Session {
         plan: u64,
         demand: &[BrickRequest],
         prefetch: &[BrickRequest],
+        unreadable: &[BrickRequest],
     ) {
         if self.loading.is_some() {
             return;
@@ -914,6 +915,8 @@ impl Session {
             reads_started,
             ..
         } = self;
+        let marked = unreadable.iter().copied().collect::<HashSet<_>>();
+        failed.retain(|request, _| request.time != time || marked.contains(request));
         let Some(loader) = source.as_ref() else {
             return;
         };
