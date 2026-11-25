@@ -541,11 +541,11 @@ impl Session {
                     target.set_track_coloring(coloring);
                 }
             }
-            Command::SelectTrack { set, index } => {
-                if let Some(index) = index
+            Command::SelectTrack { set, track } => {
+                if let Some(track) = track
                     && let Some(scene) = self.scene.as_mut()
                 {
-                    scene.select_track(set, index);
+                    scene.select_track(set, track);
                 }
             }
             Command::CutTrack { set, time, object } => {

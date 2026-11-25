@@ -29,7 +29,7 @@ struct Column {
 
 struct Block {
     base: vec3<f32>,
-    texel: TexelMap,
+    tap: BrickTap,
     packs: u32,
     end: u32,
 }
@@ -91,11 +91,11 @@ fn block_at(column: Column, voxel: vec3<f32>, layer: u32) -> Block {
     let base = brick_origin(cell);
     let far = min(base + vec3<f32>(BRICK_SIDE), g.dims);
     if (slot == 0u) {
-        return Block(base, TexelMap(vec3<f32>(0.0), vec3<f32>(1.0)), 0u, exit_layer(column, voxel, base, far, layer));
+        return Block(base, brick_tap(NO_SLOT, base), 0u, exit_layer(column, voxel, base, far, layer));
     }
-    let texel = texel_map(slot - 1u, base);
+    let tap = brick_tap(slot - 1u, base);
     if (!occupied_brick(slot - 1u)) {
-        return Block(base, texel, 0u, exit_layer(column, voxel, base, far, layer));
+        return Block(base, tap, 0u, exit_layer(column, voxel, base, far, layer));
     }
     let coord = cell_coord(clamp(voxel, base, far) - base);
     let index = cell_index(coord);
@@ -110,16 +110,17 @@ fn block_at(column: Column, voxel: vec3<f32>, layer: u32) -> Block {
         exit_layer(column, voxel, base, far, layer),
         packs == 0u,
     );
-    return Block(base, texel, packs, end);
+    return Block(base, tap, packs, end);
 }
 
-fn source_extinction(packs: u32, texel: vec3<f32>) -> f32 {
+fn source_extinction(packs: u32, tap: BrickTap, local: vec3<f32>) -> f32 {
     var extinction = 0.0;
+    let texel = tap_atlas_texel(tap);
     for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
         if ((packs & (1u << pack)) == 0u) {
             continue;
         }
-        let values = textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
+        let values = tap_fetch(pack, texel, local);
         for (var component = 0u; component < PACK; component += 1u) {
             let channel = pack * PACK + component;
             if (!channel_active(channel)) {
@@ -172,8 +173,8 @@ fn tau_main(@builtin(global_invocation_id) id: vec3<u32>) {
         let far = block.base + vec3<f32>(BRICK_SIDE);
         while (layer < stop) {
             let voxel = column.start + column.rate * f32(layer);
-            let texel = texel_at(block.texel, clamp(voxel, block.base, far));
-            tau += source_extinction(block.packs, texel) * scale;
+            let local = clamp(voxel, block.base, far) - block.base;
+            tau += source_extinction(block.packs, block.tap, local) * scale;
             textureStore(
                 tau_output,
                 vec3<u32>(id.xy, layer),

@@ -79,7 +79,23 @@ fn cell_span(base: vec3<f32>, coord: vec3<u32>, far: vec3<f32>, voxel: vec3<f32>
     return box_exit(low, high, voxel, rate);
 }
 
-fn sample_pack(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {
+fn tap_fetch(pack: u32, texel: vec3<u32>, local: vec3<f32>) -> vec4<f32> {
+    let low = texel + vec3<u32>(floor(local));
+    let weight = local - floor(local);
+    let x00 = textureLoad(atlases[pack], low, 0);
+    let x10 = textureLoad(atlases[pack], low + vec3<u32>(1u, 0u, 0u), 0);
+    let x01 = textureLoad(atlases[pack], low + vec3<u32>(0u, 1u, 0u), 0);
+    let x11 = textureLoad(atlases[pack], low + vec3<u32>(1u, 1u, 0u), 0);
+    let y00 = textureLoad(atlases[pack], low + vec3<u32>(0u, 0u, 1u), 0);
+    let y10 = textureLoad(atlases[pack], low + vec3<u32>(1u, 0u, 1u), 0);
+    let y01 = textureLoad(atlases[pack], low + vec3<u32>(0u, 1u, 1u), 0);
+    let y11 = textureLoad(atlases[pack], low + vec3<u32>(1u, 1u, 1u), 0);
+    let near = mix(mix(x00, x10, weight.x), mix(x01, x11, weight.x), weight.y);
+    let far = mix(mix(y00, y10, weight.x), mix(y01, y11, weight.x), weight.y);
+    return mix(near, far, weight.z);
+}
+
+fn tap_sample(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {
     let g = level_frame(band);
     let cell = brick_of(g.grid, g.dims, voxel);
     let record = level_record(band, brick_index(g.grid, cell));
@@ -87,7 +103,6 @@ fn sample_pack(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {
     if (slot == 0u) {
         return vec4<f32>(0.0);
     }
-    let base = brick_origin(cell);
-    let texel = texel_at(texel_map(slot - 1u, base), clamp(voxel, base, base + vec3<f32>(BRICK_SIDE)));
-    return textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
+    let tap = brick_tap(slot - 1u, brick_origin(cell));
+    return tap_fetch(pack, tap_atlas_texel(tap), tap_local(tap, voxel));
 }

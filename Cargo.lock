@@ -4022,6 +4022,7 @@ name = "grana-segment"
 version = "0.2.3"
 dependencies = [
  "burn",
+ "grana-gpu",
  "half",
  "rayon",
  "thiserror 2.0.21",

@@ -117,6 +117,10 @@ pub fn id(raw: u32) -> grana_object::ObjectId {
     grana_object::ObjectId::new(raw + 1)
 }
 
+pub fn track(raw: u32) -> grana_object::TrackId {
+    grana_object::TrackId::new(raw + 1)
+}
+
 pub fn ids(count: usize) -> grana_object::ObjectIds {
     grana_object::ObjectIds::block(grana_object::ObjectId::FIRST, count)
 }

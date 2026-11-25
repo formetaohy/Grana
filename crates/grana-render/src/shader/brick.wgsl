@@ -1,6 +1,11 @@
 const BRICK_SIDE: f32 = 32.0;
 const PADDED_SIDE: f32 = 34.0;
+const PADDED_TEXEL: u32 = 34u;
+const STRUCTURE_STRIDE: u32 = 2u;
+const STRUCTURE_PAD: u32 = 1u;
+const STRUCTURE_PHASE: f32 = 2.5;
 const HOLLOW: u32 = 2u;
+const NO_SLOT: u32 = 0xffffffffu;
 
 struct BrickRecord {
     slot: u32,
@@ -9,9 +14,9 @@ struct BrickRecord {
     content: u32,
 }
 
-struct TexelMap {
-    offset: vec3<f32>,
-    scale: vec3<f32>,
+struct BrickTap {
+    slot: u32,
+    base: vec3<f32>,
 }
 
 fn brick_holds(record: BrickRecord) -> bool {
@@ -47,22 +52,24 @@ fn brick_index(grid: vec3<u32>, cell: vec3<u32>) -> u32 {
     return cell.x + grid.x * (cell.y + grid.y * cell.z);
 }
 
-fn slot_origin(atlas_grid: vec3<u32>, slot: u32) -> vec3<f32> {
-    let layer = slot / (atlas_grid.x * atlas_grid.y);
-    let remainder = slot % (atlas_grid.x * atlas_grid.y);
-    let row = remainder / atlas_grid.x;
-    let column = remainder % atlas_grid.x;
-    return vec3<f32>(f32(column), f32(row), f32(layer)) * PADDED_SIDE;
+fn slot_cell(slot: u32) -> vec3<u32> {
+    let layer = slot / (frame.atlas.x * frame.atlas.y);
+    let remainder = slot % (frame.atlas.x * frame.atlas.y);
+    return vec3<u32>(remainder % frame.atlas.x, remainder / frame.atlas.x, layer);
 }
 
-fn texel_map(slot: u32, base: vec3<f32>) -> TexelMap {
-    let extent = vec3<f32>(frame.atlas.xyz) * PADDED_SIDE;
-    return TexelMap(
-        slot_origin(frame.atlas.xyz, slot) + vec3<f32>(1.5) - base,
-        vec3<f32>(1.0) / extent,
-    );
+fn brick_tap(slot: u32, base: vec3<f32>) -> BrickTap {
+    return BrickTap(slot, base);
 }
 
-fn texel_at(map: TexelMap, voxel: vec3<f32>) -> vec3<f32> {
-    return (voxel + map.offset) * map.scale;
+fn tap_atlas_texel(tap: BrickTap) -> vec3<u32> {
+    return slot_cell(tap.slot) * PADDED_TEXEL + vec3<u32>(1u);
+}
+
+fn tap_local(tap: BrickTap, voxel: vec3<f32>) -> vec3<f32> {
+    return clamp(voxel, tap.base, tap.base + vec3<f32>(BRICK_SIDE)) - tap.base;
+}
+
+fn structure_position(local: vec3<f32>) -> vec3<f32> {
+    return (local + vec3<f32>(STRUCTURE_PHASE)) / vec3<f32>(f32(STRUCTURE_STRIDE));
 }

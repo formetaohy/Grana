@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use wgpu::{
     Adapter, Backends, CurrentSurfaceTexture, Device, DeviceDescriptor, ExperimentalFeatures,
@@ -15,23 +15,29 @@ pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 const BACKEND_ORDER: &[Backends] = &[Backends::VULKAN];
 
+pub struct Graphics {
+    instance: Instance,
+    adapter: Adapter,
+    device: Device,
+    queue: Queue,
+    memory: Option<Memory>,
+    lost: Lost,
+    pipelines: Pipelines,
+}
+
 pub struct Gpu {
     pub surface: Surface<'static>,
     pub device: Device,
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub adapter: String,
-    memory: Option<Memory>,
-    lost: Lost,
-    pipelines: Pipelines,
+    graphics: Arc<Graphics>,
 }
 
 pub struct Headless {
     pub device: Device,
     pub queue: Queue,
-    memory: Option<Memory>,
-    lost: Lost,
-    pipelines: Pipelines,
+    graphics: Arc<Graphics>,
 }
 
 #[derive(Clone, Default)]
@@ -91,59 +97,25 @@ impl Lost {
     }
 }
 
-impl Headless {
-    pub fn new() -> Result<Self, String> {
-        let mut failures = Vec::new();
-        for fallback in [false, true] {
-            for backends in BACKEND_ORDER {
-                let instance = instance(*backends);
-                match acquire(&instance, None, fallback) {
-                    Ok((adapter, device, queue)) => {
-                        let info = adapter.get_info();
-                        let memory = Memory::of(&info);
-                        grana_log::info!(
-                            target: "grana::gpu",
-                            adapter = %info.name,
-                            backend = ?info.backend,
-                            "headless graphics device ready"
-                        );
-                        let lost = Lost::watch(&device);
-                        let pipelines = Pipelines::new(&device);
-                        return Ok(Self {
-                            device,
-                            queue,
-                            memory,
-                            lost,
-                            pipelines,
-                        });
-                    }
-                    Err(detail) => failures.push(format!("{backends:?}: {detail}")),
-                }
-            }
-        }
-        Err(format!(
-            "no graphics adapter can render grana ({})",
-            failures.join("; ")
-        ))
+impl Graphics {
+    pub fn instance(&self) -> &Instance {
+        &self.instance
     }
 
-    pub fn shared() -> Result<Self, String> {
-        static SHARED: OnceLock<Result<Headless, String>> = OnceLock::new();
-        SHARED
-            .get_or_init(Self::new)
-            .as_ref()
-            .map(|headless| Self {
-                device: headless.device.clone(),
-                queue: headless.queue.clone(),
-                memory: headless.memory,
-                lost: headless.lost.clone(),
-                pipelines: headless.pipelines.clone(),
-            })
-            .map_err(Clone::clone)
+    pub fn adapter(&self) -> &Adapter {
+        &self.adapter
     }
 
-    pub fn format(&self) -> TextureFormat {
-        HEADLESS_FORMAT
+    pub fn backend(&self) -> wgpu::Backend {
+        self.adapter.get_info().backend
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &Queue {
+        &self.queue
     }
 
     pub fn memory(&self) -> Option<&Memory> {
@@ -161,6 +133,46 @@ impl Headless {
     pub fn pipelines(&self) -> &Pipelines {
         &self.pipelines
     }
+
+    pub fn description(&self) -> String {
+        let info = self.adapter.get_info();
+        format!("{} · {:?}", info.name, info.backend)
+    }
+}
+
+impl Headless {
+    pub fn shared() -> Result<Self, String> {
+        let graphics = open(None)?;
+        Ok(Self {
+            device: graphics.device.clone(),
+            queue: graphics.queue.clone(),
+            graphics,
+        })
+    }
+
+    pub fn graphics(&self) -> &Graphics {
+        &self.graphics
+    }
+
+    pub fn format(&self) -> TextureFormat {
+        HEADLESS_FORMAT
+    }
+
+    pub fn memory(&self) -> Option<&Memory> {
+        self.graphics.memory()
+    }
+
+    pub fn lost(&self) -> Option<String> {
+        self.graphics.lost()
+    }
+
+    pub fn lost_handle(&self) -> &Lost {
+        self.graphics.lost_handle()
+    }
+
+    pub fn pipelines(&self) -> &Pipelines {
+        self.graphics.pipelines()
+    }
 }
 
 impl Gpu {
@@ -168,40 +180,19 @@ impl Gpu {
     where
         W: Into<SurfaceTarget<'static>> + Clone,
     {
-        let mut failures = Vec::new();
-        for fallback in [false, true] {
-            for backends in BACKEND_ORDER {
-                let instance = instance(*backends);
-                let surface = instance
-                    .create_surface(window.clone())
-                    .expect("failed to create a window surface");
-                match acquire(&instance, Some(&surface), fallback) {
-                    Ok((adapter, device, queue)) => {
-                        return Self::configure(adapter, device, queue, surface, size);
-                    }
-                    Err(detail) => failures.push(format!("{backends:?}: {detail}")),
-                }
-            }
-        }
-        panic!(
-            "no graphics adapter can render grana ({})",
-            failures.join("; ")
-        );
+        let surface = instance()
+            .create_surface(window)
+            .expect("failed to create a window surface");
+        let graphics = open(Some(&surface)).unwrap_or_else(|detail| {
+            panic!("no graphics adapter can render grana ({detail})");
+        });
+        Self::configure(graphics, surface, size)
     }
 
-    fn configure(
-        adapter: Adapter,
-        device: Device,
-        queue: Queue,
-        surface: Surface<'static>,
-        size: [u32; 2],
-    ) -> Self {
-        let info = adapter.get_info();
-        let memory = Memory::of(&info);
-        let description = format!("{} · {:?}", info.name, info.backend);
-        grana_log::info!(target: "grana::gpu", adapter = %description, "graphics device ready");
+    fn configure(graphics: Arc<Graphics>, surface: Surface<'static>, size: [u32; 2]) -> Self {
+        let description = graphics.description();
         println!("grana: using {description}");
-        let capabilities = surface.get_capabilities(&adapter);
+        let capabilities = surface.get_capabilities(graphics.adapter());
         let Some(format) = capabilities
             .formats
             .iter()
@@ -224,19 +215,19 @@ impl Gpu {
             alpha_mode: capabilities.alpha_modes[0],
             view_formats: vec![],
         };
-        surface.configure(&device, &config);
-        let lost = Lost::watch(&device);
-        let pipelines = Pipelines::new(&device);
+        surface.configure(&graphics.device, &config);
         Self {
             surface,
-            device,
-            queue,
+            device: graphics.device.clone(),
+            queue: graphics.queue.clone(),
             config,
             adapter: description,
-            memory,
-            lost,
-            pipelines,
+            graphics,
         }
+    }
+
+    pub fn graphics(&self) -> &Graphics {
+        &self.graphics
     }
 
     pub fn format(&self) -> TextureFormat {
@@ -244,19 +235,19 @@ impl Gpu {
     }
 
     pub fn memory(&self) -> Option<&Memory> {
-        self.memory.as_ref()
+        self.graphics.memory()
     }
 
     pub fn lost(&self) -> Option<String> {
-        self.lost.reason()
+        self.graphics.lost()
     }
 
     pub fn lost_handle(&self) -> &Lost {
-        &self.lost
+        self.graphics.lost_handle()
     }
 
     pub fn pipelines(&self) -> &Pipelines {
-        &self.pipelines
+        self.graphics.pipelines()
     }
 
     pub fn size(&self) -> [u32; 2] {
@@ -287,18 +278,61 @@ impl Gpu {
     }
 }
 
-fn instance(backends: Backends) -> Instance {
-    Instance::new(InstanceDescriptor {
-        backends,
-        ..InstanceDescriptor::new_without_display_handle()
+fn held() -> MutexGuard<'static, Option<Arc<Graphics>>> {
+    static HELD: OnceLock<Mutex<Option<Arc<Graphics>>>> = OnceLock::new();
+    HELD.get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+fn open(surface: Option<&Surface<'static>>) -> Result<Arc<Graphics>, String> {
+    let mut held = held();
+    if let Some(graphics) = held.as_ref() {
+        if let Some(surface) = surface
+            && !graphics.adapter.is_surface_supported(surface)
+        {
+            return Err(
+                "the shared graphics adapter cannot present to this window; the process already holds a device without surface support"
+                    .to_string(),
+            );
+        }
+        return Ok(Arc::clone(graphics));
+    }
+    let graphics = acquire(surface)?;
+    let opened = Arc::new(graphics);
+    *held = Some(Arc::clone(&opened));
+    Ok(opened)
+}
+
+fn acquire(surface: Option<&Surface<'static>>) -> Result<Graphics, String> {
+    let mut failures = Vec::new();
+    for fallback in [false, true] {
+        match request(instance(), surface, fallback) {
+            Ok(graphics) => return Ok(graphics),
+            Err(detail) => failures.push(detail),
+        }
+    }
+    Err(format!(
+        "no graphics adapter is available ({})",
+        failures.join("; ")
+    ))
+}
+
+fn instance() -> &'static Instance {
+    static INSTANCE: OnceLock<Instance> = OnceLock::new();
+    INSTANCE.get_or_init(|| {
+        Instance::new(InstanceDescriptor {
+            backends: BACKEND_ORDER[0],
+            ..InstanceDescriptor::new_without_display_handle()
+        })
     })
 }
 
-fn acquire(
+fn request(
     instance: &Instance,
     surface: Option<&Surface<'static>>,
     fallback: bool,
-) -> Result<(Adapter, Device, Queue), String> {
+) -> Result<Graphics, String> {
     let options = RequestAdapterOptions {
         power_preference: PowerPreference::HighPerformance,
         force_fallback_adapter: fallback,
@@ -310,10 +344,7 @@ fn acquire(
     if !adapter.features().contains(REQUIRED_FEATURES) {
         return Err("the graphics adapter cannot stream packed volume bricks".to_string());
     }
-    let mut features = REQUIRED_FEATURES;
-    if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
-        features |= wgpu::Features::PIPELINE_CACHE;
-    }
+    let features = adapter.features() - wgpu::Features::all_experimental_mask();
     let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
         label: Some("grana"),
         required_features: features,
@@ -323,5 +354,23 @@ fn acquire(
         trace: Trace::Off,
     }))
     .map_err(|error| format!("failed to create a graphics device: {error}"))?;
-    Ok((adapter, device, queue))
+    let info = adapter.get_info();
+    let memory = Memory::of(&info);
+    grana_log::info!(
+        target: "grana::gpu",
+        adapter = %info.name,
+        backend = ?info.backend,
+        "graphics device ready"
+    );
+    let lost = Lost::watch(&device);
+    let pipelines = Pipelines::new(&device);
+    Ok(Graphics {
+        instance: instance.clone(),
+        adapter,
+        device,
+        queue,
+        memory,
+        lost,
+        pipelines,
+    })
 }

@@ -26,7 +26,7 @@ use grana_volume::{
 };
 use grana_zarr::write_image;
 
-use crate::support::{self, id, spot_set};
+use crate::support::{self, id, spot_set, track};
 
 const HIGH: u16 = 65_535;
 
@@ -1197,9 +1197,9 @@ fn links_divisions_and_merges_jointly() {
     );
     assert_eq!(set.links().len(), 1);
     assert_eq!(set.links()[0].kind(), Link::Gap);
-    assert_eq!(set.parent(2), Some(1));
+    assert_eq!(set.parent(track(2)), Some(track(1)));
     assert_eq!(
-        set.statistics(2)
+        set.statistics(track(2))
             .expect("the gap track holds one node")
             .frames(),
         1
@@ -1246,7 +1246,7 @@ fn links_divisions_and_merges_jointly() {
         "a mother that ends between two daughters divides into them"
     );
     assert_eq!(divided.divisions(), 1);
-    assert_eq!(divided.children(0).count(), 2);
+    assert_eq!(divided.children(track(0)).count(), 2);
 
     let claimed = tracked(
         &[
@@ -1872,7 +1872,8 @@ fn clusters_localizations_into_molecules() {
     let single = tracks
         .tracks()
         .iter()
-        .position(|track| track.nodes().len() == 1 && track.start() == 3);
+        .find(|track| track.nodes().len() == 1 && track.start() == 3)
+        .map(|track| track.id());
     assert!(
         single.is_some(),
         "a molecule that shows up in one frame keeps its track"

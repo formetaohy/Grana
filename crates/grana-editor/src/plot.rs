@@ -182,7 +182,7 @@ pub fn view<'a>(
     let selection = state.scene.selection().map(|selection| {
         let item = match selection.item {
             Item::Object(id) => u64::from(id.raw()) * 2,
-            Item::Track(index) => index as u64 * 2 + 1,
+            Item::Track(id) => u64::from(id.raw()) * 2 + 1,
         };
         (selection.set.raw(), item)
     });
@@ -556,7 +556,7 @@ fn located(observation: Observation, language: Language) -> String {
         (Some(time), Some(object), _) => {
             grana_i18n::measure::located_object(language, time + 1, object.raw() as usize)
         }
-        (_, _, Some(track)) => grana_i18n::measure::located_track(language, track + 1),
+        (_, _, Some(track)) => grana_i18n::measure::located_track(language, track.raw() as usize),
         (Some(time), _, _) => grana_i18n::measure::located_frame(language, time + 1),
         _ => String::new(),
     }

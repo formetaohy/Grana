@@ -391,7 +391,7 @@ fn lineage(
     }
     let mut edges = Vec::new();
     if let Some(tracks) = tracks {
-        for (index, track) in tracks.tracks().iter().enumerate() {
+        for track in tracks.tracks() {
             for pair in track.nodes().windows(2) {
                 let source = ids.get(&(pair[0].time(), pair[0].id()));
                 let target = ids.get(&(pair[1].time(), pair[1].id()));
@@ -399,8 +399,8 @@ fn lineage(
                     edges.push(Edge::new(*source, *target));
                 }
             }
-            for link in tracks.parents(index) {
-                let Some(parent) = tracks.track(link.parent() as usize) else {
+            for link in tracks.parents(track.id()) {
+                let Some(parent) = tracks.track(link.parent()) else {
                     continue;
                 };
                 let ends = (

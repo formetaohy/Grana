@@ -22,6 +22,7 @@ use crate::registration::Registration;
 use crate::segment::SegmentParams;
 use crate::state::{HASH_OFFSET, SetState, mix};
 use crate::table_request::TableRequest;
+use crate::track_layer::TrackLayer;
 use glam::Vec3;
 use grana_display::{
     Coloring, Extent, Material, Shading, TransferFunction, VolumeMode, categorical,
@@ -29,7 +30,7 @@ use grana_display::{
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
 use grana_object::{
-    MaskEdit, ObjectId, ObjectIds, RelationFrame, SurfaceEdit, TrackParams, TrackSet,
+    MaskEdit, ObjectId, ObjectIds, RelationFrame, SurfaceEdit, TrackId, TrackParams, TrackSet,
 };
 use grana_optics::Psf;
 use grana_volume::{
@@ -47,7 +48,7 @@ pub struct Selection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Object(ObjectId),
-    Track(usize),
+    Track(TrackId),
 }
 
 pub struct Scene {
@@ -1637,6 +1638,7 @@ impl Scene {
                     .is_some_and(|frame| frame.index_of(id).is_some())
             })
         });
+        self.retain_track_selection(id);
         self.sync_coloc_mask();
         self.sync_masks();
     }
@@ -1651,12 +1653,13 @@ impl Scene {
 
     pub fn install_tracks(&mut self, id: ObjectSetId, set: TrackSet) {
         if self.objects.install_tracks(id, set) {
-            self.drop_track_selection(id);
+            self.retain_track_selection(id);
         }
     }
 
     pub fn apply_curation(&mut self, id: ObjectSetId) -> Result<usize, String> {
         let applied = self.objects.apply_curation(id)?;
+        self.retain_track_selection(id);
         self.sync_masks();
         Ok(applied)
     }
@@ -1725,14 +1728,14 @@ impl Scene {
 
     pub fn clear_tracks(&mut self, id: ObjectSetId) {
         self.objects.clear_tracks(id);
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
     }
 
     pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: ObjectId) -> bool {
         if !self.objects.cut_track(id, time, object) {
             return false;
         }
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
         true
     }
 
@@ -1745,7 +1748,7 @@ impl Scene {
         if !self.objects.join_tracks(id, source, target) {
             return false;
         }
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
         true
     }
 
@@ -1759,7 +1762,7 @@ impl Scene {
         if !self.objects.divide_tracks(id, parent, first, second) {
             return false;
         }
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
         true
     }
 
@@ -1773,7 +1776,7 @@ impl Scene {
         if !self.objects.merge_tracks(id, first, second, child) {
             return false;
         }
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
         true
     }
 
@@ -1786,7 +1789,7 @@ impl Scene {
         if !self.objects.reparent_track(id, child, parent) {
             return false;
         }
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
         true
     }
 
@@ -1794,7 +1797,7 @@ impl Scene {
         if !self.objects.detach_track(id, child) {
             return false;
         }
-        self.drop_track_selection(id);
+        self.retain_track_selection(id);
         true
     }
 
@@ -1944,9 +1947,24 @@ impl Scene {
         Ok(nearest)
     }
 
-    fn drop_track_selection(&mut self, id: ObjectSetId) {
-        self.selections
-            .retain(|selection| !(selection.set == id && matches!(selection.item, Item::Track(_))));
+    fn retain_track_selection(&mut self, id: ObjectSetId) {
+        let held = self
+            .objects
+            .get(id)
+            .and_then(ObjectSet::tracks)
+            .map(TrackLayer::set);
+        self.selections.retain(|selection| {
+            if !matches!(selection.item, Item::Track(_)) {
+                return true;
+            }
+            if selection.set != id {
+                return true;
+            }
+            match selection.item {
+                Item::Track(track) => held.is_some_and(|set| set.contains(track)),
+                Item::Object(_) => true,
+            }
+        });
     }
 
     pub fn selection(&self) -> Option<Selection> {
@@ -1975,26 +1993,26 @@ impl Scene {
         }
     }
 
-    pub fn select_track(&mut self, id: ObjectSetId, index: usize) {
+    pub fn select_track(&mut self, id: ObjectSetId, track: TrackId) {
         assert!(
             self.objects
                 .get(id)
                 .and_then(ObjectSet::tracks)
-                .is_some_and(|layer| index < layer.set().len()),
+                .is_some_and(|layer| layer.set().contains(track)),
             "the selected track exists"
         );
         self.select(Some(Selection {
             set: id,
-            item: Item::Track(index),
+            item: Item::Track(track),
         }));
     }
 
-    pub fn selected_track(&self, id: ObjectSetId) -> Option<usize> {
+    pub fn selected_track(&self, id: ObjectSetId) -> Option<TrackId> {
         match self.selection() {
             Some(Selection {
                 set,
-                item: Item::Track(index),
-            }) if set == id => Some(index),
+                item: Item::Track(track),
+            }) if set == id => Some(track),
             _ => None,
         }
     }
@@ -2036,10 +2054,10 @@ impl Scene {
         })
     }
 
-    pub fn track_selected(&self, set: ObjectSetId, index: usize) -> bool {
+    pub fn track_selected(&self, set: ObjectSetId, track: TrackId) -> bool {
         self.selections.contains(&Selection {
             set,
-            item: Item::Track(index),
+            item: Item::Track(track),
         })
     }
 

@@ -7,7 +7,9 @@ use grana_measure::{
 };
 use grana_object::TrackParams;
 use grana_object::match_anchor;
-use grana_object::{ObjectId, ObjectIdSource, ObjectIds, RelationFrame, SpotSet, TrackSet};
+use grana_object::{
+    ObjectId, ObjectIdSource, ObjectIds, RelationFrame, SpotSet, TrackId, TrackIds, TrackSet,
+};
 use grana_store::SpillStore;
 
 use crate::alignment::LocalizationAlignment;
@@ -84,7 +86,7 @@ impl Readoption {
 pub enum Visibility {
     All,
     Objects(ObjectIds),
-    Tracks(Arc<Mask>),
+    Tracks(TrackIds),
     Molecules {
         mask: Arc<Mask>,
         rows: Arc<HashMap<u32, u32>>,
@@ -742,7 +744,7 @@ impl ObjectSet {
         extent
     }
 
-    pub fn track_color(&self, track: usize) -> [f32; 3] {
+    pub fn track_color(&self, track: TrackId) -> [f32; 3] {
         let Some(metric) = self.track_coloring.metric() else {
             return self.color;
         };
@@ -757,7 +759,7 @@ impl ObjectSet {
         }
     }
 
-    fn track_value(&self, track: usize, metric: TrackColor) -> f32 {
+    fn track_value(&self, track: TrackId, metric: TrackColor) -> f32 {
         let Some(layer) = self.tracks.as_ref() else {
             return f32::NAN;
         };
@@ -1587,11 +1589,13 @@ impl ObjectSet {
         }
         match &visibility {
             Visibility::All | Visibility::Objects(_) => {}
-            Visibility::Tracks(mask) => {
-                assert_eq!(
-                    mask.rows(),
-                    self.tracks.as_ref().map_or(0, |layer| layer.set().len()),
-                    "the visibility covers every track"
+            Visibility::Tracks(ids) => {
+                assert!(
+                    self.tracks.as_ref().is_some_and(|layer| ids
+                        .as_slice()
+                        .iter()
+                        .all(|id| layer.set().contains(*id))),
+                    "the visibility names the tracks of its set"
                 );
             }
             Visibility::Molecules { mask, rows } => {
@@ -1630,11 +1634,11 @@ impl ObjectSet {
                 .frame_shared(time)
                 .and_then(|frame| frame.id_of(object))
                 .is_some_and(|id| ids.contains(id)),
-            Visibility::Tracks(mask) => self
+            Visibility::Tracks(ids) => self
                 .frame_shared(time)
                 .and_then(|frame| frame.id_of(object))
                 .and_then(|id| self.track_at(time, id))
-                .is_some_and(|track| mask.contains(track)),
+                .is_some_and(|track| ids.contains(track)),
             Visibility::Molecules { mask, rows } => self
                 .frames
                 .get(time as usize)
@@ -1669,9 +1673,9 @@ impl ObjectSet {
         }
     }
 
-    pub fn visible_track(&self, track: usize) -> bool {
+    pub fn visible_track(&self, track: TrackId) -> bool {
         match &self.visibility {
-            Visibility::Tracks(mask) => mask.contains(track),
+            Visibility::Tracks(ids) => ids.contains(track),
             Visibility::All | Visibility::Objects(_) | Visibility::Molecules { .. } => true,
         }
     }
@@ -2079,7 +2083,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
-        self.visibility = Visibility::All;
+        self.retain_track_visibility();
         true
     }
 
@@ -2092,7 +2096,6 @@ impl ObjectSet {
     ) {
         self.discard_object_coloc();
         let empty = pruned.as_ref().is_none_or(ObjectFrame::is_empty);
-        let mut visibility = Visibility::All;
         let pruned_tracks = self
             .tracks
             .as_ref()
@@ -2116,7 +2119,6 @@ impl ObjectSet {
         self.hide_retained(time, &kept);
         if let Some((thickness, pruned)) = self.track_thickness().zip(pruned_tracks.flatten()) {
             self.tracks = (!pruned.is_empty()).then(|| TrackLayer::new(pruned, thickness, stamp));
-            visibility = Visibility::All;
         }
         let id = self.id;
         for relation in &mut self.relations {
@@ -2130,7 +2132,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
-        self.visibility = visibility;
+        self.reset_object_visibility();
     }
 
     fn hide_retained(&mut self, time: u32, kept: &ObjectIds) {
@@ -2377,7 +2379,7 @@ impl ObjectSet {
         let label = self
             .label
             .filter(|metric| !matches!(metric, ObjectColor::Coloc { .. }));
-        let merged = Self {
+        let mut merged = Self {
             id: self.id,
             key: self.key.clone(),
             kind: self.kind,
@@ -2418,6 +2420,10 @@ impl ObjectSet {
             source: self.source.clone(),
             replaced: None,
         };
+        if let Visibility::Tracks(ids) = &self.visibility {
+            merged.visibility = Visibility::Tracks(ids.clone());
+            merged.retain_track_visibility();
+        }
         Ok(merged)
     }
 
@@ -2636,7 +2642,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
-        self.visibility = Visibility::All;
+        self.reset_object_visibility();
         self.refresh_appearance();
         let slot = self
             .frames
@@ -2666,7 +2672,7 @@ impl ObjectSet {
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
-        self.visibility = Visibility::All;
+        self.reset_object_visibility();
         self.refresh_appearance();
         let slot = self
             .frames
@@ -2904,19 +2910,57 @@ impl ObjectSet {
         let thickness = self
             .track_thickness()
             .expect("only trackable objects install tracks");
+        let set = match &self.tracks {
+            Some(layer) => {
+                let owner = track_owners(layer.set());
+                set.inherited(|track| inherited_track(track, &owner))
+            }
+            None => set,
+        };
         self.tracks = Some(TrackLayer::new(set, thickness, stamp));
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
-        self.visibility = Visibility::All;
         self.apply_edits(stamp);
+        self.retain_track_visibility();
+    }
+
+    fn retain_track_visibility(&mut self) {
+        let Visibility::Tracks(ids) = &self.visibility else {
+            return;
+        };
+        let Some(set) = self.tracks.as_ref().map(TrackLayer::set) else {
+            self.visibility = Visibility::All;
+            return;
+        };
+        let kept = ids
+            .as_slice()
+            .iter()
+            .copied()
+            .filter(|id| set.contains(*id))
+            .collect::<Vec<_>>();
+        if kept.len() == ids.len() {
+            return;
+        }
+        self.visibility = Visibility::Tracks(TrackIds::new(kept));
+    }
+
+    fn reset_object_visibility(&mut self) {
+        match &self.visibility {
+            Visibility::Tracks(_) => self.retain_track_visibility(),
+            Visibility::All | Visibility::Objects(_) | Visibility::Molecules { .. } => {
+                self.visibility = Visibility::All
+            }
+        }
     }
 
     pub(crate) fn clear_tracks(&mut self, stamp: Revision) {
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
-        self.visibility = Visibility::All;
+        if matches!(self.visibility, Visibility::Tracks(_)) {
+            self.visibility = Visibility::All;
+        }
         self.tracks = None;
     }
 
@@ -3047,8 +3091,8 @@ impl ObjectSet {
 
     fn track_bounds_of(&self, metric: TrackColor) -> Option<Extent> {
         let set = self.tracks.as_ref()?.set();
-        (0..set.len()).fold(None, |accumulated, track| {
-            accumulate(accumulated, self.track_value(track, metric))
+        set.tracks().iter().fold(None, |accumulated, track| {
+            accumulate(accumulated, self.track_value(track.id(), metric))
         })
     }
 
@@ -3095,8 +3139,47 @@ impl ObjectSet {
         }
     }
 
-    pub fn track_at(&self, time: u32, id: ObjectId) -> Option<usize> {
+    pub fn track_at(&self, time: u32, id: ObjectId) -> Option<TrackId> {
         self.tracks.as_ref()?.set().track_at(time, id)
+    }
+}
+
+fn track_owners(set: &TrackSet) -> HashMap<ObjectId, TrackId> {
+    let mut owner = HashMap::with_capacity(set.node_count());
+    for track in set.tracks() {
+        for node in track.nodes() {
+            owner.insert(node.id(), track.id());
+        }
+    }
+    owner
+}
+
+fn inherited_track(
+    track: &grana_object::Track,
+    owner: &HashMap<ObjectId, TrackId>,
+) -> Option<TrackId> {
+    let mut counts = HashMap::<TrackId, usize>::new();
+    for node in track.nodes() {
+        if let Some(id) = owner.get(&node.id()) {
+            *counts.entry(*id).or_default() += 1;
+        }
+    }
+    let mut best = None;
+    let mut tied = false;
+    for (id, count) in counts {
+        match best {
+            None => best = Some((count, id)),
+            Some((held, _)) if count > held => {
+                best = Some((count, id));
+                tied = false;
+            }
+            Some((held, _)) if count == held => tied = true,
+            Some(_) => {}
+        }
+    }
+    match best {
+        Some((_, id)) if !tied => Some(id),
+        _ => None,
     }
 }
 

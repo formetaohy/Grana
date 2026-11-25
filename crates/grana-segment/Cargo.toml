@@ -11,6 +11,7 @@ burn = { workspace = true }
 half = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
+grana-gpu = { workspace = true }
 
 [lints]
 workspace = true

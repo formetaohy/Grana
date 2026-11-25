@@ -5,7 +5,7 @@ use grana_object::{
     IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
 };
 
-use crate::support::{id, measure_source, node, spot_set};
+use crate::support::{id, measure_source, node, spot_set, track};
 
 const CHANNEL: &str = "EGFP 488";
 
@@ -73,7 +73,7 @@ fn summarises_spots_and_exports_a_csv() {
     assert_eq!(value(&table, 2, "frame"), 2.0);
     assert_eq!(value(&table, 2, "time_s"), 2.0);
     assert_eq!(table.observation(3).object(), Some(id(1)));
-    assert_eq!(table.observation(3).track(), Some(1));
+    assert_eq!(table.observation(3).track(), Some(track(1)));
 
     let per_track = Table::build(
         Arc::clone(&frames),
@@ -443,61 +443,137 @@ fn grouped(z: f32) -> SpotSet {
 }
 
 fn tracks() -> TrackSet {
-    let first = Track::new(vec![
-        TrackNode::new(0, id(0), [1.0, 2.0, 3.0]),
-        TrackNode::new(1, id(0), [1.5, 2.0, 3.0]),
-    ]);
-    let second = Track::new(vec![
-        TrackNode::new(0, id(1), [4.0, 5.0, 6.0]),
-        TrackNode::new(1, id(1), [4.0, 5.0, 6.5]),
-    ]);
+    let first = Track::new(
+        track(0),
+        vec![
+            TrackNode::new(0, id(0), [1.0, 2.0, 3.0]),
+            TrackNode::new(1, id(0), [1.5, 2.0, 3.0]),
+        ],
+    );
+    let second = Track::new(
+        track(1),
+        vec![
+            TrackNode::new(0, id(1), [4.0, 5.0, 6.0]),
+            TrackNode::new(1, id(1), [4.0, 5.0, 6.5]),
+        ],
+    );
     TrackSet::new(1.0, vec![first, second])
 }
 
 #[test]
 fn edits_a_lineage_between_divisions_and_parents() {
-    let mother = Track::new(vec![
-        TrackNode::new(0, id(0), [0.0, 0.0, 0.0]),
-        TrackNode::new(1, id(0), [1.0, 0.0, 0.0]),
-    ]);
-    let left = Track::new(vec![
-        TrackNode::new(2, id(1), [2.0, 0.0, 0.0]),
-        TrackNode::new(3, id(1), [3.0, 0.0, 0.0]),
-    ]);
-    let right = Track::new(vec![
-        TrackNode::new(2, id(2), [2.0, 1.0, 0.0]),
-        TrackNode::new(3, id(2), [3.0, 1.0, 0.0]),
-    ]);
-    let later = Track::new(vec![
-        TrackNode::new(4, id(3), [4.0, 0.0, 0.0]),
-        TrackNode::new(5, id(3), [5.0, 0.0, 0.0]),
-    ]);
+    let mother = Track::new(
+        track(0),
+        vec![
+            TrackNode::new(0, id(0), [0.0, 0.0, 0.0]),
+            TrackNode::new(1, id(0), [1.0, 0.0, 0.0]),
+        ],
+    );
+    let left = Track::new(
+        track(1),
+        vec![
+            TrackNode::new(2, id(1), [2.0, 0.0, 0.0]),
+            TrackNode::new(3, id(1), [3.0, 0.0, 0.0]),
+        ],
+    );
+    let right = Track::new(
+        track(2),
+        vec![
+            TrackNode::new(2, id(2), [2.0, 1.0, 0.0]),
+            TrackNode::new(3, id(2), [3.0, 1.0, 0.0]),
+        ],
+    );
+    let later = Track::new(
+        track(3),
+        vec![
+            TrackNode::new(4, id(3), [4.0, 0.0, 0.0]),
+            TrackNode::new(5, id(3), [5.0, 0.0, 0.0]),
+        ],
+    );
     let set = TrackSet::new(1.0, vec![mother, left, right, later]);
+    let identities = |set: &TrackSet| {
+        set.tracks()
+            .iter()
+            .map(|track| track.id())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        identities(&set),
+        vec![track(0), track(1), track(2), track(3)]
+    );
     assert!(set.can_divide(node(1, 0), node(2, 1), node(2, 2)));
     let divided = set
         .divide(node(1, 0), node(2, 1), node(2, 2))
         .expect("a division joins two daughter tracks");
     assert_eq!(divided.divisions(), 1);
-    assert_eq!(divided.children(0).collect::<Vec<_>>(), vec![1, 2]);
-    assert_eq!(divided.parent(1), Some(0));
+    assert_eq!(
+        divided.children(track(0)).collect::<Vec<_>>(),
+        vec![track(1), track(2)]
+    );
+    assert_eq!(divided.parent(track(1)), Some(track(0)));
+    assert_eq!(identities(&divided), identities(&set));
 
     let adopted = divided
         .reparent(node(4, 3), node(3, 1))
         .expect("a root track adopts an earlier end");
-    assert_eq!(adopted.parent(3), Some(1));
+    assert_eq!(adopted.parent(track(3)), Some(track(1)));
     assert_eq!(adopted.divisions(), 1);
-    assert_eq!(adopted.children(1).collect::<Vec<_>>(), vec![3]);
+    assert_eq!(
+        adopted.children(track(1)).collect::<Vec<_>>(),
+        vec![track(3)]
+    );
 
     let detached = adopted
         .detach(node(4, 3))
         .expect("an adopted track returns to a lineage start");
-    assert_eq!(detached.parent(3), None);
+    assert_eq!(detached.parent(track(3)), None);
     assert_eq!(detached.divisions(), 1);
 
     let opened = divided
         .detach(node(2, 2))
         .expect("a division opens into separate lineages");
     assert_eq!(opened.divisions(), 0);
-    assert_eq!(opened.parent(2), None);
-    assert_eq!(opened.parent(1), Some(0));
+    assert_eq!(opened.parent(track(2)), None);
+    assert_eq!(opened.parent(track(1)), Some(track(0)));
+
+    let cut = set.cut(0, id(0)).expect("a track cuts between its nodes");
+    assert_eq!(cut.track_at(0, id(0)), Some(track(0)));
+    let tail = cut
+        .track_at(1, id(0))
+        .expect("the second half of the cut track is tracked");
+    assert_ne!(tail, track(0), "the cut tail receives a new identity");
+    assert_eq!(
+        cut.track(tail).expect("the cut tail exists").nodes().len(),
+        1
+    );
+    assert_eq!(cut.len(), set.len() + 1);
+    assert_eq!(
+        cut.track_at(2, id(1)),
+        Some(track(1)),
+        "a cut leaves the other tracks untouched"
+    );
+    let joined = cut
+        .join(node(0, 0), node(1, 0))
+        .expect("a cut track joins back together");
+    assert_eq!(joined.len(), set.len());
+    assert_eq!(joined.track_at(0, id(0)), Some(track(0)));
+    assert_eq!(joined.track_at(1, id(0)), Some(track(0)));
+    assert!(
+        !joined.contains(tail),
+        "the absorbed half gives up its identity"
+    );
+
+    let pruned = divided
+        .without(2, id(1))
+        .expect("a track node deletes from its set");
+    assert!(
+        !pruned.contains(track(1)),
+        "the truncated track gives up its identity"
+    );
+    let remainder = pruned
+        .track_at(3, id(1))
+        .expect("the rest of the truncated track stays");
+    assert_ne!(remainder, track(1));
+    assert_eq!(pruned.track_at(2, id(2)), Some(track(2)));
+    assert_eq!(pruned.divisions(), 0);
 }

@@ -11,7 +11,7 @@ use grana_measure::{
 };
 use grana_object::{
     CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, ObjectIds,
-    RelationFrame, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
+    RelationFrame, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track, TrackIds,
     TrackLink, TrackNode, TrackSet,
 };
 use grana_scene::{
@@ -466,9 +466,9 @@ impl Encode for ItemState {
                 writer.u8(0);
                 writer.u32(index.raw());
             }
-            Self::Track(index) => {
+            Self::Track(track) => {
                 writer.u8(1);
-                writer.count(*index);
+                writer.u32(track.raw());
             }
         }
     }
@@ -531,9 +531,9 @@ impl Encode for Visibility {
                 writer.u8(1);
                 ids.encode(writer);
             }
-            Self::Tracks(mask) => {
+            Self::Tracks(ids) => {
                 writer.u8(2);
-                mask.encode(writer);
+                ids.encode(writer);
             }
             Self::Molecules { mask, rows } => {
                 writer.u8(3);
@@ -883,14 +883,15 @@ impl Encode for TrackSet {
 
 impl Encode for Track {
     fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.u32(self.id().raw());
         self.nodes().encode(writer);
     }
 }
 
 impl Encode for TrackLink {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        writer.u32(self.parent());
-        writer.u32(self.child());
+        writer.u32(self.parent().raw());
+        writer.u32(self.child().raw());
         writer.u8(match self.kind() {
             Link::Gap => 0,
             Link::Division => 1,
@@ -1124,6 +1125,15 @@ impl Encode for CellSet {
 }
 
 impl Encode for ObjectIds {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.len());
+        for id in self.as_slice() {
+            writer.u32(id.raw());
+        }
+    }
+}
+
+impl Encode for TrackIds {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.len());
         for id in self.as_slice() {

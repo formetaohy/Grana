@@ -668,7 +668,12 @@ impl Measure {
                     .filter_map(|row| table.observation(row).object())
                     .collect(),
             )?),
-            Group::Track => Visibility::Tracks(Arc::new(mask)),
+            Group::Track => Visibility::Tracks(grana_object::TrackIds::checked(
+                (0..table.rows())
+                    .filter(|row| mask.contains(*row))
+                    .filter_map(|row| table.observation(row).track())
+                    .collect(),
+            )?),
             Group::Molecule => Visibility::molecules(Arc::new(mask), table.molecule_rows()?),
             Group::Timepoint => Visibility::All,
         })

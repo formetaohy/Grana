@@ -11,9 +11,6 @@ struct BakeEntry {
 const BAKE_TILE: u32 = 4u;
 const BAKE_TILES: u32 = 5u;
 
-const STRUCTURE_STRIDE: i32 = 2;
-
-const STRUCTURE_PAD: i32 = 1;
 
 fn structure_density(texel: vec3<i32>) -> f32 {
     let count = u32(frame.march.z);
@@ -47,12 +44,8 @@ fn structure_normal(band: u32, origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32>
     return vec4<f32>(packed * 0.5 + vec2<f32>(0.5), 1.0, 0.0);
 }
 
-fn structure_origin(grid: vec3<u32>, slot: u32, side: i32) -> vec3<i32> {
-    let layer = slot / (grid.x * grid.y);
-    let remainder = slot % (grid.x * grid.y);
-    let row = remainder / grid.x;
-    let column = remainder % grid.x;
-    return vec3<i32>(i32(column), i32(row), i32(layer)) * side;
+fn structure_origin(slot: u32, side: vec3<u32>) -> vec3<u32> {
+    return slot_cell(slot) * side;
 }
 
 @compute @workgroup_size(4, 4, 4)
@@ -75,15 +68,15 @@ fn bake_main(
     if (any(cell >= vec3<i32>(side))) {
         return;
     }
-    let origin = vec3<i32>(slot_origin(frame.atlas.xyz, entry.slot));
-    let inner = clamp(cell, vec3<i32>(STRUCTURE_PAD), vec3<i32>(side - 1 - STRUCTURE_PAD));
-    let centre = (inner - vec3<i32>(STRUCTURE_PAD)) * STRUCTURE_STRIDE;
+    let origin = vec3<i32>(slot_cell(entry.slot) * PADDED_TEXEL);
+    let inner = clamp(cell, vec3<i32>(i32(STRUCTURE_PAD)), vec3<i32>(side - 1 - i32(STRUCTURE_PAD)));
+    let centre = (inner - vec3<i32>(i32(STRUCTURE_PAD))) * i32(STRUCTURE_STRIDE);
     let limit = vec3<i32>(i32(PADDED_SIDE) - 2);
     var total = vec3<f32>(0.0);
     var coverage = 0.0;
-    for (var z = 0; z < STRUCTURE_STRIDE; z += 1) {
-        for (var y = 0; y < STRUCTURE_STRIDE; y += 1) {
-            for (var x = 0; x < STRUCTURE_STRIDE; x += 1) {
+    for (var z = 0; z < i32(STRUCTURE_STRIDE); z += 1) {
+        for (var y = 0; y < i32(STRUCTURE_STRIDE); y += 1) {
+            for (var x = 0; x < i32(STRUCTURE_STRIDE); x += 1) {
                 let texel = centre + vec3<i32>(x, y, z);
                 if (structure_density(origin + texel) <= 0.0) {
                     continue;
@@ -108,7 +101,7 @@ fn bake_main(
     }
     textureStore(
         structure_output,
-        structure_origin(frame.atlas.xyz, entry.slot, side) + cell,
+        structure_origin(entry.slot, vec3<u32>(u32(side))) + vec3<u32>(cell),
         structure,
     );
 }

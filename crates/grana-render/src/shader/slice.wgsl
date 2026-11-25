@@ -18,7 +18,7 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
             if (!pack_active(pack)) {
                 continue;
             }
-            let values = sample_pack(band, pack, voxel);
+            let values = tap_sample(band, pack, voxel);
             for (var component = 0u; component < PACK; component += 1u) {
                 let channel = pack * PACK + component;
                 if (!channel_active(channel)) {

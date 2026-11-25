@@ -163,7 +163,7 @@ impl Key {
 fn item_digest(item: Item) -> u64 {
     match item {
         Item::Object(id) => u64::from(id.raw()) * 2,
-        Item::Track(index) => (index as u64) * 2 + 1,
+        Item::Track(id) => u64::from(id.raw()) * 2 + 1,
     }
 }
 
@@ -463,20 +463,20 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
             let rows = cache
                 .styles
                 .rows(scene, set, TRACK_PART, count, |styles, ids| {
-                    for index in 0..count {
-                        let shown = visible && set.visible_track(index);
+                    for track in tracks.set().tracks() {
+                        let shown = visible && set.visible_track(track.id());
                         styles.push(
                             Style::new(
-                                set.track_color(index),
+                                set.track_color(track.id()),
                                 shown,
-                                scene.track_selected(set.id(), index),
+                                scene.track_selected(set.id(), track.id()),
                                 set.opacity(),
                             )
                             .with_material(set.material()),
                         );
                         ids.push(Selection {
                             set: set.id(),
-                            item: Item::Track(index),
+                            item: Item::Track(track.id()),
                         });
                     }
                 });

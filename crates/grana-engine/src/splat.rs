@@ -454,7 +454,7 @@ pub(crate) fn selection_digest(scene: &Scene, set: &ObjectSet) -> u64 {
         if held.set == set.id() {
             digest.mix(match held.item {
                 Item::Object(id) => u64::from(id.raw()) * 2,
-                Item::Track(index) => (index as u64) * 2 + 1,
+                Item::Track(id) => u64::from(id.raw()) * 2 + 1,
             });
         }
     }

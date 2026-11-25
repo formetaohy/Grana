@@ -6,7 +6,7 @@ use grana_measure::{
     Measurement, PlotAxis, Scope,
 };
 use grana_mesh::Format as MeshFormat;
-use grana_object::{MaskMode, MaskTool, ObjectAnchor, ObjectId, TrackParams};
+use grana_object::{MaskMode, MaskTool, ObjectAnchor, ObjectId, TrackId, TrackParams};
 use grana_optics::Psf;
 
 use grana_scene::{
@@ -291,7 +291,7 @@ pub enum Command {
     },
     SelectTrack {
         set: ObjectSetId,
-        index: Option<usize>,
+        track: Option<TrackId>,
     },
     CutTrack {
         set: ObjectSetId,

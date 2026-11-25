@@ -76,8 +76,8 @@ fn march_volume(
                 cursor = min(cursor + max(gap, stride), limit);
                 continue;
             }
-            let texel = walk_texel(walk, voxel);
-            let sample = optical_sample(texel, peaks);
+            let local = walk_local(walk, voxel);
+            let sample = optical_sample(walk.tap, local, peaks);
             let ceiling = select(stride * SEGMENT_STRIDE, stride, projection());
             let advance = clamp(
                 SEGMENT_ERROR / max(sample.extinction * walk.voxels, 1.0e-9),
@@ -90,7 +90,7 @@ fn march_volume(
             if (alpha > 0.0) {
                 let world = origin + direction * cursor;
                 let albedo = sample.emission / max(sample.extinction, OPTICAL_MINIMUM_TAU);
-                march.radiance += march.transmittance * alpha * structure_lighting(albedo, structure_tap(texel), world);
+                march.radiance += march.transmittance * alpha * structure_lighting(albedo, structure_tap(walk.tap, local), world);
                 march.transmittance *= 1.0 - alpha;
                 if (march.surface.x >= UNREACHED_DEPTH) {
                     march.surface.x = clip_depth(world);
@@ -99,7 +99,7 @@ fn march_volume(
             if (march.surface.y >= 1.0
                 && (1.0 - march.transmittance >= SURFACE_OPACITY || sample.peak)) {
                 march.surface.y = clip_depth(origin + direction * cursor);
-                march.normal = structure_sample_normal(structure_tap(texel));
+                march.normal = structure_sample_normal(structure_tap(walk.tap, local));
             }
             cursor += segment;
             samples += 1u;

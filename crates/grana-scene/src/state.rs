@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction, VolumeStyle};
 use grana_measure::ObjectColoc;
-use grana_object::{ObjectId, ObjectIds, RelationFrame, TrackSet};
+use grana_object::{ObjectId, ObjectIds, RelationFrame, TrackId, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
 
 use crate::annotation::AnnotationState;
@@ -70,7 +70,7 @@ pub struct SelectionState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ItemState {
     Object(ObjectId),
-    Track(usize),
+    Track(TrackId),
 }
 
 #[derive(Debug, PartialEq)]
@@ -149,7 +149,7 @@ impl Scene {
                     set: selection.set.raw(),
                     item: match selection.item {
                         Item::Object(index) => ItemState::Object(index),
-                        Item::Track(index) => ItemState::Track(index),
+                        Item::Track(track) => ItemState::Track(track),
                     },
                 })
                 .collect(),
@@ -233,7 +233,7 @@ impl Scene {
                     set: ObjectSetId::new(selection.set),
                     item: match selection.item {
                         ItemState::Object(index) => Item::Object(index),
-                        ItemState::Track(index) => Item::Track(index),
+                        ItemState::Track(track) => Item::Track(track),
                     },
                 })
                 .collect(),
@@ -367,9 +367,9 @@ impl Scene {
                     Item::Object(id) => (0..set.frame_count())
                         .filter_map(|time| set.frame_shared(time))
                         .any(|frame| frame.index_of(id).is_some()),
-                    Item::Track(index) => {
-                        set.tracks().is_some_and(|layer| index < layer.set().len())
-                    }
+                    Item::Track(track) => set
+                        .tracks()
+                        .is_some_and(|layer| layer.set().contains(track)),
                 })
         });
     }

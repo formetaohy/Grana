@@ -185,7 +185,7 @@ impl Criteria {
                 Group::Track => {
                     let Some(track) = observation
                         .track()
-                        .and_then(|index| tracks.and_then(|tracks| tracks.track(index)))
+                        .and_then(|id| tracks.and_then(|tracks| tracks.track(id)))
                     else {
                         continue;
                     };

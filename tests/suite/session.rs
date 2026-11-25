@@ -5,9 +5,10 @@ use glam::Vec3;
 use grana_animation::Timeline;
 use grana_display::{Camera, CameraState};
 use grana_engine::Engine;
+use grana_measure::{Filter, Group};
 use grana_object::{
     IntensityTable, MaskMode, MaskTool, ObjectAnchor, ObjectId, SampleStatistics, Spot, SpotParams,
-    SurfaceFilter, SurfaceParams,
+    SurfaceFilter, SurfaceParams, TrackId, TrackIds,
 };
 use grana_project::{Export, NamedView, Project, Source, ViewState};
 use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
@@ -91,13 +92,21 @@ fn detects_surfaces_masks_a_channel_and_captures() {
 }
 
 fn series() -> VolumeSeries {
-    let volume = support::spheres(
+    VolumeSeries::new(vec![nuclei_volume()], 1.0)
+}
+
+fn tracked_series() -> VolumeSeries {
+    let volume = nuclei_volume();
+    VolumeSeries::new(vec![volume.clone(), volume], 1.0)
+}
+
+fn nuclei_volume() -> Volume {
+    support::spheres(
         Extent::new(64, 32, 32),
         Spacing::new(0.1, 0.1, 0.1),
         &[([26.0, 16.0, 16.0], 3.0), ([38.0, 16.0, 16.0], 5.0)],
         HIGH,
-    );
-    VolumeSeries::new(vec![volume], 1.0)
+    )
 }
 
 fn nuclei_params() -> ObjectParams {
@@ -150,7 +159,7 @@ fn hidden_identities(session: &Session, set: grana_scene::ObjectSetId) -> Vec<Ob
 }
 
 #[test]
-fn keeps_identity_and_references_through_a_redetection() {
+fn keeps_object_references_through_redetection_and_deletion() {
     let mut session = Session::new();
     let set = nuclei(&mut session);
     let before = identities(&session, set);
@@ -184,24 +193,7 @@ fn keeps_identity_and_references_through_a_redetection() {
         Some(Item::Object(first)),
         "the selection still names its own object"
     );
-}
 
-#[test]
-fn drops_the_references_of_a_deleted_object() {
-    let mut session = Session::new();
-    let set = nuclei(&mut session);
-    let before = identities(&session, set);
-    let first = before[0];
-    session.execute(Command::Select(Some(Selection {
-        set,
-        item: Item::Object(first),
-    })));
-    session.execute(Command::SetObjectHidden {
-        set,
-        time: 0,
-        objects: vec![first],
-        hidden: true,
-    });
     session.execute(Command::DeleteObject {
         set,
         time: 0,
@@ -221,6 +213,269 @@ fn drops_the_references_of_a_deleted_object() {
             .selection()
             .is_none(),
         "a deleted object leaves no selection behind"
+    );
+}
+
+fn filter_to_track(session: &mut Session, set: grana_scene::ObjectSetId, track: TrackId) {
+    session.execute(Command::SetMeasureSet(Some(set)));
+    session.execute(Command::SetMeasureGroup(Group::Track));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.measure().table().is_none() {
+        assert!(Instant::now() < deadline, "the track table never builds");
+        session.sync_measure();
+        session.poll();
+        session.settle_measure();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    session.execute(Command::AddFilter);
+    session.execute(Command::SetFilter {
+        index: 0,
+        filter: Filter::new(0, track.raw() as f32, track.raw() as f32),
+    });
+    session.execute(Command::SetMeasureVisibility(true));
+    while !matches!(
+        visible_tracks(session, set),
+        grana_scene::Visibility::Tracks(_)
+    ) {
+        assert!(Instant::now() < deadline, "the track filter never applies");
+        session.sync_measure();
+        session.apply_measure();
+        session.poll();
+        session.settle_measure();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn visible_tracks(session: &Session, set: grana_scene::ObjectSetId) -> grana_scene::Visibility {
+    session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .get(set)
+        .expect("the object set stays")
+        .visibility()
+        .clone()
+}
+
+#[test]
+fn keeps_a_track_identity_through_a_deletion_and_restore() {
+    let mut session = Session::new();
+    open_series(&mut session, "tracks", tracked_series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(&session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: nuclei_params(),
+    });
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    session.execute(Command::Track(set));
+    settle(&mut session);
+
+    let (selected, other, nodes) = {
+        let scene = session.scene().expect("the series opens");
+        let object = scene.objects.get(set).expect("the tracked set stays");
+        let tracks = object.tracks().expect("the tracks install").set();
+        assert_eq!(tracks.len(), 2, "the two nuclei track as two tracks");
+        let ids = object.ids(0);
+        let other = tracks
+            .track_at(0, ids.get(0).expect("the first frame holds a nucleus"))
+            .expect("the first nucleus is tracked");
+        let selected = tracks
+            .track_at(0, ids.get(1).expect("the first frame holds two nuclei"))
+            .expect("the second nucleus is tracked");
+        assert_ne!(other, selected, "the two nuclei track apart");
+        let nodes = tracks
+            .track(selected)
+            .expect("the selected track exists")
+            .nodes()
+            .iter()
+            .map(|node| (node.time(), node.id()))
+            .collect::<Vec<_>>();
+        assert_eq!(nodes.len(), 2, "the selected track spans both frames");
+        (selected, other, nodes)
+    };
+
+    session.execute(Command::SelectTrack {
+        set,
+        track: Some(selected),
+    });
+    filter_to_track(&mut session, set, selected);
+    assert_eq!(
+        visible_tracks(&session, set),
+        grana_scene::Visibility::Tracks(TrackIds::new(vec![selected])),
+        "the track filter hides the other track"
+    );
+
+    let removed = {
+        let scene = session.scene().expect("the series opens");
+        let object = scene.objects.get(set).expect("the tracked set stays");
+        let node = object
+            .tracks()
+            .expect("the tracks stay")
+            .set()
+            .track(other)
+            .expect("the other track exists")
+            .nodes()
+            .first()
+            .copied()
+            .expect("the other track holds a node");
+        (node.time(), node.id())
+    };
+    session.execute(Command::DeleteObject {
+        set,
+        time: removed.0,
+        object: removed.1,
+    });
+    settle(&mut session);
+
+    {
+        let scene = session.scene().expect("the series opens");
+        let object = scene.objects.get(set).expect("the tracked set stays");
+        let tracks = object.tracks().expect("the tracks stay").set();
+        assert_eq!(
+            scene.selection(),
+            Some(Selection {
+                set,
+                item: Item::Track(selected),
+            }),
+            "the selection keeps its own track"
+        );
+        assert_eq!(
+            object.visibility(),
+            &grana_scene::Visibility::Tracks(TrackIds::new(vec![selected])),
+            "the visibility keeps its own track"
+        );
+        assert!(object.visible_track(selected));
+        assert!(!object.visible_track(other));
+        assert!(
+            !tracks.contains(other),
+            "the track that lost its object is gone"
+        );
+        assert_eq!(
+            tracks
+                .track(selected)
+                .expect("the selected track stays")
+                .nodes()
+                .iter()
+                .map(|node| (node.time(), node.id()))
+                .collect::<Vec<_>>(),
+            nodes,
+            "the selected track keeps its nodes"
+        );
+        assert_eq!(tracks.track_at(removed.0, removed.1), None);
+    }
+
+    session.execute(Command::Undo);
+    {
+        let scene = session.scene().expect("undo keeps the series open");
+        let object = scene.objects.get(set).expect("undo keeps the tracked set");
+        assert_eq!(
+            scene.selection(),
+            Some(Selection {
+                set,
+                item: Item::Track(selected),
+            }),
+            "a restored scene keeps the selected track"
+        );
+        assert_eq!(
+            object.visibility(),
+            &grana_scene::Visibility::Tracks(TrackIds::new(vec![selected])),
+            "a restored scene keeps the track filter"
+        );
+        assert_eq!(
+            object
+                .tracks()
+                .expect("undo restores the tracks")
+                .set()
+                .track_at(removed.0, removed.1),
+            Some(other),
+            "a restored scene keeps every track identity"
+        );
+    }
+    session.execute(Command::Redo);
+    assert_eq!(
+        session
+            .scene()
+            .expect("redo keeps the series open")
+            .selection(),
+        Some(Selection {
+            set,
+            item: Item::Track(selected),
+        }),
+        "a redone deletion keeps the selected track"
+    );
+    assert_eq!(
+        visible_tracks(&session, set),
+        grana_scene::Visibility::Tracks(TrackIds::new(vec![selected])),
+        "a redone deletion keeps the track filter"
+    );
+
+    session.execute(Command::Track(set));
+    settle(&mut session);
+    {
+        let scene = session.scene().expect("the retrack keeps the series open");
+        let object = scene
+            .objects
+            .get(set)
+            .expect("the retrack keeps the tracked set");
+        let tracks = object.tracks().expect("the retrack installs tracks").set();
+        assert!(
+            tracks.contains(selected),
+            "a retrack inherits the id of the track it overlaps"
+        );
+        assert_eq!(
+            scene.selection(),
+            Some(Selection {
+                set,
+                item: Item::Track(selected),
+            }),
+            "a retrack keeps the selected track"
+        );
+        assert_eq!(
+            object.visibility(),
+            &grana_scene::Visibility::Tracks(TrackIds::new(vec![selected])),
+            "a retrack keeps the track filter"
+        );
+        assert_eq!(
+            tracks
+                .track(selected)
+                .expect("the inherited track exists")
+                .nodes()
+                .iter()
+                .map(|node| (node.time(), node.id()))
+                .collect::<Vec<_>>(),
+            nodes,
+            "the inherited track keeps its nodes"
+        );
+    }
+
+    let project = Project::capture(
+        session.scene().expect("the series opens"),
+        session.measure(),
+        Source::Synthetic {
+            name: "tracks".to_string(),
+        },
+        view_state(),
+        Vec::new(),
+        Fingerprint::new([11; 32]),
+    );
+    let temp = Temp::new("suite-track-project");
+    let path = temp.path().join("tracks.grana");
+    project
+        .write(&path, &AtomicBool::new(false), &mut |_, _| {})
+        .expect("the track project writes");
+    let loaded = Project::read(
+        &path,
+        SpillStore::memory(),
+        &AtomicBool::new(false),
+        &mut |_, _| {},
+    )
+    .expect("the track project reads");
+    assert_eq!(
+        loaded, project,
+        "a project keeps track identities, selection and visibility"
     );
 }
 

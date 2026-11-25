@@ -106,14 +106,14 @@ impl ObjectSource {
         match &self.visibility {
             Visibility::All => true,
             Visibility::Objects(ids) => self.id_of(time, object).is_some_and(|id| ids.contains(id)),
-            Visibility::Tracks(mask) => {
+            Visibility::Tracks(ids) => {
                 let Some(id) = self.id_of(time, object) else {
                     return false;
                 };
                 self.tracks
                     .as_deref()
                     .and_then(|set| set.track_at(time, id))
-                    .is_some_and(|track| mask.contains(track))
+                    .is_some_and(|track| ids.contains(track))
             }
             Visibility::Molecules { mask, rows } => self
                 .spot_frame(time)

@@ -20,7 +20,7 @@ use grana_object::{
     CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit,
     MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair, RelationReading,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
-    TrackLink, TrackNode, TrackSet,
+    TrackId, TrackIds, TrackLink, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
@@ -618,7 +618,7 @@ impl Decode for ItemState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         match reader.u8()? {
             0 => Ok(Self::Object(decode_id(reader)?)),
-            1 => Ok(Self::Track(reader.count(1)?)),
+            1 => Ok(Self::Track(decode_track_id(reader)?)),
             _ => Err(FAULT_SHAPE),
         }
     }
@@ -733,7 +733,7 @@ impl Decode for Visibility {
         match reader.u8()? {
             0 => Ok(Self::All),
             1 => Ok(Self::Objects(decode_ids(reader)?)),
-            2 => Ok(Self::Tracks(Arc::new(grana_measure::Mask::decode(reader)?))),
+            2 => Ok(Self::Tracks(decode_track_ids(reader)?)),
             3 => {
                 let mask = Arc::new(grana_measure::Mask::decode(reader)?);
                 let count = reader.count(8)?;
@@ -767,7 +767,9 @@ fn validate_visibility(
                 .iter()
                 .all(|id| frame.index_of(*id).is_some())
         }),
-        Visibility::Tracks(mask) => mask.rows() == tracks.map_or(0, TrackSet::len),
+        Visibility::Tracks(ids) => {
+            tracks.is_some_and(|tracks| ids.as_slice().iter().all(|id| tracks.contains(*id)))
+        }
         Visibility::Molecules { mask, rows } => mask.rows() == rows.len(),
     };
     if holds { Ok(()) } else { Err(FAULT_SHAPE) }
@@ -1360,6 +1362,7 @@ impl Decode for TrackSet {
 
 impl Decode for Track {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        let id = decode_track_id(reader)?;
         let nodes = Vec::<TrackNode>::decode(reader)?;
         if nodes.is_empty()
             || !nodes
@@ -1368,14 +1371,14 @@ impl Decode for Track {
         {
             return Err(FAULT_SHAPE);
         }
-        Ok(Self::new(nodes))
+        Ok(Self::new(id, nodes))
     }
 }
 
 impl Decode for TrackLink {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let parent = reader.u32()?;
-        let child = reader.u32()?;
+        let parent = decode_track_id(reader)?;
+        let child = decode_track_id(reader)?;
         let kind = match reader.u8()? {
             0 => Link::Gap,
             1 => Link::Division,
@@ -2421,6 +2424,19 @@ fn degrees(value: f32, limit: f32) -> Result<f32, &'static str> {
 
 fn decode_id(reader: &mut Reader<'_>) -> Result<ObjectId, &'static str> {
     ObjectId::from_raw(reader.u32()?).ok_or(FAULT_VALUE)
+}
+
+fn decode_track_id(reader: &mut Reader<'_>) -> Result<TrackId, &'static str> {
+    TrackId::from_raw(reader.u32()?).ok_or(FAULT_VALUE)
+}
+
+fn decode_track_ids(reader: &mut Reader<'_>) -> Result<TrackIds, &'static str> {
+    let count = reader.count(1)?;
+    let mut ids = Vec::with_capacity(reserve(count));
+    for _ in 0..count {
+        ids.push(decode_track_id(reader)?);
+    }
+    TrackIds::checked(ids).ok_or(FAULT_VALUE)
 }
 
 fn decode_ids(reader: &mut Reader<'_>) -> Result<ObjectIds, &'static str> {

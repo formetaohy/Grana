@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
 use grana_measure::{Aggregate, TrackMeasurement};
-use grana_object::{Link, TrackSet};
+use grana_object::{Link, TrackId, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
 use grana_ui::{
@@ -194,7 +194,7 @@ fn tracking_controls<'a>(
     state: &View<'_>,
     id: ObjectSetId,
     object: &ObjectSet,
-    selected: Option<usize>,
+    selected: Option<TrackId>,
     prefix: &str,
 ) -> Vec<Element<'a, Message>> {
     let scene = state.scene;
@@ -203,18 +203,18 @@ fn tracking_controls<'a>(
     let busy = state.io.loading.is_some();
     let time = scene.time();
     let cuts = object.tracks().map(|layer| layer.set()).and_then(|set| {
-        let index = selected?;
-        let track = set.track(index)?;
+        let selected = selected?;
+        let track = set.track(selected)?;
         let last = track.nodes().last()?;
         let node = track.nodes().iter().find(|node| node.time() == time)?;
-        let division = set.children(index).next().is_some();
+        let division = set.children(selected).next().is_some();
         (node.time() != last.time() || division).then_some((node.time(), node.id()))
     });
     let joins = object.tracks().map(|layer| layer.set()).and_then(|set| {
-        let index = selected?;
-        let track = set.track(index)?;
+        let selected = selected?;
+        let track = set.track(selected)?;
         let last = track.nodes().last()?;
-        (set.children(index).next().is_none() && last.time() + 1 < scene.frame_count())
+        (set.children(selected).next().is_none() && last.time() + 1 < scene.frame_count())
             .then_some((last.time(), last.id()))
     });
     let joining = state.workspace.join.is_some();
@@ -314,7 +314,7 @@ fn header<'a>(
     sets: &[ObjectSetId],
     id: ObjectSetId,
     object: &ObjectSet,
-    selected: Option<usize>,
+    selected: Option<TrackId>,
 ) -> Vec<Element<'a, Message>> {
     let scene = state.scene;
     let names = sets
@@ -463,7 +463,7 @@ fn lineage<'a>(
     id: ObjectSetId,
     object: &'a ObjectSet,
     set: &'a TrackSet,
-    selected: Option<usize>,
+    selected: Option<TrackId>,
 ) -> Element<'a, Message> {
     let theme = *ctx.theme();
     let palette = theme.palette;
@@ -578,7 +578,7 @@ fn lineage<'a>(
                         Align::Center,
                     );
                 }
-                if let (Some(lane), Some(index), true) = (
+                if let (Some(lane), Some(track), true) = (
                     hovered,
                     hovered_index,
                     source.is_none() && divide.is_none() && merge.is_none() && reparent.is_none(),
@@ -588,7 +588,7 @@ fn lineage<'a>(
                             Vec2::new(pointer.x + 10.0, lane_y(lane) - ROW * 0.5),
                             Vec2::new(64.0, ROW),
                         ),
-                        &format!("#{}", index + 1),
+                        &format!("#{}", track.raw()),
                         TextStyle::new(TypeStyle::new(10.0, 600.0, 13.0), palette.on_surface),
                         Align::Center,
                     );
@@ -597,18 +597,18 @@ fn lineage<'a>(
         )
         .at(rect);
     let click = hovered_index;
-    let select = |index: usize| {
+    let select = |track: TrackId| {
         Some(Message::Command(Command::SelectTrack {
             set: id,
-            index: Some(index),
+            track: Some(track),
         }))
     };
     let (down_message, up_message) = match click {
-        Some(index) => {
+        Some(track) => {
             if let Some(parent) = divide {
                 let daughters = state.workspace.divide_daughters.as_slice();
                 let daughter = set
-                    .track(index)
+                    .track(track)
                     .and_then(|track| track.nodes().first())
                     .map(|node| (node.time(), node.id()))
                     .filter(|daughter| {
@@ -623,11 +623,11 @@ fn lineage<'a>(
                     });
                 (
                     daughter.map(|daughter| Message::PickDivide { set: id, daughter }),
-                    select(index),
+                    select(track),
                 )
             } else if let Some(child) = merge {
                 let parent = set
-                    .track(index)
+                    .track(track)
                     .and_then(|track| track.nodes().last())
                     .map(|node| (node.time(), node.id()))
                     .filter(|parent| {
@@ -635,21 +635,21 @@ fn lineage<'a>(
                     });
                 (
                     parent.map(|parent| Message::PickMerge { set: id, parent }),
-                    select(index),
+                    select(track),
                 )
             } else if let Some(child) = reparent {
                 let parent = set
-                    .track(index)
+                    .track(track)
                     .and_then(|track| track.nodes().last())
                     .map(|node| (node.time(), node.id()))
                     .filter(|parent| set.can_reparent(child, *parent));
                 (
                     parent.map(|parent| Message::PickReparent { set: id, parent }),
-                    select(index),
+                    select(track),
                 )
             } else if let Some(source) = source {
                 let target = set
-                    .track(index)
+                    .track(track)
                     .and_then(|track| track.nodes().first())
                     .map(|node| (node.time(), node.id()))
                     .filter(|target| set.can_join(source, *target));
@@ -668,7 +668,7 @@ fn lineage<'a>(
                 let target = ((pointer.x - inner.min.x) / inner.width() * span as f32)
                     .clamp(0.0, span as f32)
                     .round() as u32;
-                let time = set.track(index).and_then(|track| {
+                let time = set.track(track).and_then(|track| {
                     track
                         .nodes()
                         .iter()
@@ -678,7 +678,7 @@ fn lineage<'a>(
                 (
                     Some(Message::Command(Command::SelectTrack {
                         set: id,
-                        index: Some(index),
+                        track: Some(track),
                     })),
                     time.map(|time| Message::Command(Command::SetTime(time))),
                 )
@@ -701,10 +701,10 @@ fn lineage<'a>(
                 let order = layout.order();
                 let first = window.first;
                 let last = window.last;
-                for (position, index) in order[first..last].iter().copied().enumerate() {
+                for (position, track_id) in order[first..last].iter().copied().enumerate() {
                     let lane = first + position;
                     let y = info.rect.min.y + lane as f32 * ROW + ROW * 0.5;
-                    let Some(track) = set.track(index) else {
+                    let Some(track) = set.track(track_id) else {
                         continue;
                     };
                     let start = info.rect.min.x
@@ -713,22 +713,21 @@ fn lineage<'a>(
                     let end = info.rect.min.x
                         + (track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
                             * info.rect.width();
-                    let chosen = selected == Some(index);
+                    let chosen = selected == Some(track_id);
                     let tint = if chosen {
                         accent
                     } else {
-                        Color::from_rgb_f32(object.track_color(index))
+                        Color::from_rgb_f32(object.track_color(track_id))
                     };
-                    for link in set.parents(index) {
-                        let parent = link.parent() as usize;
-                        let Some(parent_track) = set.track(parent) else {
+                    for link in set.parents(track_id) {
+                        let Some(parent_track) = set.track(link.parent()) else {
                             continue;
                         };
                         let parent_end = info.rect.min.x
                             + (parent_track.end() as f32 / frames.max(2).saturating_sub(1) as f32)
                                 * info.rect.width();
                         let parent_y =
-                            info.rect.min.y + layout.lane(parent) as f32 * ROW + ROW * 0.5;
+                            info.rect.min.y + layout.lane(link.parent()) as f32 * ROW + ROW * 0.5;
                         draw_link(
                             painter,
                             Vec2::new(parent_end, parent_y),
@@ -802,12 +801,12 @@ fn lineage<'a>(
                         std::f32::consts::TAU,
                         accent,
                     );
-                    for (position, index) in order[first..last].iter().copied().enumerate() {
+                    for (position, track_id) in order[first..last].iter().copied().enumerate() {
                         let lane = first + position;
                         if !joinable.get(position).copied().unwrap_or(false) {
                             continue;
                         }
-                        let Some(track) = set.track(index) else {
+                        let Some(track) = set.track(track_id) else {
                             continue;
                         };
                         let Some(head) = track.nodes().first() else {
@@ -851,7 +850,7 @@ fn inspector<'a>(
     rect: Rect,
     id: ObjectSetId,
     object: &'a ObjectSet,
-    selected: Option<usize>,
+    selected: Option<TrackId>,
 ) -> Element<'a, Message> {
     let mut cards = Vec::new();
     if let Some(set) = object.tracks().map(|layer| layer.set()) {
@@ -873,11 +872,11 @@ fn summary<'a>(
     ctx: &mut BuildContext<'_, Message>,
     state: &View<'_>,
     set: &TrackSet,
-    selected: Option<usize>,
+    selected: Option<TrackId>,
     id: ObjectSetId,
 ) -> Element<'a, Message> {
     let language = ctx.language();
-    let Some(index) = selected else {
+    let Some(selected) = selected else {
         let title = view::card_title(
             ctx,
             Icon::Target,
@@ -886,26 +885,26 @@ fn summary<'a>(
         );
         return view::card(ctx, 4.0, vec![title]);
     };
-    let Some(track) = set.track(index) else {
+    let Some(track) = set.track(selected) else {
         return grana_ui::column();
     };
     let statistics = track.statistics(set.frame_interval());
     let parents = set
-        .parents(index)
-        .map(|link| format!("#{}", link.parent() + 1))
+        .parents(selected)
+        .map(|link| format!("#{}", link.parent().raw()))
         .collect::<Vec<_>>();
     let parent = if parents.is_empty() {
         grana_i18n::track::root(language).to_string()
     } else {
         parents.join(" · ")
     };
-    let children = set.children(index).collect::<Vec<_>>();
+    let children = set.children(selected).collect::<Vec<_>>();
     let daughters = if children.is_empty() {
         grana_i18n::common::none(language).to_string()
     } else {
         children
             .iter()
-            .map(|child| format!("#{}", child + 1))
+            .map(|child| format!("#{}", child.raw()))
             .collect::<Vec<_>>()
             .join(" · ")
     };
@@ -913,10 +912,10 @@ fn summary<'a>(
     let title = view::card_title(
         ctx,
         Icon::Target,
-        &grana_i18n::track::track_number(language, index + 1),
+        &grana_i18n::track::track_number(language, selected.raw() as usize),
         Some(&detail),
     );
-    let parented = set.parents(index).next().is_some();
+    let parented = set.parents(selected).next().is_some();
     let authoring = state.access.author();
     let first = track.nodes().first().map(|node| (node.time(), node.id()));
     let last = track.nodes().last().map(|node| (node.time(), node.id()));

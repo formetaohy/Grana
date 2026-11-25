@@ -534,10 +534,10 @@ impl SceneState {
                         .as_ref()
                         .is_some_and(|frame| frame.index_of(id).is_some())
                 }),
-                ItemState::Track(index) => set
+                ItemState::Track(track) => set
                     .tracks
                     .as_ref()
-                    .is_some_and(|tracks| index < tracks.len()),
+                    .is_some_and(|tracks| tracks.contains(track)),
             };
             if !valid {
                 return Err(fault(

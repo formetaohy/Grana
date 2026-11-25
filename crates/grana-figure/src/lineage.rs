@@ -54,7 +54,7 @@ fn row_height(tracks: usize) -> f32 {
 pub fn marks<A: Clone>(ui: &mut Ui<A>, size: [u32; 2], lineage: &Lineage<'_>) -> Vec<Mark> {
     assert_eq!(
         lineage.colors.len(),
-        lineage.set.len(),
+        lineage.set.layout().len(),
         "every track carries one colour"
     );
     assert_eq!(
@@ -146,8 +146,8 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
         0.5,
         palette.outline_variant,
     );
-    for (lane, index) in layout.order().iter().enumerate() {
-        let Some(track) = lineage.set.track(*index) else {
+    for (lane, id) in layout.order().iter().enumerate() {
+        let Some(track) = lineage.set.track(*id) else {
             continue;
         };
         if !dense {
@@ -156,18 +156,17 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
                     Vec2::new(MARGIN, top + lane as f32 * row),
                     Vec2::new(LABEL - 8.0, row),
                 ),
-                &format!("#{}", index + 1),
+                &format!("#{}", id.raw()),
                 label.aligned(Align::End),
                 Align::Center,
             );
         }
-        let color = Color::from_rgb_f32(lineage.colors[*index]);
+        let color = Color::from_rgb_f32(lineage.colors[lane]);
         let start = x(track.start());
         let end = x(track.end());
-        for link in lineage.set.parents(*index) {
-            let parent = link.parent() as usize;
-            let lane_of_parent = layout.lane(parent);
-            if let Some(parent) = lineage.set.track(parent) {
+        for link in lineage.set.parents(*id) {
+            let lane_of_parent = layout.lane(link.parent());
+            if let Some(parent) = lineage.set.track(link.parent()) {
                 draw_link(
                     painter,
                     UiVec2::new(x(parent.end()), y(lane_of_parent)),

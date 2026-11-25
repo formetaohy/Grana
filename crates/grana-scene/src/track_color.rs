@@ -1,5 +1,5 @@
 use grana_measure::{Aggregate, RelationField, TrackMeasurement, Unit};
-use grana_object::{ObjectId, RelationFrame, TrackSet};
+use grana_object::{ObjectId, RelationFrame, TrackId, TrackSet};
 
 use crate::object_set::ObjectSetId;
 use crate::relation::Relation;
@@ -41,7 +41,7 @@ impl TrackColor {
         self.relation().map(|(target, _)| target)
     }
 
-    pub fn value(self, track: usize, set: &TrackSet, relation: Option<&Relation>) -> f32 {
+    pub fn value(self, track: TrackId, set: &TrackSet, relation: Option<&Relation>) -> f32 {
         match self {
             Self::Measurement(measurement) => measurement.value(track, set),
             Self::Relation {

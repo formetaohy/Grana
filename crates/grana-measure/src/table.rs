@@ -3,7 +3,8 @@ use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
 
 use grana_object::{
-    CellSet, FilamentSet, IntensityTable, ObjectId, ObjectIds, SpotSet, SurfaceSet, TrackSet,
+    CellSet, FilamentSet, IntensityTable, ObjectId, ObjectIds, SpotSet, SurfaceSet, TrackId,
+    TrackSet,
 };
 
 use crate::child::Child;
@@ -262,18 +263,13 @@ impl Observation {
     fn new(
         time: Option<u32>,
         object: Option<ObjectId>,
-        track: Option<usize>,
+        track: Option<TrackId>,
         molecule: Option<u32>,
     ) -> Self {
-        let index = |value: Option<usize>| {
-            value.map_or(ABSENT, |index| {
-                u32::try_from(index).expect("a table row names an index a word addresses")
-            })
-        };
         Self {
             time: time.unwrap_or(ABSENT),
             object: object.map_or(0, ObjectId::raw),
-            track: index(track),
+            track: track.map_or(0, TrackId::raw),
             molecule: molecule.unwrap_or(ABSENT),
         }
     }
@@ -286,8 +282,8 @@ impl Observation {
         ObjectId::from_raw(self.object)
     }
 
-    pub fn track(self) -> Option<usize> {
-        (self.track != ABSENT).then_some(self.track as usize)
+    pub fn track(self) -> Option<TrackId> {
+        TrackId::from_raw(self.track)
     }
 
     pub fn molecule(self) -> Option<u32> {
@@ -410,7 +406,7 @@ impl ObjectCell {
             Self::Object => id.raw() as f32,
             Self::Track => tracks
                 .and_then(|set| set.track_at(frame.time(), id))
-                .map_or(0.0, |track| (track + 1) as f32),
+                .map_or(0.0, |track| track.raw() as f32),
             Self::Measure(measurement) => measurement.value(frame.objects(), object),
             Self::Relation { index, field } => field.value(frame.relations()[*index], id),
             Self::Child { .. } => {
@@ -482,7 +478,7 @@ enum Plan {
 enum Lookup {
     Frames { bases: Vec<u32>, counts: Vec<u32> },
     Times(Vec<u32>),
-    Tracks(Vec<u32>),
+    Tracks(HashMap<TrackId, u32>),
     Molecules(HashMap<u32, u32>),
 }
 
@@ -527,15 +523,11 @@ impl Lookup {
                 Self::Times(rows)
             }
             Group::Track => {
-                let mut rows = Vec::<u32>::new();
+                let mut rows = HashMap::with_capacity(observations.len());
                 for (row, observation) in observations.iter().enumerate() {
-                    let Some(track) = observation.track() else {
-                        continue;
-                    };
-                    if rows.len() <= track {
-                        rows.resize(track + 1, ABSENT);
+                    if let Some(track) = observation.track() {
+                        rows.insert(track, row as u32);
                     }
-                    rows[track] = row as u32;
                 }
                 Self::Tracks(rows)
             }
@@ -1154,7 +1146,7 @@ impl Table {
             .map(|observation| {
                 observation
                     .track()
-                    .filter(|track| *track < tracks.len())
+                    .filter(|track| tracks.track(*track).is_some())
                     .map_or(Measured::ABSENT, |track| read(field.value(track, tracks)))
             })
             .collect()
@@ -1392,7 +1384,7 @@ impl Table {
     fn bucket(&self, observation: Observation) -> Option<u32> {
         match self.group {
             Group::Object => observation.time(),
-            Group::Track => observation.track().map(|track| track as u32),
+            Group::Track => observation.track().map(TrackId::raw),
             Group::Timepoint => observation.time(),
             Group::Molecule => Some(0),
         }
@@ -1426,7 +1418,7 @@ impl Table {
     fn key(&self, observation: Observation) -> Option<u32> {
         match self.group {
             Group::Object => None,
-            Group::Track => observation.track().map(|track| track as u32),
+            Group::Track => observation.track().map(TrackId::raw),
             Group::Timepoint => observation.time(),
             Group::Molecule => observation.molecule(),
         }
@@ -1526,12 +1518,11 @@ impl Table {
         base.checked_add(u32::try_from(object).ok()?)
     }
 
-    pub fn row_of_track(&self, track: usize) -> Option<u32> {
+    pub fn row_of_track(&self, track: TrackId) -> Option<u32> {
         let Lookup::Tracks(rows) = &self.lookup else {
             return None;
         };
-        let row = *rows.get(track)?;
-        (row != ABSENT).then_some(row)
+        rows.get(&track).copied()
     }
 
     pub fn row_of_molecule(&self, molecule: u32) -> Option<u32> {
@@ -1545,7 +1536,7 @@ impl Table {
         &self,
         time: Option<u32>,
         object: Option<usize>,
-        track: Option<usize>,
+        track: Option<TrackId>,
         molecule: Option<u32>,
     ) -> Option<u32> {
         match self.group {
@@ -1579,7 +1570,7 @@ impl Table {
         let tracks = match self.group() {
             Group::Track if !explicit => gated
                 .iter()
-                .filter_map(|row| self.observation(row).track().map(|track| track as u32))
+                .filter_map(|row| self.observation(row).track())
                 .collect::<BTreeSet<_>>(),
             _ => BTreeSet::new(),
         };
@@ -1597,7 +1588,7 @@ impl Table {
                     Group::Track => basis
                         .observation(row)
                         .track()
-                        .is_some_and(|track| tracks.contains(&(track as u32))),
+                        .is_some_and(|track| tracks.contains(&track)),
                     Group::Molecule => gated.contains(row),
                 }
             };
@@ -1959,10 +1950,12 @@ fn track_table(
         index: *index,
         field: *field,
     }));
-    let rows = tracks.as_deref().map_or(0, TrackSet::len);
-    let observations = (0..rows)
-        .map(|track| Observation::new(None, None, Some(track), None))
-        .collect::<Vec<_>>();
+    let observations = tracks.as_deref().map_or_else(Vec::new, |set| {
+        set.tracks()
+            .iter()
+            .map(|track| Observation::new(None, None, Some(track.id()), None))
+            .collect()
+    });
     let sources = vec![None; plan.len()];
     Draft {
         columns,

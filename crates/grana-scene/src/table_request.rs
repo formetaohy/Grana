@@ -358,7 +358,10 @@ fn aggregate_scores(
                     else {
                         continue;
                     };
-                    collected[track].push(classifier.score(frame.objects(), object));
+                    let Some(row) = table.row_of_track(track) else {
+                        continue;
+                    };
+                    collected[row as usize].push(classifier.score(frame.objects(), object));
                 }
             });
             collected
@@ -413,8 +416,11 @@ fn aggregate_coloc(
                     else {
                         continue;
                     };
+                    let Some(row) = table.row_of_track(track) else {
+                        continue;
+                    };
                     if let Some(value) = coloc.metric(frame.time(), object, metric) {
-                        collected[track].push(value as f32);
+                        collected[row as usize].push(value as f32);
                     }
                 }
             });

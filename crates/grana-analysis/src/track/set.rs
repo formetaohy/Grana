@@ -1,4 +1,4 @@
-use grana_object::{Link, Track, TrackLink, TrackNode, TrackSet};
+use grana_object::{Link, Track, TrackId, TrackLink, TrackNode, TrackSet};
 
 use super::chain::Chains;
 use super::detection::Detections;
@@ -19,8 +19,13 @@ pub(super) fn build(chains: &Chains, detections: &Detections, frame_interval: f3
     }
     let tracks = order
         .iter()
-        .map(|&index| {
+        .enumerate()
+        .map(|(position, &index)| {
+            let id = TrackId::FIRST
+                .after(position)
+                .expect("a tracked chain lies inside the id space");
             Track::new(
+                id,
                 chains
                     .points(index)
                     .iter()
@@ -52,7 +57,15 @@ pub(super) fn build(chains: &Chains, detections: &Detections, frame_interval: f3
             } else {
                 Link::Gap
             };
-            TrackLink::new(slot[parent] as u32, slot[child] as u32, kind)
+            TrackLink::new(
+                TrackId::FIRST
+                    .after(slot[parent])
+                    .expect("a tracked chain lies inside the id space"),
+                TrackId::FIRST
+                    .after(slot[child])
+                    .expect("a tracked chain lies inside the id space"),
+                kind,
+            )
         })
         .collect::<Vec<_>>();
     TrackSet::try_with_links(frame_interval, tracks, links)

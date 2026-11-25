@@ -1,4 +1,4 @@
-use grana_object::{IntensityTable, SampleStatistics, SurfaceStatistics, TrackSet};
+use grana_object::{IntensityTable, SampleStatistics, SurfaceStatistics, TrackId, TrackSet};
 
 use crate::column::{Column, Unit, area_key, length_key, speed_key, volume_key};
 use crate::table::Objects;
@@ -496,12 +496,12 @@ impl TrackMeasurement {
         }
     }
 
-    pub fn value(self, track: usize, set: &TrackSet) -> f32 {
+    pub fn value(self, track: TrackId, set: &TrackSet) -> f32 {
         let entry = set.track(track).expect("the track exists");
         let statistics = set.statistics(track).expect("the track has statistics");
         match self {
-            Self::Track => (track + 1) as f32,
-            Self::Parent => set.parent(track).map_or(0.0, |parent| (parent + 1) as f32),
+            Self::Track => track.raw() as f32,
+            Self::Parent => set.parent(track).map_or(0.0, |parent| parent.raw() as f32),
             Self::Daughters => set.children(track).count() as f32,
             Self::First => (entry.start() + 1) as f32,
             Self::Last => (entry.end() + 1) as f32,

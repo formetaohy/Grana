@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use crate::NodeRef;
-use crate::identity::ObjectId;
+use crate::identity::{ObjectId, TrackId, TrackIdSource, TrackIds};
 use crate::{Link, Track, TrackLink, TrackNode, TrackSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +66,7 @@ impl Adjacency {
 pub(crate) struct Lineage {
     detections: Vec<Detection>,
     edges: Vec<Edge>,
+    origins: HashMap<(u32, ObjectId), TrackId>,
 }
 
 impl Lineage {
@@ -72,9 +75,13 @@ impl Lineage {
         let mut edges = Vec::with_capacity(set.node_count());
         let mut first = Vec::with_capacity(set.len());
         let mut last = Vec::with_capacity(set.len());
+        let mut origins = HashMap::with_capacity(set.len());
         for track in set.tracks() {
             let start = detections.len();
             for (index, node) in track.nodes().iter().enumerate() {
+                if index == 0 {
+                    origins.insert((node.time(), node.id()), track.id());
+                }
                 detections.push(Detection {
                     time: node.time(),
                     id: node.id(),
@@ -99,12 +106,19 @@ impl Lineage {
         }
         for link in set.links() {
             edges.push(Edge {
-                source: remap[last[link.parent() as usize]],
-                target: remap[first[link.child() as usize]],
+                source: remap[last[set
+                    .position(link.parent())
+                    .expect("the parent track exists")]],
+                target: remap[first[set.position(link.child()).expect("the child track exists")]],
                 kind: Kind::of(link.kind()),
             });
         }
-        Self { detections, edges }.normalized()
+        Self {
+            detections,
+            edges,
+            origins,
+        }
+        .normalized()
     }
 
     pub(crate) fn from_edges(
@@ -152,6 +166,7 @@ impl Lineage {
         let mut lineage = Self {
             detections,
             edges: held,
+            origins: HashMap::new(),
         };
         lineage.normalize();
         let adjacency = lineage.adjacency();
@@ -366,7 +381,11 @@ impl Lineage {
         true
     }
 
-    pub(crate) fn into_set(mut self, frame_interval: f32) -> Result<TrackSet, String> {
+    pub(crate) fn into_set(
+        mut self,
+        frame_interval: f32,
+        source: &TrackIdSource,
+    ) -> Result<TrackSet, String> {
         self.normalize();
         self.check()?;
         let adjacency = self.adjacency();
@@ -392,8 +411,30 @@ impl Lineage {
         if chains.iter().map(Vec::len).sum::<usize>() != count {
             return Err("the detections of a lineage form a cycle".to_string());
         }
+        let mut chosen = chains
+            .iter()
+            .map(|chain| {
+                let first = self.detections[chain[0]];
+                self.origins.get(&(first.time, first.id)).copied()
+            })
+            .collect::<Vec<_>>();
+        source.observe(&TrackIds::new(
+            chosen.iter().flatten().copied().collect::<Vec<_>>(),
+        ));
+        let missing = chosen.iter().filter(|id| id.is_none()).count();
+        let allocated = source.allocate(missing);
+        let mut allocated = allocated.as_slice().iter();
+        for id in &mut chosen {
+            if id.is_none() {
+                *id = allocated.next().copied();
+            }
+        }
+        let ids = chosen
+            .into_iter()
+            .map(|id| id.expect("a lineage chain starts a track"))
+            .collect::<Vec<_>>();
         let mut tracks = Vec::with_capacity(chains.len());
-        for chain in &chains {
+        for (chain, id) in chains.iter().zip(&ids) {
             let nodes = chain
                 .iter()
                 .map(|slot| {
@@ -401,7 +442,7 @@ impl Lineage {
                     TrackNode::new(detection.time, detection.id, detection.centroid)
                 })
                 .collect::<Vec<_>>();
-            tracks.push(Track::new(nodes));
+            tracks.push(Track::new(*id, nodes));
         }
         let mut links = Vec::new();
         for edge in &self.edges {
@@ -409,12 +450,12 @@ impl Lineage {
                 continue;
             };
             links.push(TrackLink::new(
-                chain_of[edge.source] as u32,
-                chain_of[edge.target] as u32,
+                ids[chain_of[edge.source]],
+                ids[chain_of[edge.target]],
                 kind,
             ));
         }
-        TrackSet::try_with_links(frame_interval, tracks, links)
+        TrackSet::assembled(frame_interval, tracks, links, source.clone())
     }
 
     fn continues(&self, node: usize) -> Option<usize> {

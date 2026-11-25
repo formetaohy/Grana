@@ -15,7 +15,7 @@ pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_AR
 
 pub use buffer::storage as storage_buffer;
 pub use command::{IndirectDraw, InstanceCommands};
-pub use device::{Gpu, HEADLESS_FORMAT, Headless, Lost};
+pub use device::{Gpu, Graphics, HEADLESS_FORMAT, Headless, Lost};
 pub use memory::{Memory, Pool};
 pub use pipeline::Pipelines;
 pub use readback::Readback;

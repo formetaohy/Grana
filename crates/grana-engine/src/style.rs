@@ -4,6 +4,7 @@ use grana_render::{Digest, Style};
 use grana_scene::{ObjectSet, ObjectSetId, Scene, Selection};
 
 use crate::splat::selection_digest;
+use crate::view::TRACK_PART;
 
 pub(crate) struct StyleCache {
     entries: Vec<Entry>,
@@ -136,6 +137,13 @@ fn digest(scene: &Scene, set: &ObjectSet, part: u32, count: usize) -> u64 {
         set.tracks()
             .map_or(u64::MAX, |tracks| tracks.revision().raw()),
     );
+    if part == TRACK_PART
+        && let Some(tracks) = set.tracks()
+    {
+        for track in tracks.set().tracks() {
+            digest.mix(u64::from(track.id().raw()));
+        }
+    }
     digest.mix(scene.table_revision(set.id()).unwrap_or(u64::MAX));
     digest.mix(selection_digest(scene, set));
     digest.mix(u64::from(set.opacity().to_bits()));

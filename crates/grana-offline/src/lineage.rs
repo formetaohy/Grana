@@ -49,8 +49,11 @@ pub(crate) fn write(
     }
     let page_format = grana_page::Format::of(path)
         .ok_or_else(|| grana_page::Format::error(path, "a lineage page"))?;
-    let colors = (0..tracks.len())
-        .map(|track| object.track_color(track))
+    let colors = tracks
+        .layout()
+        .order()
+        .iter()
+        .map(|track| object.track_color(*track))
         .collect::<Vec<_>>();
     let mut ui: Ui<()> = Ui::new(device, queue, format, pipelines);
     ui.resize(size);

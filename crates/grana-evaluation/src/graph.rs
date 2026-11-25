@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use grana_object::{Link, TrackSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,9 +176,15 @@ impl Graph {
                 ));
             }
         }
+        let slots = set
+            .tracks()
+            .iter()
+            .enumerate()
+            .map(|(index, track)| (track.id(), index))
+            .collect::<HashMap<_, _>>();
         for link in set.links() {
-            let parent = last[link.parent() as usize];
-            let child = first[link.child() as usize];
+            let parent = last[slots[&link.parent()]];
+            let child = first[slots[&link.child()]];
             let semantic = match link.kind() {
                 Link::Gap | Link::Division | Link::Merge => Semantic::Parent,
             };

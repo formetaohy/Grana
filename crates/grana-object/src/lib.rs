@@ -23,7 +23,7 @@ pub use algorithm::Algorithm;
 pub use anchor::{ObjectAnchor, assign, match_anchor};
 pub use cell::CellSet;
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
-pub use identity::{ObjectId, ObjectIdSource, ObjectIds};
+pub use identity::{ObjectId, ObjectIdSource, ObjectIds, TrackId, TrackIdSource, TrackIds};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
 pub use layout::TrackLayout;

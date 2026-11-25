@@ -17,7 +17,7 @@ struct Walk {
     rate: vec3<f32>,
     base: vec3<f32>,
     far: vec3<f32>,
-    texel: TexelMap,
+    tap: BrickTap,
     voxels: f32,
 }
 
@@ -89,9 +89,9 @@ fn walk_open(direction: vec3<f32>, begin: f32, finish: f32, sight: Sight) -> Wal
     let base = brick_origin(sight.cell);
     let far = min(base + vec3<f32>(BRICK_SIDE), g.dims);
     let exit = box_exit(base, far, sight.voxel, rate);
-    var texel = TexelMap(vec3<f32>(0.0), vec3<f32>(1.0));
+    var tap = brick_tap(NO_SLOT, base);
     if (sight.usable) {
-        texel = texel_map(sight.slot - 1u, base);
+        tap = brick_tap(sight.slot - 1u, base);
     }
     return Walk(
         sight,
@@ -101,7 +101,7 @@ fn walk_open(direction: vec3<f32>, begin: f32, finish: f32, sight: Sight) -> Wal
         rate,
         base,
         far,
-        texel,
+        tap,
         length(rate),
     );
 }
@@ -118,6 +118,6 @@ fn walk_cell_span(walk: Walk, coord: vec3<u32>, voxel: vec3<f32>) -> f32 {
     return cell_span(walk.base, coord, walk.far, voxel, walk.rate);
 }
 
-fn walk_texel(walk: Walk, voxel: vec3<f32>) -> vec3<f32> {
-    return texel_at(walk.texel, voxel);
+fn walk_local(walk: Walk, voxel: vec3<f32>) -> vec3<f32> {
+    return tap_local(walk.tap, voxel);
 }

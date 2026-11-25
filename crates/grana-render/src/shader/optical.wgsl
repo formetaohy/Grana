@@ -42,17 +42,19 @@ fn channel_extinction(channel: u32, value: f32) -> f32 {
 }
 
 fn optical_sample(
-    texel: vec3<f32>,
+    tap: BrickTap,
+    local: vec3<f32>,
     peaks: ptr<function, array<f32, CHANNEL_LIMIT>>,
 ) -> Optical {
     var tau = 0.0;
     var emission = vec3<f32>(0.0);
     var grown = false;
+    let texel = tap_atlas_texel(tap);
     for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
         if (!pack_active(pack)) {
             continue;
         }
-        let values = textureSampleLevel(atlases[pack], atlas_sampler, texel, 0.0);
+        let values = tap_fetch(pack, texel, local);
         for (var component = 0u; component < PACK; component += 1u) {
             let channel = pack * PACK + component;
             if (channel_peak(channel)) {
