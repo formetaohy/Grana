@@ -1,12 +1,9 @@
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::budget::{Meter, Pool};
 
-const SHARDS: usize = 16;
 const NONE: u32 = u32::MAX;
 
 struct Node<K, V> {
@@ -17,76 +14,45 @@ struct Node<K, V> {
     older: u32,
 }
 
-struct Shard<K, V> {
+struct Rows<K, V> {
     slots: HashMap<K, u32>,
     nodes: Vec<Node<K, V>>,
     free: Vec<u32>,
+    pending: Vec<K>,
     newest: u32,
     oldest: u32,
     bytes: u64,
 }
 
-impl<K: Clone + Eq + Hash, V> Shard<K, V> {
+impl<K: Clone + Eq + std::hash::Hash, V> Rows<K, V> {
     fn new() -> Self {
         Self {
             slots: HashMap::new(),
             nodes: Vec::new(),
             free: Vec::new(),
+            pending: Vec::new(),
             newest: NONE,
             oldest: NONE,
             bytes: 0,
         }
     }
 
-    fn fetch(&mut self, key: K) -> Option<Arc<V>> {
-        let slot = *self.slots.get(&key)?;
+    fn held(&mut self, key: &K) -> Option<Arc<V>> {
+        let slot = *self.slots.get(key)?;
         self.promote(slot);
         Some(Arc::clone(&self.nodes[slot as usize].value))
     }
 
-    fn insert(&mut self, key: K, value: Arc<V>, bytes: u64, budget: u64) -> u64 {
-        if let Some(slot) = self.slots.get(&key).copied() {
-            let node = &mut self.nodes[slot as usize];
-            self.bytes = self.bytes - node.bytes + bytes;
-            node.value = value;
-            node.bytes = bytes;
-            self.promote(slot);
-            return self.evict(budget);
-        }
-        let slot = match self.free.pop() {
-            Some(slot) => {
-                self.nodes[slot as usize] = Node {
-                    key,
-                    value,
-                    bytes,
-                    newer: NONE,
-                    older: self.newest,
-                };
-                slot
-            }
-            None => {
-                let slot = u32::try_from(self.nodes.len())
-                    .expect("a cache shard holds fewer than 4G rows");
-                self.nodes.push(Node {
-                    key,
-                    value,
-                    bytes,
-                    newer: NONE,
-                    older: self.newest,
-                });
-                slot
-            }
-        };
-        if self.newest == NONE {
-            self.oldest = slot;
-        } else {
-            self.nodes[self.newest as usize].newer = slot;
-        }
-        self.newest = slot;
-        self.slots
-            .insert(self.nodes[slot as usize].key.clone(), slot);
-        self.bytes += bytes;
-        self.evict(budget)
+    fn waiting(&self, key: &K) -> bool {
+        self.pending.iter().any(|held| held == key)
+    }
+
+    fn claim(&mut self, key: K) {
+        self.pending.push(key);
+    }
+
+    fn release(&mut self, key: &K) {
+        self.pending.retain(|held| held != key);
     }
 
     fn promote(&mut self, slot: u32) {
@@ -110,6 +76,43 @@ impl<K: Clone + Eq + Hash, V> Shard<K, V> {
             self.nodes[previous as usize].newer = slot;
         }
         self.newest = slot;
+    }
+
+    fn insert(&mut self, key: K, value: Arc<V>, bytes: u64, budget: u64) -> u64 {
+        let slot = match self.free.pop() {
+            Some(slot) => {
+                self.nodes[slot as usize] = Node {
+                    key,
+                    value,
+                    bytes,
+                    newer: NONE,
+                    older: self.newest,
+                };
+                slot
+            }
+            None => {
+                let slot =
+                    u32::try_from(self.nodes.len()).expect("a cache holds fewer than 4G values");
+                self.nodes.push(Node {
+                    key,
+                    value,
+                    bytes,
+                    newer: NONE,
+                    older: self.newest,
+                });
+                slot
+            }
+        };
+        if self.newest == NONE {
+            self.oldest = slot;
+        } else {
+            self.nodes[self.newest as usize].newer = slot;
+        }
+        self.newest = slot;
+        self.slots
+            .insert(self.nodes[slot as usize].key.clone(), slot);
+        self.bytes += bytes;
+        self.evict(budget)
     }
 
     fn evict(&mut self, budget: u64) -> u64 {
@@ -140,16 +143,18 @@ impl<K: Clone + Eq + Hash, V> Shard<K, V> {
 }
 
 pub struct LruCache<K, V> {
-    shards: Vec<Mutex<Shard<K, V>>>,
+    rows: Mutex<Box<Rows<K, V>>>,
+    ready: Condvar,
     size: fn(&V) -> u64,
     pool: Pool,
     scopes: Option<&'static AtomicUsize>,
 }
 
-impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
+impl<K: Clone + Eq + std::hash::Hash, V> LruCache<K, V> {
     pub fn pooled(pool: Pool, size: fn(&V) -> u64) -> Self {
         Self {
-            shards: (0..SHARDS).map(|_| Mutex::new(Shard::new())).collect(),
+            rows: Mutex::new(Box::new(Rows::new())),
+            ready: Condvar::new(),
             size,
             pool,
             scopes: None,
@@ -182,12 +187,8 @@ impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
         }
     }
 
-    pub fn shard_bytes(&self) -> u64 {
-        (self.share() / self.shards.len() as u64).max(1)
-    }
-
-    pub fn fetch(&self, key: K) -> Option<Arc<V>> {
-        let held = self.lock(&key).fetch(key);
+    pub fn fetch(&self, key: &K) -> Option<Arc<V>> {
+        let held = self.lock().held(key);
         match &held {
             Some(_) => self.meter().hit(),
             None => self.meter().miss(),
@@ -195,19 +196,59 @@ impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
         held
     }
 
-    pub fn insert(&self, key: K, value: Arc<V>) {
+    pub fn load<E>(&self, key: K, load: impl FnOnce() -> Result<V, E>) -> Result<Arc<V>, E> {
+        {
+            let mut rows = self.lock();
+            loop {
+                if let Some(held) = rows.held(&key) {
+                    drop(rows);
+                    self.meter().hit();
+                    return Ok(held);
+                }
+                if rows.waiting(&key) {
+                    rows = self.wait(rows);
+                    continue;
+                }
+                rows.claim(key.clone());
+                break;
+            }
+        }
+        self.meter().miss();
+        let value = match load() {
+            Ok(value) => Arc::new(value),
+            Err(detail) => {
+                self.abandon(&key);
+                return Err(detail);
+            }
+        };
+        let budget = self.share();
         let bytes = (self.size)(&value);
-        let budget = self.shard_bytes();
-        let evicted = self.lock(&key).insert(key, value, bytes, budget);
+        let evicted = {
+            let mut rows = self.lock();
+            rows.release(&key);
+            rows.insert(key, Arc::clone(&value), bytes, budget)
+        };
         self.meter().evict(evicted);
+        self.wake();
+        Ok(value)
     }
 
-    fn lock(&self, key: &K) -> MutexGuard<'_, Shard<K, V>> {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let index = (hasher.finish() % self.shards.len() as u64) as usize;
-        self.shards[index]
-            .lock()
+    fn abandon(&self, key: &K) {
+        self.lock().release(key);
+        self.wake();
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Box<Rows<K, V>>> {
+        self.rows.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn wait<'a>(&self, rows: MutexGuard<'a, Box<Rows<K, V>>>) -> MutexGuard<'a, Box<Rows<K, V>>> {
+        self.ready
+            .wait(rows)
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn wake(&self) {
+        self.ready.notify_all();
     }
 }

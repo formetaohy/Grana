@@ -7,57 +7,35 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
-use grana_store::Pool;
-use grana_volume::{Extent, VoxelData, VoxelFormat};
+use grana_volume::{VoxelData, VoxelFormat};
 
-const MAGIC: [u8; 8] = *b"GRANATIL";
-const VERSION: u32 = 5;
+use crate::slice::Key;
+
+const MAGIC: [u8; 8] = *b"GRANAMIP";
+const VERSION: u32 = 1;
 const HEADER: usize = 80;
 const TRAILER: usize = 4;
-const SUFFIX: &str = "tile";
+const SUFFIX: &str = "slice";
 const STAGING: &str = "staging";
 const DISK_BUDGET: u64 = 4 << 30;
 const DISK_RETAIN: u64 = 3 << 30;
 const OVERRIDE: &str = "GRANA_PYRAMID_CACHE";
-const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 const CRC_SEED: u32 = 0xffff_ffff;
 const CRC_POLYNOMIAL: u32 = 0xedb8_8320;
 
 static NONCE: AtomicU64 = AtomicU64::new(0);
 
-type Accounting = Arc<Mutex<Option<u64>>>;
-
 static ACCOUNTING: OnceLock<Mutex<HashMap<PathBuf, Accounting>>> = OnceLock::new();
 
 const CRC_TABLE: [u32; 256] = crc_table();
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Key {
-    pub(crate) identity: u64,
-    pub(crate) level: u32,
-    pub(crate) time: u32,
-    pub(crate) channel: u32,
-    pub(crate) coord: [u32; 3],
-}
+type Accounting = Arc<Mutex<Option<u64>>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Shape {
-    pub(crate) extent: Extent,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     pub(crate) format: VoxelFormat,
-}
-
-pub(crate) type Cache = grana_store::LruCache<Key, VoxelData>;
-
-pub(crate) fn bricks() -> &'static Cache {
-    static BRICKS: OnceLock<Cache> = OnceLock::new();
-    BRICKS.get_or_init(|| Cache::pooled(Pool::Brick, size))
-}
-
-pub(crate) fn anonymous() -> u64 {
-    static ORDINAL: AtomicU64 = AtomicU64::new(0);
-    let ordinal = ORDINAL.fetch_add(1, Ordering::Relaxed);
-    mix(mix(FNV_BASE, b"grana-anonymous"), &ordinal.to_le_bytes())
 }
 
 pub(crate) struct Store {
@@ -88,23 +66,20 @@ impl Store {
             return None;
         }
         let head = &bytes[..HEADER];
-        let extent = shape.extent;
-        let length = read_u64(head, 72);
+        let length = read_u64(head, 56);
         let matches = head[0..8] == MAGIC
             && read_u32(head, 8) == VERSION
-            && read_u64(head, 12) == key.identity
+            && read_u64(head, 12) == key.namespace
             && read_u32(head, 20) == key.level
             && read_u32(head, 24) == key.time
             && read_u32(head, 28) == key.channel
-            && read_u32(head, 32) == key.coord[0]
-            && read_u32(head, 36) == key.coord[1]
-            && read_u32(head, 40) == key.coord[2]
-            && read_u32(head, 44) == extent.x()
-            && read_u32(head, 48) == extent.y()
-            && read_u32(head, 52) == extent.z()
-            && head[56] == shape.format.code()
-            && read_u64(head, 64) == stamp
-            && length == extent.voxel_count() * shape.format.bytes() as u64;
+            && read_u32(head, 32) == key.z
+            && read_u32(head, 36) == shape.width
+            && read_u32(head, 40) == shape.height
+            && head[44] == shape.format.code()
+            && read_u64(head, 48) == stamp
+            && length
+                == u64::from(shape.width) * u64::from(shape.height) * shape.format.bytes() as u64;
         if !matches {
             return None;
         }
@@ -117,7 +92,7 @@ impl Store {
             return None;
         }
         self.touch(&path);
-        Some(decode(shape.format, payload))
+        Some(VoxelData::from_le_bytes(shape.format, payload))
     }
 
     pub(crate) fn save(&self, key: Key, shape: Shape, stamp: u64, data: &VoxelData) {
@@ -130,23 +105,20 @@ impl Store {
         {
             return;
         }
-        let payload = encode(data);
+        let payload = data.to_le_bytes();
         let mut head = [0u8; HEADER];
         head[0..8].copy_from_slice(&MAGIC);
         write_u32(&mut head, 8, VERSION);
-        write_u64(&mut head, 12, key.identity);
+        write_u64(&mut head, 12, key.namespace);
         write_u32(&mut head, 20, key.level);
         write_u32(&mut head, 24, key.time);
         write_u32(&mut head, 28, key.channel);
-        write_u32(&mut head, 32, key.coord[0]);
-        write_u32(&mut head, 36, key.coord[1]);
-        write_u32(&mut head, 40, key.coord[2]);
-        write_u32(&mut head, 44, shape.extent.x());
-        write_u32(&mut head, 48, shape.extent.y());
-        write_u32(&mut head, 52, shape.extent.z());
-        head[56] = shape.format.code();
-        write_u64(&mut head, 64, stamp);
-        write_u64(&mut head, 72, payload.len() as u64);
+        write_u32(&mut head, 32, key.z);
+        write_u32(&mut head, 36, shape.width);
+        write_u32(&mut head, 40, shape.height);
+        head[44] = shape.format.code();
+        write_u64(&mut head, 48, stamp);
+        write_u64(&mut head, 56, payload.len() as u64);
         let stored = crc(update(update(CRC_SEED, &head), &payload));
         let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
         let staging = self
@@ -171,10 +143,10 @@ impl Store {
 
     fn entry(&self, key: Key) -> PathBuf {
         self.root
-            .join(format!("{:016x}-{:02x}", key.identity, key.level))
+            .join(format!("{:016x}-{:02x}", key.namespace, key.level))
             .join(format!(
-                "{:08x}-{:04x}-{:08x}{:08x}{:08x}.{SUFFIX}",
-                key.time, key.channel, key.coord[0], key.coord[1], key.coord[2]
+                "{:08x}-{:04x}-{:08x}.{SUFFIX}",
+                key.time, key.channel, key.z
             ))
     }
 
@@ -268,7 +240,7 @@ struct Recency {
     stamp: u128,
 }
 
-pub fn default_root() -> Option<PathBuf> {
+pub(crate) fn default_root() -> Option<PathBuf> {
     if let Some(value) = std::env::var_os(OVERRIDE) {
         let root = PathBuf::from(value);
         return (!root.as_os_str().is_empty()).then_some(root);
@@ -284,53 +256,14 @@ fn accounting(root: &Path) -> Accounting {
     Arc::clone(accounts.entry(root.to_path_buf()).or_default())
 }
 
-pub(crate) fn identity(
-    source: &crate::Source,
-    geometry: &[u8],
-    dataset: Option<u64>,
-) -> Option<u64> {
-    let mut hash = mix(FNV_BASE, geometry);
-    match source {
-        crate::Source::Memory(_) => None,
-        crate::Source::File {
-            path,
-            series,
-            group,
-        } => {
-            let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-            hash = mix(hash, resolved.to_string_lossy().as_bytes());
-            hash = mix(hash, &(*series as u64).to_le_bytes());
-            if let Some(group) = group {
-                hash = mix(hash, group.as_bytes());
-            }
-            match dataset {
-                Some(digest) => Some(mix(hash, &digest.to_le_bytes())),
-                None => {
-                    let metadata = std::fs::metadata(path).ok()?;
-                    if metadata.is_dir() {
-                        return None;
-                    }
-                    Some(stamp(hash, &metadata))
-                }
-            }
-        }
-        crate::Source::Remote { url, series, group } => {
-            let mut hash = mix(hash, url.as_bytes());
-            hash = mix(hash, &(*series as u64).to_le_bytes());
-            if let Some(group) = group {
-                hash = mix(hash, group.as_bytes());
-            }
-            Some(mix(hash, &dataset?.to_le_bytes()))
-        }
+pub(crate) fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
     }
+    hash
 }
 
-fn stamp(hash: u64, metadata: &std::fs::Metadata) -> u64 {
-    let hash = mix(hash, &metadata.len().to_le_bytes());
-    mix(hash, &modified(metadata).to_le_bytes())
-}
-
-fn modified(metadata: &std::fs::Metadata) -> u128 {
+pub(crate) fn modified(metadata: &std::fs::Metadata) -> u128 {
     metadata
         .modified()
         .ok()
@@ -338,7 +271,7 @@ fn modified(metadata: &std::fs::Metadata) -> u128 {
         .map_or(0, |duration| duration.as_nanos())
 }
 
-pub fn clear(root: &Path) -> std::io::Result<u64> {
+pub(crate) fn clear(root: &Path) -> std::io::Result<u64> {
     let mut freed = 0;
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
@@ -402,25 +335,6 @@ fn reset(root: &Path) {
     if let Some(account) = accounts.get(root) {
         *account.lock().unwrap_or_else(|error| error.into_inner()) = Some(0);
     }
-}
-
-fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
-fn size(data: &VoxelData) -> u64 {
-    data.bytes()
-}
-
-fn encode(data: &VoxelData) -> Vec<u8> {
-    data.to_le_bytes()
-}
-
-fn decode(format: VoxelFormat, bytes: &[u8]) -> VoxelData {
-    VoxelData::from_le_bytes(format, bytes)
 }
 
 fn read_u32(bytes: &[u8], at: usize) -> u32 {

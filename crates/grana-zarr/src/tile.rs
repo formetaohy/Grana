@@ -12,36 +12,17 @@ use crate::axes::Layout;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Decode {
-    hits: u64,
-    misses: u64,
     decoded: u64,
     requested: u64,
 }
 
 impl Decode {
-    pub fn hits(self) -> u64 {
-        self.hits
-    }
-
-    pub fn misses(self) -> u64 {
-        self.misses
-    }
-
     pub fn decoded_bytes(self) -> u64 {
         self.decoded
     }
 
     pub fn requested_bytes(self) -> u64 {
         self.requested
-    }
-
-    pub fn hit_rate(self) -> f32 {
-        let total = self.hits + self.misses;
-        if total == 0 {
-            0.0
-        } else {
-            self.hits as f32 / total as f32
-        }
     }
 
     pub fn amplification(self) -> f32 {
@@ -54,8 +35,6 @@ impl Decode {
 
     pub(crate) fn merged(self, other: Self) -> Self {
         Self {
-            hits: self.hits + other.hits,
-            misses: self.misses + other.misses,
             decoded: self.decoded + other.decoded,
             requested: self.requested + other.requested,
         }
@@ -85,8 +64,6 @@ static LIVE: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct Tiles {
     blocks: LruCache<Key, Block>,
-    hits: AtomicU64,
-    misses: AtomicU64,
     decoded: AtomicU64,
     requested: AtomicU64,
 }
@@ -111,8 +88,6 @@ impl Tiles {
         LIVE.fetch_add(1, Ordering::Relaxed);
         Self {
             blocks: LruCache::scoped(Pool::Decode, &LIVE, |block: &Block| block.data.bytes()),
-            hits: AtomicU64::new(0),
-            misses: AtomicU64::new(0),
             decoded: AtomicU64::new(0),
             requested: AtomicU64::new(0),
         }
@@ -120,8 +95,6 @@ impl Tiles {
 
     pub(crate) fn stats(&self) -> Decode {
         Decode {
-            hits: self.hits.load(Ordering::Relaxed),
-            misses: self.misses.load(Ordering::Relaxed),
             decoded: self.decoded.load(Ordering::Relaxed),
             requested: self.requested.load(Ordering::Relaxed),
         }
@@ -145,7 +118,7 @@ impl Tiles {
         let mut output = VoxelData::filled(unit.no_data, voxels as usize);
         let cache = &self.blocks;
         let shape = unit.shape;
-        let cacheable = unit_voxels(shape) * format.bytes() as u64 <= cache.shard_bytes();
+        let cacheable = unit_voxels(shape) * format.bytes() as u64 <= cache.share();
         let first = [0, 1, 2].map(|axis| ranges[axis].start / shape[axis]);
         let last = [0, 1, 2].map(|axis| (ranges[axis].end - 1) / shape[axis]);
         for z in first[2]..=last[2] {
@@ -159,34 +132,36 @@ impl Tiles {
                         channel,
                         coord,
                     };
-                    let block = match cache.fetch(key) {
-                        Some(block) => {
-                            self.hits.fetch_add(1, Ordering::Relaxed);
-                            block
-                        }
-                        None => {
-                            self.misses.fetch_add(1, Ordering::Relaxed);
-                            let data = self.decode(unit, time, channel, origin)?;
-                            let layout = unit.layout;
-                            let block = Arc::new(Block {
-                                data,
-                                extent: Extent::new(
-                                    shape[0].min(layout.extent.x() - origin[0]),
-                                    shape[1].min(layout.extent.y() - origin[1]),
-                                    shape[2].min(layout.extent.z() - origin[2]),
-                                ),
-                            });
-                            if cacheable {
-                                cache.insert(key, Arc::clone(&block));
-                            }
-                            block
-                        }
+                    let block = if cacheable {
+                        cache.load(key, || self.block(unit, time, channel, origin))?
+                    } else {
+                        Arc::new(self.block(unit, time, channel, origin)?)
                     };
                     copy(&block, origin, &mut output, ranges);
                 }
             }
         }
         Ok(output)
+    }
+
+    fn block(
+        &self,
+        unit: &Unit<'_>,
+        time: u32,
+        channel: u32,
+        origin: [u32; 3],
+    ) -> Result<Block, Error> {
+        let data = self.decode(unit, time, channel, origin)?;
+        let layout = unit.layout;
+        let shape = unit.shape;
+        Ok(Block {
+            data,
+            extent: Extent::new(
+                shape[0].min(layout.extent.x() - origin[0]),
+                shape[1].min(layout.extent.y() - origin[1]),
+                shape[2].min(layout.extent.z() - origin[2]),
+            ),
+        })
     }
 
     fn decode(

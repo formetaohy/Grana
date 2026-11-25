@@ -1,4 +1,12 @@
-use grana_segment::{Segmenter, Settings, Volume};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use grana_gpu::{Consumer, Ledger};
+use grana_segment::{Plan, Segmenter, Settings, Volume};
+
+const SIDE: u32 = 256;
+
+const DEPTHS: [u32; 8] = [8, 7, 6, 5, 4, 3, 2, 1];
 
 fn planes(width: u32, height: u32, depth: u32) -> Vec<Vec<f32>> {
     let voxels = (width * height) as usize;
@@ -25,45 +33,96 @@ fn noise(seed: u32) -> impl FnMut() -> f32 {
     }
 }
 
-fn segmenter() -> Option<(Segmenter, std::path::PathBuf)> {
-    grana_gpu::Headless::shared().ok()?;
+struct Bench {
+    segmenter: Segmenter,
+    weights: PathBuf,
+    ledger: Arc<Ledger>,
+}
+
+fn bench() -> Option<Bench> {
+    let headless = grana_gpu::Headless::shared().ok()?;
+    let ledger = Ledger::of(headless.memory());
     let cancel = std::sync::atomic::AtomicBool::new(false);
-    let path = grana_weight::weights(&cancel, &mut |_, _| {}).ok()?;
-    let segmenter = Segmenter::open(&path, Settings::for_depth(8)).ok()?;
-    Some((segmenter, path))
+    let weights = grana_weight::weights(&cancel, &mut |_, _| {}).ok()?;
+    let segmenter = Segmenter::open(&weights, Settings::for_depth(DEPTHS[0])).ok()?;
+    Some(Bench {
+        segmenter,
+        weights,
+        ledger,
+    })
+}
+
+impl Bench {
+    fn afford(&self) -> Option<(u32, Plan, Plan)> {
+        let spare = self.ledger.spare();
+        for depth in DEPTHS {
+            let Ok(wide) = self.segmenter.plan(depth, spare) else {
+                continue;
+            };
+            let mut tight = wide;
+            let mut budget = wide.bytes() / 2;
+            while budget > 0 {
+                if let Ok(held) = self.segmenter.plan(depth, budget) {
+                    tight = held;
+                }
+                budget /= 2;
+            }
+            if tight.bytes() < wide.bytes() {
+                return Some((depth, wide, tight));
+            }
+        }
+        None
+    }
+
+    fn run(
+        &self,
+        segmenter: &Segmenter,
+        depth: u32,
+        plan: Plan,
+        progress: &mut dyn FnMut(usize),
+    ) -> Volume {
+        let planes = planes(SIDE, SIDE, depth);
+        let claim = self
+            .ledger
+            .claim(Consumer::Inference, plan.bytes())
+            .expect("a planned decode claims the graphics memory it declares");
+        let volume = segmenter
+            .segment(&planes, SIDE, SIDE, plan, progress)
+            .expect("the planned decode segments the volume");
+        drop(claim);
+        volume
+    }
 }
 
 #[test]
 fn splitting_the_decode_keeps_every_label() {
-    let Some((segmenter, _)) = segmenter() else {
+    let Some(bench) = bench() else {
         println!("no graphics device or weights, skipping");
         return;
     };
-    let (width, height, depth) = (256, 256, 8);
-    let planes = planes(width, height, depth);
-    let whole = segmenter
-        .plan(8, u64::MAX)
-        .expect("the whole plan fits an unbounded budget");
-    let split = segmenter
-        .plan(8, 4 << 30)
-        .expect("the split plan fits four gibibytes");
+    let Some((depth, wide, tight)) = bench.afford() else {
+        println!(
+            "the graphics device holds {:.1} GiB, less than two decodes of the model need, skipping",
+            bench.ledger.spare() as f64 / (1u64 << 30) as f64
+        );
+        return;
+    };
     assert!(
-        split.bytes() < whole.bytes(),
-        "a bounded budget splits the decode further than an unbounded one"
+        tight.bytes() < wide.bytes(),
+        "a tighter budget splits the decode further than {:.1} GiB",
+        wide.bytes() as f64 / (1u64 << 30) as f64
     );
+    let segmenter = Segmenter::open(&bench.weights, Settings::for_depth(depth))
+        .expect("the weights stay resident");
     let mut progress = |_| {};
-    let coarse = segmenter
-        .segment(&planes, width, height, whole, &mut progress)
-        .expect("the whole decode segments");
-    let fine = segmenter
-        .segment(&planes, width, height, split, &mut progress)
-        .expect("the split decode segments");
-    assert_eq!(coarse.width(), fine.width());
-    assert_eq!(coarse.height(), fine.height());
-    assert_eq!(coarse.depth(), fine.depth());
+    let whole = bench.run(&segmenter, depth, wide, &mut progress);
+    let split = bench.run(&segmenter, depth, tight, &mut progress);
+    assert_eq!(whole.width(), split.width());
+    assert_eq!(whole.height(), split.height());
+    assert_eq!(whole.depth(), split.depth());
     assert_eq!(
-        coarse.labels(),
-        fine.labels(),
+        whole.labels(),
+        split.labels(),
         "the stripes decode every voxel exactly like the whole surface"
     );
 }
@@ -92,11 +151,7 @@ fn keeps_the_components_that_hold_the_seeds() {
 
     let mut volume = two_objects();
     let components = volume.retain_containing(&[[3, 0, 0]]);
-    assert_eq!(
-        components.len(),
-        1,
-        "the second seed keeps the other object"
-    );
+    assert_eq!(components.len(), 1);
     assert_eq!(components[0].center(), [3.0, 0.5, 0.5]);
     assert_eq!(volume.labels()[3], 1, "the kept object is renumbered");
     assert_eq!(volume.labels()[0], 0, "the dropped object is cleared");

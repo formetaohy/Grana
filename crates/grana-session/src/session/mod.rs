@@ -701,11 +701,10 @@ impl Session {
         {
             grana_log::info!(
                 target: "grana::stream",
-                hits = decode.hits(),
-                misses = decode.misses(),
-                hit_rate = decode.hit_rate(),
+                decoded = decode.decoded_bytes(),
+                requested = decode.requested_bytes(),
                 amplification = decode.amplification(),
-                "the decode cache reports its reuse"
+                "the decode path reports the bytes it read"
             );
         }
         report_pools();

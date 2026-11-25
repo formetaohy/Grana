@@ -50,12 +50,13 @@ impl Session {
     pub fn recovery(&self) -> Option<RecoveryView<'_>> {
         let entry = self.recovery.entry()?;
         self.recovery.snapshot()?;
+        let target = match entry.project() {
+            Some(path) => path.to_path_buf(),
+            None => PathBuf::from(entry.target()),
+        };
         Some(RecoveryView {
             name: entry.name(),
-            detail: entry.project().map_or_else(
-                || entry.target().to_string(),
-                |path| path.display().to_string(),
-            ),
+            detail: file_name(&target),
             age: entry.age(),
         })
     }

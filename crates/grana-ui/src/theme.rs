@@ -205,6 +205,7 @@ pub struct Metrics {
     pub slider_handle_height: f32,
     pub switch_width: f32,
     pub switch_height: f32,
+    pub spinner: f32,
 }
 
 impl Metrics {
@@ -226,6 +227,7 @@ impl Metrics {
             slider_handle_height: 22.0,
             switch_width: 40.0,
             switch_height: 22.0,
+            spinner: 20.0,
         }
     }
 }

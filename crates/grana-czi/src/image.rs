@@ -360,12 +360,7 @@ fn samples(
 ) -> Result<Arc<Vec<u8>>, Error> {
     let cache = crate::cache();
     let key = (identity, tile.position);
-    if let Some(samples) = cache.fetch(key) {
-        return Ok(samples);
-    }
-    let samples = Arc::new(plane::samples(store, path, tile)?);
-    cache.insert(key, Arc::clone(&samples));
-    Ok(samples)
+    cache.load(key, || plane::samples(store, path, tile))
 }
 
 fn xml(store: &Store, header: &Header, path: &Path) -> Result<Metadata, Error> {

@@ -157,8 +157,8 @@ pub fn weak<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> View<'a> {
     ctx.weak(text)
 }
 
-pub fn loading<'a>(ctx: &mut BuildContext<'_, Message>, size: f32) -> View<'a> {
-    ctx.loading(size)
+pub fn loading<'a>(ctx: &mut BuildContext<'_, Message>) -> View<'a> {
+    ctx.loading()
 }
 
 pub fn button<'a>(ctx: &mut BuildContext<'_, Message>, label: &str, role: Role) -> View<'a> {

@@ -26,7 +26,7 @@ type Cache = LruCache<(u64, usize, usize, u32, usize), VoxelData>;
 
 fn blocks() -> &'static Cache {
     static BLOCKS: OnceLock<Cache> = OnceLock::new();
-    BLOCKS.get_or_init(|| Cache::pooled(Pool::Region, VoxelData::bytes))
+    BLOCKS.get_or_init(|| Cache::pooled(Pool::Decode, VoxelData::bytes))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -321,12 +321,7 @@ impl Page {
             sample,
             block.index,
         );
-        if let Some(held) = blocks().fetch(key) {
-            return Ok(held);
-        }
-        let data = Arc::new(self.decode(plane.source, block)?);
-        blocks().insert(key, Arc::clone(&data));
-        Ok(data)
+        blocks().load(key, || self.decode(plane.source, block))
     }
 
     fn decode(&self, source: &Source<'_>, block: &Block) -> Result<VoxelData, Error> {

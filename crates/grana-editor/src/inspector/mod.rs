@@ -364,7 +364,7 @@ fn series<'a>(ctx: &mut BuildContext<'_, Message>, state: &'a View<'a>) -> Eleme
 }
 
 fn progress_row<'a>(ctx: &mut BuildContext<'_, Message>, text: &str) -> Element<'a, Message> {
-    let loading = view::loading(ctx, 14.0);
+    let loading = view::loading(ctx);
     let caption = view::caption(ctx, text);
     grana_ui::row()
         .gap(8.0)

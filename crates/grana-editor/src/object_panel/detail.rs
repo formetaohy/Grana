@@ -223,7 +223,7 @@ pub(super) fn detect<'a>(
             } else {
                 0.0
             };
-            let loading = view::loading(ctx, 14.0);
+            let loading = view::loading(ctx);
             let caption = view::caption(
                 ctx,
                 &view::progress_caption(language, kind, job, running, frames),
@@ -272,7 +272,7 @@ pub(super) fn importing<'a>(
     } else {
         0.0
     };
-    let loading = view::loading(ctx, 14.0);
+    let loading = view::loading(ctx);
     let caption = view::caption(
         ctx,
         &view::progress_caption(

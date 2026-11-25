@@ -295,7 +295,7 @@ impl RemoteStore {
 
     fn block(&self, key: &StoreKey) -> Result<Option<Block>, StorageError> {
         let name = self.name(key);
-        if let Some(block) = self.blocks.fetch(name.clone()) {
+        if let Some(block) = self.blocks.fetch(&name) {
             return Ok(Some(Block::Ready(block)));
         }
         match self.probe(key.as_str())? {
@@ -304,11 +304,21 @@ impl RemoteStore {
                 size: Some(size), ..
             } if size > BLOCK_LIMIT => Ok(Some(Block::Ranged)),
             Presence::Object { .. } => {
-                let Some(bytes) = self.fetch(key, None)? else {
-                    return Ok(None);
-                };
-                let block = Arc::new(bytes);
-                self.blocks.insert(name, Arc::clone(&block));
+                let target = self.url(key.as_str());
+                let client = Arc::clone(&self.client);
+                let transfer = Arc::clone(&self.transfer);
+                let block = self.blocks.load(name, move || {
+                    let fetched = client
+                        .get(&target, None)
+                        .map_err(|error| StorageError::Other(error.to_string()))?
+                        .ok_or_else(|| {
+                            StorageError::Other(format!(
+                                "`{target}` vanished between its probe and its read"
+                            ))
+                        })?;
+                    transfer.record(fetched.bytes.len() as u64, fetched.resumed);
+                    Ok::<Vec<u8>, StorageError>(fetched.bytes)
+                })?;
                 Ok(Some(Block::Ready(block)))
             }
         }

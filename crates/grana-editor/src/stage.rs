@@ -103,6 +103,10 @@ impl Stage {
         self.surface = Some(surface);
     }
 
+    pub fn laid_out(&self) -> bool {
+        self.surface.is_some() && self.viewport.width() > 0.0 && self.viewport.height() > 0.0
+    }
+
     pub fn surface(&self) -> SurfaceSize {
         self.surface.expect("the stage is laid out on a surface")
     }

@@ -127,7 +127,7 @@ fn header<'a>(
     let busy = running.is_some() || state.io.loading.is_some();
     match running {
         Some(running) => {
-            items.push(view::loading(ctx, 14.0));
+            items.push(view::loading(ctx));
             items.push(view::caption(
                 ctx,
                 &grana_i18n::coloc::samples(language, running.done, running.total),

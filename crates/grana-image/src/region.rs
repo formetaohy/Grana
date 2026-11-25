@@ -10,42 +10,76 @@ pub(crate) fn allocate(no_data: NoData, ranges: &[Range<u32>; 3]) -> VoxelData {
     VoxelData::filled(no_data, count)
 }
 
-pub(crate) fn copy_intersection(
+pub(crate) fn copy_plane(
     out: &mut VoxelData,
     out_ranges: &[Range<u32>; 3],
     source: &VoxelData,
-    source_ranges: &[Range<u32>; 3],
+    source_dims: [u32; 2],
+    columns: [Range<u32>; 2],
+    z: u32,
 ) {
-    let overlap = [0, 1, 2].map(|axis| {
-        out_ranges[axis].start.max(source_ranges[axis].start)
-            ..out_ranges[axis].end.min(source_ranges[axis].end)
-    });
-    if overlap.iter().any(|range| range.start >= range.end) {
+    assert_eq!(
+        out.format(),
+        source.format(),
+        "a plane carries the format of the volume it serves"
+    );
+    assert_eq!(
+        source.voxel_count() as u64,
+        u64::from(source_dims[0]) * u64::from(source_dims[1]),
+        "a plane holds one channel of a whole slice"
+    );
+    if z < out_ranges[2].start || z >= out_ranges[2].end {
         return;
     }
-    let out_origin = origin(out_ranges);
+    let x = out_ranges[0].start.max(columns[0].start)..out_ranges[0].end.min(columns[0].end);
+    let y = out_ranges[1].start.max(columns[1].start)..out_ranges[1].end.min(columns[1].end);
+    if x.start >= x.end || y.start >= y.end {
+        return;
+    }
     let out_dims = dims(out_ranges);
-    let source_origin = origin(source_ranges);
-    let source_dims = dims(source_ranges);
+    let out_origin = origin(out_ranges);
     macro_rules! copy_arms {
         ($($variant:ident),*) => {
             match (out, source) {
                 $(
-                    (VoxelData::$variant(out), VoxelData::$variant(source)) => copy(
+                    (VoxelData::$variant(out), VoxelData::$variant(source)) => plane_rows(
                         out,
                         out_dims,
                         out_origin,
                         source,
                         source_dims,
-                        source_origin,
-                        &overlap,
+                        &x,
+                        &y,
+                        z,
                     ),
                 )*
-                _ => panic!("a resolved brick carries the voxel format of its level"),
+                _ => panic!("a plane carries the format of the volume it serves"),
             }
         };
     }
     copy_arms!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plane_rows<T: Copy>(
+    out: &mut [T],
+    out_dims: [u32; 3],
+    out_origin: [u32; 3],
+    source: &[T],
+    source_dims: [u32; 2],
+    x: &Range<u32>,
+    y: &Range<u32>,
+    z: u32,
+) {
+    let width = (x.end - x.start) as usize;
+    for line in y.clone() {
+        let source_at = x.start as usize + source_dims[0] as usize * line as usize;
+        let out_at = (x.start - out_origin[0]) as usize
+            + out_dims[0] as usize
+                * ((line - out_origin[1]) as usize
+                    + out_dims[1] as usize * (z - out_origin[2]) as usize);
+        out[out_at..out_at + width].copy_from_slice(&source[source_at..source_at + width]);
+    }
 }
 
 fn origin(ranges: &[Range<u32>; 3]) -> [u32; 3] {
@@ -58,29 +92,4 @@ fn dims(ranges: &[Range<u32>; 3]) -> [u32; 3] {
         ranges[1].end - ranges[1].start,
         ranges[2].end - ranges[2].start,
     ]
-}
-
-fn copy<T: Copy>(
-    out: &mut [T],
-    out_dims: [u32; 3],
-    out_origin: [u32; 3],
-    source: &[T],
-    source_dims: [u32; 3],
-    source_origin: [u32; 3],
-    overlap: &[Range<u32>; 3],
-) {
-    let width = (overlap[0].end - overlap[0].start) as usize;
-    for z in overlap[2].clone() {
-        for y in overlap[1].clone() {
-            let source_at = (overlap[0].start - source_origin[0]) as usize
-                + source_dims[0] as usize
-                    * ((y - source_origin[1]) as usize
-                        + source_dims[1] as usize * (z - source_origin[2]) as usize);
-            let out_at = (overlap[0].start - out_origin[0]) as usize
-                + out_dims[0] as usize
-                    * ((y - out_origin[1]) as usize
-                        + out_dims[1] as usize * (z - out_origin[2]) as usize);
-            out[out_at..out_at + width].copy_from_slice(&source[source_at..source_at + width]);
-        }
-    }
 }

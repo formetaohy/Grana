@@ -166,8 +166,8 @@ impl<'a, A> BuildContext<'a, A> {
         widget::labelled(&self.copy(), label, value)
     }
 
-    pub fn loading<'e>(&self, size: f32) -> Element<'e, A> {
-        widget::loading(size)
+    pub fn loading<'e>(&self) -> Element<'e, A> {
+        widget::loading(self.copy().metrics.spinner)
     }
 
     pub fn color_swatch<'e>(&self, color: [f32; 3], size: f32) -> Element<'e, A> {

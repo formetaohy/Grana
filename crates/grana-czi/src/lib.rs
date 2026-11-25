@@ -21,5 +21,5 @@ pub(crate) type Cache = grana_store::LruCache<(u64, u64), Vec<u8>>;
 
 pub(crate) fn cache() -> &'static Cache {
     static CACHE: OnceLock<Cache> = OnceLock::new();
-    CACHE.get_or_init(|| Cache::pooled(Pool::Region, |samples: &Vec<u8>| samples.len() as u64))
+    CACHE.get_or_init(|| Cache::pooled(Pool::Decode, |samples: &Vec<u8>| samples.len() as u64))
 }

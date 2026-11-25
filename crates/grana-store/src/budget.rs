@@ -37,26 +37,24 @@ impl Budget {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Pool {
-    Brick,
+    Plane,
     Decode,
-    Region,
+    Remote,
+    Readout,
     Page,
     Layout,
-    Readout,
-    Remote,
 }
 
 impl Pool {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 6;
 
     pub const ALL: [Self; Self::COUNT] = [
-        Self::Brick,
+        Self::Plane,
         Self::Decode,
-        Self::Region,
+        Self::Remote,
+        Self::Readout,
         Self::Page,
         Self::Layout,
-        Self::Readout,
-        Self::Remote,
     ];
 
     pub fn all() -> &'static [Self] {
@@ -65,13 +63,12 @@ impl Pool {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Brick => "brick",
+            Self::Plane => "plane",
             Self::Decode => "decode",
-            Self::Region => "region",
+            Self::Remote => "remote",
+            Self::Readout => "readout",
             Self::Page => "page",
             Self::Layout => "layout",
-            Self::Readout => "readout",
-            Self::Remote => "remote",
         }
     }
 
@@ -85,25 +82,23 @@ impl Pool {
 
     fn index(self) -> usize {
         match self {
-            Self::Brick => 0,
+            Self::Plane => 0,
             Self::Decode => 1,
-            Self::Region => 2,
-            Self::Page => 3,
-            Self::Layout => 4,
-            Self::Readout => 5,
-            Self::Remote => 6,
+            Self::Remote => 2,
+            Self::Readout => 3,
+            Self::Page => 4,
+            Self::Layout => 5,
         }
     }
 
     fn parts(self) -> u64 {
         match self {
-            Self::Brick => 16,
-            Self::Decode => 16,
-            Self::Region => 8,
-            Self::Page => 1,
+            Self::Plane => 96,
+            Self::Decode => 40,
+            Self::Remote => 32,
+            Self::Readout => 32,
+            Self::Page => 2,
             Self::Layout => 2,
-            Self::Readout => 8,
-            Self::Remote => 4,
         }
     }
 }

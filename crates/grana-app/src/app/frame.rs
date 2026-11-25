@@ -9,7 +9,7 @@ impl App {
     pub(super) fn exchange_bricks(&mut self) -> Result<(), String> {
         let replaced = self.session.replaced() != self.replaced;
         let reloaded = self.session.content() != self.content;
-        if replaced || reloaded {
+        if (replaced || reloaded) && self.stage.laid_out() {
             self.replaced = self.session.replaced();
             self.content = self.session.content();
             self.sync_dataset(replaced)?;

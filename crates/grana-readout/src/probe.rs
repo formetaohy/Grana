@@ -18,20 +18,12 @@ pub(crate) fn statistics(
 ) -> Result<Vec<Statistics>, Error> {
     let extent = Extent::new(info.size_x.max(1), info.size_y.max(1), info.size_z.max(1));
     let census = grana_volume::Census::of(extent, 1);
-    let blocks = census.blocks().to_vec();
+    let blocks = census.windows().to_vec();
     let mut ranges = Vec::with_capacity(views.len());
     for view in views {
         let plane = plane_at(path, dataset, info, view, 0, source)?;
         let mut measured = Statistics::census(&samples(&plane, view.sample), None);
         for block in &blocks {
-            let block_extent = Extent::new(
-                block[0].end - block[0].start,
-                block[1].end - block[1].start,
-                block[2].end - block[2].start,
-            );
-            if block_extent.z() > 1 {
-                continue;
-            }
             let strided = strided(&plane, view.sample, block);
             measured = measured.folded(Statistics::census(&strided, None));
         }

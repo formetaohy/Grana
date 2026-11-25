@@ -297,6 +297,9 @@ impl App {
         if self.engine.is_some() {
             return;
         }
+        if !self.stage.laid_out() {
+            return;
+        }
         let Some(pending) = self.pending_engine.take() else {
             return;
         };
@@ -341,6 +344,7 @@ impl App {
         let Some(size) = self.surface.as_mut().map(Surface::synchronize) else {
             return;
         };
+        self.stage.set_surface(size);
         if !self.pump() {
             return;
         }

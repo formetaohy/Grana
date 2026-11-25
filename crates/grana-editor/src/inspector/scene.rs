@@ -164,7 +164,7 @@ pub(super) fn drift<'a>(
                 } else {
                     0.5
                 };
-                let loading = view::loading(ctx, 14.0);
+                let loading = view::loading(ctx);
                 let caption = view::caption(ctx, &text);
                 children.push(
                     grana_ui::row()
@@ -296,7 +296,7 @@ pub(super) fn registration<'a>(
                 } else {
                     0.5
                 };
-                let loading = view::loading(ctx, 14.0);
+                let loading = view::loading(ctx);
                 let caption = view::caption(ctx, &text);
                 children.push(
                     grana_ui::row()

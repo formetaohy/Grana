@@ -78,40 +78,29 @@ impl File {
 
     pub(crate) fn page(&self, page: usize, level: usize) -> Result<Arc<Page>, Error> {
         let key = (self.identity, page, level);
-        if let Some(held) = pages().fetch(key) {
-            return Ok(held);
-        }
-        let offset = self.offset(page, level)?;
-        let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
-        let held = Arc::new(Page::new(
-            &directory,
-            &self.store,
-            self.header.big_endian,
-            &self.path,
-        )?);
-        pages().insert(key, Arc::clone(&held));
-        Ok(held)
+        pages().load(key, || {
+            let offset = self.offset(page, level)?;
+            let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
+            Page::new(&directory, &self.store, self.header.big_endian, &self.path)
+        })
     }
 
     pub(crate) fn layout(&self, page: usize, level: usize) -> Result<Arc<Layout>, Error> {
         let key = (self.identity, page, level);
-        if let Some(held) = layouts().fetch(key) {
-            return Ok(held);
-        }
-        let held = self.page(page, level)?;
-        let offset = self.offset(page, level)?;
-        let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
-        let layout = Arc::new(Layout::new(
-            &directory,
-            &self.store,
-            held.width,
-            held.height,
-            held.samples,
-            held.planar,
-            &self.path,
-        )?);
-        layouts().insert(key, Arc::clone(&layout));
-        Ok(layout)
+        layouts().load(key, || {
+            let held = self.page(page, level)?;
+            let offset = self.offset(page, level)?;
+            let directory = Directory::read(&self.store, &self.header, offset, &self.path)?;
+            Layout::new(
+                &directory,
+                &self.store,
+                held.width,
+                held.height,
+                held.samples,
+                held.planar,
+                &self.path,
+            )
+        })
     }
 
     fn offset(&self, page: usize, level: usize) -> Result<u64, Error> {
