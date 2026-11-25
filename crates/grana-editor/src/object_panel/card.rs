@@ -450,7 +450,7 @@ pub(super) fn object_edit_rows<'a>(
         .iter()
         .filter(|selection| selection.set == id)
         .filter_map(|selection| match selection.item {
-            Item::Object(index) => Some(index),
+            Item::Object(id) => Some(id),
             Item::Track(_) => None,
         })
         .collect::<Vec<_>>();
@@ -493,26 +493,32 @@ pub(super) fn object_edit_rows<'a>(
         .iter()
         .map(|statistics| statistics.centroid())
         .collect::<Vec<_>>();
-    let Some(origin) = centroids.get(object) else {
+    let Some(at) = surfaces.index_of(object) else {
+        return rows;
+    };
+    let Some(origin) = centroids.get(at) else {
         return rows;
     };
     let mut neighbours = centroids
         .iter()
         .enumerate()
-        .filter(|(index, _)| *index != object)
+        .filter(|(index, _)| *index != at)
         .map(|(index, centroid)| (index, squared(origin, centroid)))
         .collect::<Vec<_>>();
     neighbours.sort_by(|left, right| left.1.total_cmp(&right.1));
     for (index, (candidate, _)) in neighbours.iter().take(MERGE_CANDIDATES).enumerate() {
+        let Some(candidate) = surfaces.id(*candidate) else {
+            continue;
+        };
         rows.push(view::menu_row(
             ctx,
             &format!("object.{}.edit.merge.{index}", id.raw()),
-            &grana_i18n::object::merge_into_object(language, candidate + 1),
+            &grana_i18n::object::merge_into_object(language, candidate.raw() as usize),
             false,
             Some(Message::Command(Command::MergeSurfaces {
                 set: id,
                 time,
-                objects: vec![object, *candidate],
+                objects: vec![object, candidate],
             })),
         ));
     }

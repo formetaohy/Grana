@@ -26,7 +26,7 @@ use grana_volume::{
 };
 use grana_zarr::write_image;
 
-use crate::support;
+use crate::support::{self, id, spot_set};
 
 const HIGH: u16 = 65_535;
 
@@ -37,13 +37,16 @@ fn detects_and_localises_bright_spots() {
     let data = spot_volume(extent, spacing);
     let level = Level::new(extent, spacing);
     let scanner = SpotScanner::new(
-        0,
-        level,
-        data.range(),
+        grana_analysis::SpotSetup {
+            level_index: 0,
+            level,
+            intensity: data.range(),
+            channels: ChannelSet::new(0, &[None]),
+            budget: Budget::new(2),
+            ids: crate::support::id_source(),
+        },
         SpotParams::new(0.5, 0.2),
         Region::none(),
-        ChannelSet::new(0, &[None]),
-        Budget::new(2),
     );
     let voxels = AtomicU64::new(0);
     let read = |channel: usize, ranges: &[std::ops::Range<u32>; 3]| {
@@ -354,6 +357,7 @@ fn floods_a_wand_past_the_high_side_of_its_block() {
         0,
         ObjectFrame::Surfaces(SurfaceSet::new(
             0,
+            crate::support::ids(1),
             cube(level, low, high),
             vec![statistics],
             IntensityTable::new(
@@ -386,6 +390,7 @@ fn floods_a_wand_past_the_high_side_of_its_block() {
         object.voxel(),
         &grana_pipeline::run::MaskRequest {
             channel: 0,
+            ids: &crate::support::id_source(),
             strokes: &[stroke],
             drifts: &drifts,
         },
@@ -480,6 +485,7 @@ fn extract_surfaces_at(
                 },
                 &SpillStore::memory(),
             ),
+            &crate::support::id_source(),
         )
         .expect("a surface frame is detected");
     match scan {
@@ -714,7 +720,13 @@ fn traces_a_dim_filament_on_a_coarse_grid() {
         Budget::new(1),
     );
     let set = scan
-        .frame(&data, None, &SpillStore::memory(), |_| Ok(data.clone()))
+        .frame(
+            &data,
+            None,
+            &SpillStore::memory(),
+            |_| Ok(data.clone()),
+            &crate::support::id_source(),
+        )
         .expect("the filament scan traces the frame");
     assert_eq!(set.object_count(), 1, "the dim filament survives");
     let filament = set.object(0).expect("the filament exists");
@@ -763,7 +775,7 @@ fn pages_localization_frames_beyond_the_resident_budget() {
         scene.install(
             set,
             time,
-            ObjectFrame::from_spots(grana_object::SpotSet::new(0, spots, intensities)),
+            ObjectFrame::from_spots(spot_set(0, spots, intensities)),
         );
     }
     let object = scene.objects.get(set).expect("the spots stay");
@@ -1146,7 +1158,9 @@ fn links_divisions_and_merges_jointly() {
         1.0,
     );
     assert_eq!(set.len(), 3);
-    let moving = set.track_at(2, 0).expect("the moving object is tracked");
+    let moving = set
+        .track_at(2, id(0))
+        .expect("the moving object is tracked");
     assert_eq!(
         set.track(moving).expect("the track exists").nodes().len(),
         3
@@ -1225,7 +1239,7 @@ fn links_divisions_and_merges_jointly() {
         "a division still explains daughters that weaker links already held"
     );
     let daughter = claimed
-        .track_at(2, 0)
+        .track_at(2, id(0))
         .expect("the first daughter is tracked");
     assert_eq!(
         claimed
@@ -1248,7 +1262,9 @@ fn links_divisions_and_merges_jointly() {
         1.0,
     );
     assert_eq!(merged.merges(), 1);
-    let joined = merged.track_at(2, 0).expect("the merged object is tracked");
+    let joined = merged
+        .track_at(2, id(0))
+        .expect("the merged object is tracked");
     assert_eq!(merged.parents(joined).count(), 2);
     assert!(
         merged
@@ -1304,7 +1320,8 @@ fn events(division: bool, division_range: f32, merge_range: f32, overlap: f32) -
 fn detections(centroids: &[[f32; 3]], radius: f32) -> Vec<TrackDetection> {
     centroids
         .iter()
-        .map(|centroid| TrackDetection::new(*centroid, [radius; 3]))
+        .enumerate()
+        .map(|(index, centroid)| TrackDetection::new(id(index as u32), *centroid, [radius; 3]))
         .collect()
 }
 
@@ -1419,10 +1436,13 @@ fn spots_of(channels: &Channels) -> Vec<Spot> {
         0,
         ObjectParams::Spots(SpotParams::new(1.5, 0.01)),
         Region::none(),
-        None,
-        grana_scene::Drifts::new(),
-        Budget::new(1),
-        SpillStore::temporary(256 << 20).expect("the geometry store opens"),
+        grana_pipeline::DetectSources {
+            roi: None,
+            drifts: grana_scene::Drifts::new(),
+            budget: Budget::new(1),
+            store: SpillStore::temporary(256 << 20).expect("the geometry store opens"),
+            ids: crate::support::id_source(),
+        },
     );
     let mut spots = Vec::new();
     let mut sink = |event: grana_pipeline::Event| {
@@ -1814,7 +1834,7 @@ fn clusters_localizations_into_molecules() {
     for (time, frame) in frames.iter().enumerate() {
         for (index, group) in groups[time].iter().enumerate() {
             if let Some(group) = group {
-                rows.push((*group, time as u32, index, frame[index].center()));
+                rows.push((*group, time as u32, id(index as u32), frame[index].center()));
             }
         }
     }
@@ -1828,7 +1848,7 @@ fn clusters_localizations_into_molecules() {
         "a molecule that shows up in one frame keeps its track"
     );
     assert_eq!(
-        tracks.track_at(3, 0),
+        tracks.track_at(3, id(0)),
         single,
         "the single-frame detection names its own track"
     );

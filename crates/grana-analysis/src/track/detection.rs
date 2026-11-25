@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use glam::Vec3;
-use grana_object::TrackDetection;
+use grana_object::{ObjectId, TrackDetection};
 
 pub(super) struct Detection {
     centroid: Vec3,
     radii: [f32; 3],
     frame: u32,
-    object: usize,
+    id: ObjectId,
 }
 
 pub(super) struct Detections {
@@ -24,21 +24,16 @@ impl Detections {
         let mut largest = 0.0f32;
         for (frame, frame_detections) in frames.iter().enumerate() {
             let start = detections.len();
-            detections.extend(
-                frame_detections
-                    .iter()
-                    .enumerate()
-                    .map(|(object, detection)| {
-                        let radii = detection.radii();
-                        largest = radii.into_iter().fold(largest, f32::max);
-                        Detection {
-                            centroid: Vec3::from(detection.centroid()),
-                            radii,
-                            frame: frame as u32,
-                            object,
-                        }
-                    }),
-            );
+            detections.extend(frame_detections.iter().map(|detection| {
+                let radii = detection.radii();
+                largest = radii.into_iter().fold(largest, f32::max);
+                Detection {
+                    centroid: Vec3::from(detection.centroid()),
+                    radii,
+                    frame: frame as u32,
+                    id: detection.id(),
+                }
+            }));
             spans.push(start..detections.len());
         }
         Self {
@@ -64,8 +59,8 @@ impl Detections {
         self.detection(index).frame
     }
 
-    pub fn object(&self, index: usize) -> usize {
-        self.detection(index).object
+    pub fn id(&self, index: usize) -> ObjectId {
+        self.detection(index).id
     }
 
     pub fn centroid(&self, index: usize) -> Vec3 {

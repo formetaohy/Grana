@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_display::{CATEGORICAL as PALETTE, Extent};
 use grana_measure::{Child, ObjectColoc, RelationField, UNASSIGNED};
-use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackSet};
+use grana_object::{MaskEdit, ObjectId, RelationFrame, SurfaceEdit, TrackSet};
 
 use crate::alignment::LocalizationAlignment;
 use crate::color::ObjectColor;
@@ -13,7 +13,7 @@ use crate::drifts::Drifts;
 use crate::key::ObjectSetKey;
 use crate::localization::LocalizationSource;
 use crate::object::{ObjectFrame, ObjectKind};
-use crate::object_set::{ObjectSet, ObjectSetId, Visibility};
+use crate::object_set::{ObjectSet, ObjectSetId, Readoption, Visibility};
 use crate::provenance::{Criteria, Provenance};
 use crate::registration::Registration;
 use crate::revision::Revisions;
@@ -706,24 +706,26 @@ impl Objects {
         self.prune_children();
     }
 
-    pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) -> bool {
-        let stamp = self.revisions.mint();
-        let Some(set) = self.get_mut(id) else {
-            return false;
-        };
-        set.install(time, frame, stamp);
-        self.invalidate_relations(id, time);
-        true
+    pub fn install(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: ObjectFrame,
+    ) -> Option<Readoption> {
+        self.install_shared(id, time, Arc::new(frame))
     }
 
-    pub fn install_shared(&mut self, id: ObjectSetId, time: u32, frame: Arc<ObjectFrame>) -> bool {
+    pub fn install_shared(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: Arc<ObjectFrame>,
+    ) -> Option<Readoption> {
         let stamp = self.revisions.mint();
-        let Some(set) = self.get_mut(id) else {
-            return false;
-        };
-        set.install_shared(time, frame, stamp);
+        let set = self.get_mut(id)?;
+        let report = set.install_shared(time, frame, stamp);
         self.invalidate_relations(id, time);
-        true
+        Some(report)
     }
 
     pub fn install_optional(
@@ -731,14 +733,12 @@ impl Objects {
         id: ObjectSetId,
         time: u32,
         frame: Option<Arc<ObjectFrame>>,
-    ) -> bool {
+    ) -> Option<Readoption> {
         let stamp = self.revisions.mint();
-        let Some(set) = self.get_mut(id) else {
-            return false;
-        };
-        set.install_optional(time, frame, stamp);
+        let set = self.get_mut(id)?;
+        let report = set.install_optional(time, frame, stamp);
         self.invalidate_relations(id, time);
-        true
+        Some(report)
     }
 
     fn settle_relation_change(&mut self) {
@@ -819,12 +819,12 @@ impl Objects {
         &mut self,
         id: ObjectSetId,
         time: u32,
-        objects: &[usize],
+        ids: &[ObjectId],
         hidden: bool,
     ) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
-            .is_some_and(|set| set.set_hidden(time, objects, hidden, stamp))
+            .is_some_and(|set| set.set_hidden(time, ids, hidden, stamp))
     }
 
     pub fn clear_hidden(&mut self, id: ObjectSetId) -> bool {
@@ -919,7 +919,7 @@ impl Objects {
             .is_some_and(|set| set.set_curation(curation))
     }
 
-    pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+    pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: ObjectId) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
             .is_some_and(|set| set.cut_track(time, object, stamp))
@@ -962,8 +962,8 @@ impl Objects {
     pub fn join_tracks(
         &mut self,
         id: ObjectSetId,
-        source: (u32, usize),
-        target: (u32, usize),
+        source: (u32, ObjectId),
+        target: (u32, ObjectId),
     ) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
@@ -973,9 +973,9 @@ impl Objects {
     pub fn divide_tracks(
         &mut self,
         id: ObjectSetId,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
     ) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
@@ -985,9 +985,9 @@ impl Objects {
     pub fn merge_tracks(
         &mut self,
         id: ObjectSetId,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
     ) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
@@ -997,15 +997,15 @@ impl Objects {
     pub fn reparent_track(
         &mut self,
         id: ObjectSetId,
-        child: (u32, usize),
-        parent: (u32, usize),
+        child: (u32, ObjectId),
+        parent: (u32, ObjectId),
     ) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
             .is_some_and(|set| set.reparent_track(child, parent, stamp))
     }
 
-    pub fn detach_track(&mut self, id: ObjectSetId, child: (u32, usize)) -> bool {
+    pub fn detach_track(&mut self, id: ObjectSetId, child: (u32, ObjectId)) -> bool {
         let stamp = self.revisions.mint();
         self.get_mut(id)
             .is_some_and(|set| set.detach_track(child, stamp))
@@ -1210,7 +1210,9 @@ impl Objects {
                     .and_then(|relation| relation.frame(time));
                 Some(
                     (0..frame.object_count())
-                        .map(|object| crate::track_color::relation_value(field, relation, object))
+                        .map(|object| {
+                            crate::track_color::relation_value(field, relation, Some(object))
+                        })
                         .collect(),
                 )
             }

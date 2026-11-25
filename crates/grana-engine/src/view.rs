@@ -162,7 +162,7 @@ impl Key {
 
 fn item_digest(item: Item) -> u64 {
     match item {
-        Item::Object(index) => (index as u64) * 2,
+        Item::Object(id) => u64::from(id.raw()) * 2,
         Item::Track(index) => (index as u64) * 2 + 1,
     }
 }
@@ -367,7 +367,7 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                 .iter()
                 .filter(|held| held.set == set.id())
                 .filter_map(|held| match held.item {
-                    Item::Object(index) => Some(index as u32),
+                    Item::Object(id) => Some(id),
                     Item::Track(_) => None,
                 })
                 .collect::<Vec<_>>();
@@ -424,10 +424,12 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                             Style::new(color(index), visible, selected, set.opacity())
                                 .with_material(set.material()),
                         );
-                        ids.push(Selection {
-                            set: set.id(),
-                            item: Item::Object(index),
-                        });
+                        if let Some(id) = frame.id_of(index) {
+                            ids.push(Selection {
+                                set: set.id(),
+                                item: Item::Object(id),
+                            });
+                        }
                     }
                 });
             appearance.mix(rows.digest());

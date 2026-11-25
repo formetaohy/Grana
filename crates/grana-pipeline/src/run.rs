@@ -10,7 +10,7 @@ use grana_analysis::{
     relate_frames, spot_level, surface_level,
 };
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
-use grana_object::{LabelRaster, Roi, SurfaceSet};
+use grana_object::{LabelRaster, ObjectIdSource, Roi, SurfaceSet};
 use grana_scene::{Drift, Drifts, ObjectFrame, ObjectParams, ObjectSource};
 use grana_store::SpillStore;
 use grana_volume::VoxelData;
@@ -87,8 +87,17 @@ fn install(sink: &mut dyn FnMut(Event)) -> impl FnMut(Notice<ObjectFrame>) + '_ 
     }
 }
 
+pub struct DetectSources {
+    pub roi: Option<Roi>,
+    pub drifts: Drifts,
+    pub budget: Budget,
+    pub store: Arc<SpillStore>,
+    pub ids: ObjectIdSource,
+}
+
 pub struct DetectRequest {
     channel: usize,
+    ids: ObjectIdSource,
     params: ObjectParams,
     region: grana_volume::Region,
     roi: Option<Roi>,
@@ -104,22 +113,24 @@ impl DetectRequest {
         channel: usize,
         params: ObjectParams,
         region: grana_volume::Region,
-        roi: Option<Roi>,
-        drifts: Drifts,
-        budget: Budget,
-        store: Arc<SpillStore>,
+        sources: DetectSources,
     ) -> Self {
         Self {
             channel,
+            ids: sources.ids,
             params,
             region,
-            roi,
+            roi: sources.roi,
             seeds: Vec::new(),
             seed_policy: SeedPolicy::Unseeded,
-            drifts,
-            budget,
-            store,
+            drifts: sources.drifts,
+            budget: sources.budget,
+            store: sources.store,
         }
+    }
+
+    pub fn ids(&self) -> &ObjectIdSource {
+        &self.ids
     }
 
     pub fn with_seeds(mut self, seeds: Vec<Vec<[f32; 3]>>, policy: SeedPolicy) -> Self {
@@ -518,6 +529,7 @@ fn spots(
 ) -> Result<(), String> {
     let DetectRequest {
         channel,
+        ids,
         region,
         roi,
         budget,
@@ -543,13 +555,16 @@ fn spots(
     let share = budget.split(window, totals);
     let no_data = reader.no_data();
     let scanner = SpotScanner::new(
-        level_index,
-        level,
-        intensity,
+        grana_analysis::SpotSetup {
+            level_index,
+            level,
+            intensity,
+            channels: ChannelSet::new(channel, &no_data),
+            budget: share,
+            ids,
+        },
         params,
         region,
-        ChannelSet::new(channel, &no_data),
-        share,
     );
     let completed = pipeline(
         totals,
@@ -592,6 +607,7 @@ fn surfaces(
 ) -> Result<(), String> {
     let DetectRequest {
         channel,
+        ids,
         region,
         roi,
         seeds,
@@ -674,6 +690,7 @@ fn surfaces(
                     },
                     &store,
                 ),
+                &ids,
             )?;
             let set = match set {
                 SurfaceScan::Cancelled => return Ok(None),
@@ -699,6 +716,7 @@ fn filaments(
 ) -> Result<(), String> {
     let DetectRequest {
         channel,
+        ids,
         region,
         roi,
         drifts,
@@ -756,16 +774,22 @@ fn filaments(
                 drifts.warp(channel, time),
             )?;
             let mask = domain.mask(roi.as_ref(), time)?;
-            let set = scan.frame(&detection, mask.as_ref(), &store, |measured| {
-                full_region(
-                    reader,
-                    pyramid,
-                    time,
-                    level,
-                    measured,
-                    drifts.warp(measured, time),
-                )
-            })?;
+            let set = scan.frame(
+                &detection,
+                mask.as_ref(),
+                &store,
+                |measured| {
+                    full_region(
+                        reader,
+                        pyramid,
+                        time,
+                        level,
+                        measured,
+                        drifts.warp(measured, time),
+                    )
+                },
+                &ids,
+            )?;
             Ok(Some(ObjectFrame::Filaments(set)))
         },
         &mut |notice| match notice {

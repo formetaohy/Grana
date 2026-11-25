@@ -44,6 +44,21 @@ impl Frame {
         }
     }
 
+    pub fn ids(&self) -> grana_object::ObjectIds {
+        match self {
+            Self::Resident(frame) => frame.ids().clone(),
+            Self::Paged { page, .. } => self.load(page).spots().ids().clone(),
+        }
+    }
+
+    pub fn id_of(&self, object: usize) -> Option<grana_object::ObjectId> {
+        self.ids().get(object)
+    }
+
+    pub fn index_of(&self, id: grana_object::ObjectId) -> Option<usize> {
+        self.ids().index_of(id)
+    }
+
     pub fn write_steps(&self) -> usize {
         match self {
             Self::Paged { .. } => 1,

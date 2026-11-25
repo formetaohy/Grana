@@ -1497,7 +1497,6 @@ pub struct AnchorSpec {
 #[serde(deny_unknown_fields)]
 pub struct NodeSpec {
     pub frame: u32,
-    pub object: usize,
     pub position: [f32; 3],
 }
 
@@ -1569,7 +1568,8 @@ impl CurationSpec {
         })
     }
 
-    pub fn curation(&self, frames: usize) -> Result<grana_scene::Curation, String> {
+    pub fn curation(&self, set: &grana_scene::ObjectSet) -> Result<grana_scene::Curation, String> {
+        let frames = set.frame_count() as usize;
         let mut removed = vec![Vec::new(); frames];
         for spec in &self.removed {
             let Some(slot) = removed.get_mut(spec.frame as usize) else {
@@ -1590,11 +1590,14 @@ impl CurationSpec {
             };
             *slot = spec.anchors.iter().map(|anchor| anchor.anchor()).collect();
         }
-        let edits = self
-            .edits
-            .iter()
-            .map(|edit| edit.edit())
-            .collect::<Vec<_>>();
+        let mut edits = Vec::with_capacity(self.edits.len());
+        for edit in &self.edits {
+            edits.push(edit.edit(|time, position| {
+                let frame = set.frame_shared(time)?;
+                let object = grana_object::match_anchor(&frame.anchors(), position, set.voxel())?;
+                frame.id_of(object)
+            })?);
+        }
         grana_scene::Curation::restored(frames, &removed, &hidden, &edits)
     }
 }
@@ -1621,7 +1624,6 @@ impl EditSpec {
     fn of(edit: &grana_scene::TrackEdit) -> Self {
         let node = |node: grana_scene::TrackAnchor| NodeSpec {
             frame: node.time(),
-            object: node.object(),
             position: node.position(),
         };
         match edit {
@@ -1660,38 +1662,50 @@ impl EditSpec {
         }
     }
 
-    pub fn edit(self) -> grana_scene::TrackEdit {
-        let node =
-            |spec: NodeSpec| grana_scene::TrackAnchor::new(spec.frame, spec.object, spec.position);
+    pub fn edit(
+        self,
+        mut resolve: impl FnMut(u32, [f32; 3]) -> Option<grana_object::ObjectId>,
+    ) -> Result<grana_scene::TrackEdit, String> {
+        let mut node = |spec: NodeSpec| -> Result<grana_scene::TrackAnchor, String> {
+            let id = resolve(spec.frame, spec.position).ok_or_else(|| {
+                format!(
+                    "the track edit names no object of the frame {} near {:?}",
+                    spec.frame, spec.position
+                )
+            })?;
+            Ok(grana_scene::TrackAnchor::new(spec.frame, id, spec.position))
+        };
         match self {
-            Self::Cut { node: spec } => grana_scene::TrackEdit::Cut(node(spec)),
-            Self::Join { source, target } => grana_scene::TrackEdit::Join {
-                source: node(source),
-                target: node(target),
-            },
+            Self::Cut { node: spec } => Ok(grana_scene::TrackEdit::Cut(node(spec)?)),
+            Self::Join { source, target } => Ok(grana_scene::TrackEdit::Join {
+                source: node(source)?,
+                target: node(target)?,
+            }),
             Self::Divide {
                 parent,
                 first,
                 second,
-            } => grana_scene::TrackEdit::Divide {
-                parent: node(parent),
-                first: node(first),
-                second: node(second),
-            },
+            } => Ok(grana_scene::TrackEdit::Divide {
+                parent: node(parent)?,
+                first: node(first)?,
+                second: node(second)?,
+            }),
             Self::Merge {
                 first,
                 second,
                 child,
-            } => grana_scene::TrackEdit::Merge {
-                first: node(first),
-                second: node(second),
-                child: node(child),
-            },
-            Self::Reparent { child, parent } => grana_scene::TrackEdit::Reparent {
-                child: node(child),
-                parent: node(parent),
-            },
-            Self::Detach { child } => grana_scene::TrackEdit::Detach { child: node(child) },
+            } => Ok(grana_scene::TrackEdit::Merge {
+                first: node(first)?,
+                second: node(second)?,
+                child: node(child)?,
+            }),
+            Self::Reparent { child, parent } => Ok(grana_scene::TrackEdit::Reparent {
+                child: node(child)?,
+                parent: node(parent)?,
+            }),
+            Self::Detach { child } => Ok(grana_scene::TrackEdit::Detach {
+                child: node(child)?,
+            }),
         }
     }
 }
@@ -3710,7 +3724,7 @@ impl CurationSpec {
                     if first.frame <= parent.frame || second.frame <= parent.frame {
                         return invalid("divide a track into later daughter tracks".to_string());
                     }
-                    if first.frame == second.frame && first.object == second.object {
+                    if first.frame == second.frame && first.position == second.position {
                         return invalid("divide a track into two daughter tracks".to_string());
                     }
                     vec![*parent, *first, *second]
@@ -3723,7 +3737,7 @@ impl CurationSpec {
                     if first.frame >= child.frame || second.frame >= child.frame {
                         return invalid("merge two earlier tracks into a later track".to_string());
                     }
-                    if first.frame == second.frame && first.object == second.object {
+                    if first.frame == second.frame && first.position == second.position {
                         return invalid("merge two parent tracks".to_string());
                     }
                     vec![*first, *second, *child]

@@ -6,7 +6,7 @@ use glam::Vec3;
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_image::{Image, Source};
 use grana_interop::{Detection, Edge, Lineage, geff};
-use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
+use grana_object::{IntensityTable, SampleStatistics, Spot};
 use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
@@ -16,8 +16,8 @@ use grana_volume::{
 };
 use grana_zarr::write_image;
 
-use crate::support;
 use crate::support::Temp;
+use crate::support::{self, spot_set};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1523,7 +1523,7 @@ fn exports_a_region_of_the_channels_and_labels() {
     assert_eq!(whole.origins[0], [0, 0, 0]);
 
     let center = source_level.voxel_center([5.0, 3.0, 2.0]);
-    let spots = SpotSet::new(
+    let spots = spot_set(
         0,
         vec![Spot::new(center, 0.9, 1.0)],
         IntensityTable::new(
@@ -2811,7 +2811,7 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
     let label_set = label_scene.add_object(ObjectKind::Spots, 0);
     let centre = image.pyramid().level(0).voxel_center([3.0, 3.0, 2.0]);
     let spots = || {
-        SpotSet::new(
+        spot_set(
             0,
             vec![Spot::new(centre, 0.9, 1.0)],
             IntensityTable::new(

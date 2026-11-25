@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_geometry::Geometry;
-use grana_object::SurfaceSet;
+use grana_object::{ObjectIdSource, SurfaceSet};
 use grana_store::SpillStore;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
@@ -459,6 +459,7 @@ impl SurfaceBuilder {
         roi: Option<&Mask>,
         progress: &mut dyn FnMut(usize, usize),
         sources: Sources<'_>,
+        ids: &ObjectIdSource,
     ) -> Result<SurfaceScan, String> {
         self.plan_tiles(budget);
         if !self.restrict(roi) {
@@ -537,6 +538,7 @@ impl SurfaceBuilder {
             desired,
             Some(store),
             Some(cancel),
+            ids,
         )?
         else {
             return Ok(SurfaceScan::Empty);
@@ -560,13 +562,14 @@ pub fn recut(
     spec: SurfaceCut,
     workers: usize,
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<Option<SurfaceSet>, String> {
     let Some(topology) = set.topology() else {
         return Ok(None);
     };
     let workers = crate::schedule::workers(workers);
     let loaded = topology.load().map_err(|error| error.to_string())?;
-    let Some(cut) = cut::cut(&loaded, spec, set.removed(), workers, store, None)? else {
+    let Some(cut) = cut::cut(&loaded, spec, set.removed(), workers, store, None, ids)? else {
         return Ok(None);
     };
     let cut = cut

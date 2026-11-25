@@ -1,8 +1,8 @@
 use glam::Vec3;
 use grana_geometry::{Ball, Bounds, Mesh, MeshVertex, SurfaceShape, Union, ends};
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, ObjectIdSource,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_readout::{
     Imported, ImportedFilament, ImportedFrame, ImportedKind, ImportedObject, ImportedSample,
@@ -117,6 +117,11 @@ impl Session {
         let mut sampler = channels
             .as_deref()
             .map(|channels| Sampler::new(channels, imported_objects(&imported)));
+        let geometry = Geometry {
+            channels: count,
+            voxel,
+            frames,
+        };
         let mut report = Report::default();
         let mut sampled = 0usize;
         let mut failed = Vec::new();
@@ -143,34 +148,31 @@ impl Session {
                     intensities,
                     &scene.dataset,
                 );
+                let Some(ids) = scene.objects.get(set).map(|held| held.id_source()) else {
+                    continue;
+                };
                 let mut nodes = Vec::new();
+                let mut frames_ids = Vec::new();
                 let built = {
                     let objects = &mut scene.objects;
                     let mut install = |time: u32, frame: ObjectFrame| {
-                        nodes.extend(
-                            frame
-                                .centroids()
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, centroid)| (time, index, centroid)),
-                        );
+                        let centroids = frame.centroids();
+                        let held = frame.ids().clone();
+                        nodes.extend(centroids.into_iter().enumerate().filter_map(
+                            |(index, centroid)| held.get(index).map(|id| (time, id, centroid)),
+                        ));
+                        frames_ids.push((time, held));
                         objects.install(set, time, frame);
                     };
                     match object.kind() {
-                        ImportedKind::Surfaces => surfaces(
-                            object,
-                            count,
-                            voxel,
-                            frames,
-                            &store,
-                            &mut sampling,
-                            &mut install,
-                        ),
+                        ImportedKind::Surfaces => {
+                            surfaces(object, &geometry, &store, &mut sampling, &mut install, &ids)
+                        }
                         ImportedKind::Spots => {
-                            spots(object, count, frames, &mut sampling, &mut install)
+                            spots(object, &geometry, &mut sampling, &mut install, &ids)
                         }
                         ImportedKind::Filaments => {
-                            filaments(object, count, frames, &store, &mut sampling, &mut install)
+                            filaments(object, &geometry, &store, &mut sampling, &mut install, &ids)
                         }
                     }
                 };
@@ -191,10 +193,22 @@ impl Session {
                     }
                 }
                 if !object.links().is_empty() {
+                    let at = |pair: &[u32; 2]| {
+                        frames_ids
+                            .iter()
+                            .find(|(time, _)| *time == pair[0])
+                            .and_then(|(_, ids)| ids.get(pair[1] as usize))
+                            .map(|id| (pair[0], id))
+                    };
+                    let links = object
+                        .links()
+                        .iter()
+                        .filter_map(|(source, target)| Some((at(source)?, at(target)?)))
+                        .collect::<Vec<_>>();
                     match grana_object::TrackSet::linked(
                         scene.dataset.frame_interval(),
                         &nodes,
-                        object.links(),
+                        &links,
                     ) {
                         Ok(Some(tracks)) => {
                             scene.objects.install_tracks(set, tracks);
@@ -264,6 +278,12 @@ impl Session {
 
 type Install<'a> = &'a mut dyn FnMut(u32, ObjectFrame);
 
+struct Geometry {
+    channels: usize,
+    voxel: f32,
+    frames: u32,
+}
+
 fn imported_objects(imported: &Imported) -> u64 {
     imported
         .objects()
@@ -292,13 +312,13 @@ fn kind_of(kind: ImportedKind) -> ObjectKind {
 
 fn surfaces(
     object: &ImportedObject,
-    channels: usize,
-    voxel: f32,
-    frames: u32,
+    geometry: &Geometry,
     store: &Arc<SpillStore>,
     sampling: &mut Sampling<'_, '_>,
     install: Install<'_>,
+    ids: &ObjectIdSource,
 ) -> Result<usize, String> {
+    let (channels, voxel, frames) = (geometry.channels, geometry.voxel, geometry.frames);
     let mut installed = 0;
     for (time, frame) in object.frames() {
         if *time >= frames {
@@ -345,8 +365,9 @@ fn surfaces(
         }
         let mesh = Mesh::new(vertices, indices);
         let table = IntensityTable::new(channels, intensities);
-        let set =
-            SurfaceSet::paged(0, store, mesh, objects, table).map_err(|error| error.to_string())?;
+        let ids = ids.allocate(objects.len());
+        let set = SurfaceSet::paged(0, ids, store, mesh, objects, table)
+            .map_err(|error| error.to_string())?;
         install(*time, ObjectFrame::Surfaces(set));
         installed += 1;
     }
@@ -355,11 +376,12 @@ fn surfaces(
 
 fn spots(
     object: &ImportedObject,
-    channels: usize,
-    frames: u32,
+    geometry: &Geometry,
     sampling: &mut Sampling<'_, '_>,
     install: Install<'_>,
+    ids: &ObjectIdSource,
 ) -> Result<usize, String> {
+    let (channels, frames) = (geometry.channels, geometry.frames);
     let mut installed = 0;
     for (time, frame) in object.frames() {
         if *time >= frames {
@@ -388,7 +410,12 @@ fn spots(
         let table = IntensityTable::new(channels, intensities);
         install(
             *time,
-            ObjectFrame::Spots(Arc::new(SpotSet::new(0, held, table))),
+            ObjectFrame::Spots(Arc::new(SpotSet::new(
+                0,
+                ids.allocate(held.len()),
+                held,
+                table,
+            ))),
         );
         installed += 1;
     }
@@ -397,12 +424,13 @@ fn spots(
 
 fn filaments(
     object: &ImportedObject,
-    channels: usize,
-    frames: u32,
+    geometry: &Geometry,
     store: &Arc<SpillStore>,
     sampling: &mut Sampling<'_, '_>,
     install: Install<'_>,
+    ids: &ObjectIdSource,
 ) -> Result<usize, String> {
+    let (channels, frames) = (geometry.channels, geometry.frames);
     let mut installed = 0;
     for (time, frame) in object.frames() {
         if *time >= frames {
@@ -449,7 +477,8 @@ fn filaments(
         }
         let mesh = Mesh::new(vertices, indices);
         let table = IntensityTable::new(channels, intensities);
-        let set = FilamentSet::paged(0, store, mesh, objects, table)
+        let ids = ids.allocate(objects.len());
+        let set = FilamentSet::paged(0, ids, store, mesh, objects, table)
             .map_err(|error| error.to_string())?;
         install(*time, ObjectFrame::Filaments(set));
         installed += 1;

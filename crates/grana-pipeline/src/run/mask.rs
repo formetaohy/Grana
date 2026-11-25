@@ -16,6 +16,7 @@ const BLOCK_LIMIT: u64 = 512 << 20;
 
 pub struct MaskRequest<'a> {
     pub channel: usize,
+    pub ids: &'a grana_object::ObjectIdSource,
     pub strokes: &'a [MaskEdit],
     pub drifts: &'a Drifts,
 }
@@ -414,7 +415,7 @@ fn rebuild(
         });
         start += core;
     }
-    let built = builder.finish();
+    let built = builder.finish(request.ids);
     built.ok_or_else(|| "the edited mask closes no surface".to_string())
 }
 

@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{
-    Basin, IntensityTable, SampleAccumulator, SampleStatistics, SurfaceSet, SurfaceStatistics,
-    SurfaceTopology,
+    Basin, IntensityTable, ObjectIdSource, SampleAccumulator, SampleStatistics, SurfaceSet,
+    SurfaceStatistics, SurfaceTopology,
 };
 use grana_store::SpillStore;
 
@@ -29,6 +29,7 @@ pub(super) fn cut(
     workers: usize,
     store: Option<&Arc<SpillStore>>,
     cancel: Option<&AtomicBool>,
+    ids: &ObjectIdSource,
 ) -> Result<Option<SurfaceSet>, String> {
     let info = topology.info();
     let seeded = info.seeds() > 0;
@@ -106,6 +107,7 @@ pub(super) fn cut(
         leaves,
         removed,
         store,
+        ids,
     )?))
 }
 
@@ -534,6 +536,7 @@ pub(super) fn assemble(
     leaves: Vec<Vec<u32>>,
     removed: &[u32],
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<SurfaceSet, String> {
     assert_eq!(
         leaves.len(),
@@ -557,11 +560,14 @@ pub(super) fn assemble(
     let mesh = Mesh::new(vertices, indices);
     let intensities = IntensityTable::new(channels, intensities);
     let removed = removed.to_vec();
+    let ids = ids.allocate(objects.len());
     match store {
-        Some(store) => SurfaceSet::paged(level, store, mesh, objects, intensities)
+        Some(store) => SurfaceSet::paged(level, ids, store, mesh, objects, intensities)
             .map(|set| set.with_cut(leaves, removed))
             .map_err(|error| error.to_string()),
-        None => Ok(SurfaceSet::new(level, mesh, objects, intensities).with_cut(leaves, removed)),
+        None => {
+            Ok(SurfaceSet::new(level, ids, mesh, objects, intensities).with_cut(leaves, removed))
+        }
     }
 }
 

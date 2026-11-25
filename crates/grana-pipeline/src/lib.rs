@@ -21,4 +21,6 @@ pub use export::{ChannelLayer, DatasetSpec, LabelLayer, Summary as ExportSummary
 pub use grana_analysis::SeedPolicy;
 pub use grana_report::Summary as QualitySummary;
 pub use profile::ProfileSource;
-pub use run::{ColocRequest, DetectRequest, DriftRequest, ObjectColocRequest, RegisterRequest};
+pub use run::{
+    ColocRequest, DetectRequest, DetectSources, DriftRequest, ObjectColocRequest, RegisterRequest,
+};

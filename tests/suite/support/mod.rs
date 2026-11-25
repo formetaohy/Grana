@@ -113,6 +113,30 @@ pub fn budget(residency: u64, size: [u32; 2]) -> u64 {
     residency + grana_render::target_bytes(size)
 }
 
+pub fn id(raw: u32) -> grana_object::ObjectId {
+    grana_object::ObjectId::new(raw + 1)
+}
+
+pub fn ids(count: usize) -> grana_object::ObjectIds {
+    grana_object::ObjectIds::block(grana_object::ObjectId::FIRST, count)
+}
+
+pub fn node(time: u32, index: u32) -> (u32, grana_object::ObjectId) {
+    (time, id(index))
+}
+
+pub fn spot_set(
+    level: usize,
+    spots: Vec<grana_object::Spot>,
+    intensities: grana_object::IntensityTable,
+) -> grana_object::SpotSet {
+    grana_object::SpotSet::new(level, ids(spots.len()), spots, intensities)
+}
+
+pub fn id_source() -> grana_object::ObjectIdSource {
+    grana_object::ObjectIdSource::new()
+}
+
 pub fn revision() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)

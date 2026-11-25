@@ -1,5 +1,5 @@
 use grana_measure::{Aggregate, RelationField, TrackMeasurement, Unit};
-use grana_object::{RelationFrame, TrackSet};
+use grana_object::{ObjectId, RelationFrame, TrackSet};
 
 use crate::object_set::ObjectSetId;
 use crate::relation::Relation;
@@ -41,7 +41,13 @@ impl TrackColor {
         self.relation().map(|(target, _)| target)
     }
 
-    pub fn value(self, track: usize, set: &TrackSet, relation: Option<&Relation>) -> f32 {
+    pub fn value(
+        self,
+        track: usize,
+        set: &TrackSet,
+        relation: Option<&Relation>,
+        index_of: impl Fn(u32, ObjectId) -> Option<usize>,
+    ) -> f32 {
         match self {
             Self::Measurement(measurement) => measurement.value(track, set),
             Self::Relation {
@@ -52,11 +58,8 @@ impl TrackColor {
                 };
                 let mut values = Vec::with_capacity(entry.nodes().len());
                 for node in entry.nodes() {
-                    values.push(relation_value(
-                        field,
-                        relation.frame(node.time()),
-                        node.object(),
-                    ));
+                    let object = index_of(node.time(), node.id());
+                    values.push(relation_value(field, relation.frame(node.time()), object));
                 }
                 aggregate.apply(&values).present().unwrap_or(f32::NAN)
             }
@@ -67,10 +70,10 @@ impl TrackColor {
 pub(crate) fn relation_value(
     field: RelationField,
     frame: Option<&RelationFrame>,
-    object: usize,
+    object: Option<usize>,
 ) -> f32 {
-    match frame {
-        Some(frame) if object < frame.objects() => field.measure(frame, object),
+    match (frame, object) {
+        (Some(frame), Some(object)) if object < frame.objects() => field.measure(frame, object),
         _ => f32::NAN,
     }
 }

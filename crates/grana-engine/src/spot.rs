@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use grana_display::srgb_to_linear;
-use grana_object::{Spot, SpotSet, SpotWeight};
+use grana_object::{ObjectId, Spot, SpotSet, SpotWeight};
 use grana_render::{SplatGeometry, SplatStyle};
 
 const RAW_PIXELS: f32 = 3.0;
@@ -101,11 +101,11 @@ pub(crate) struct Detections {
 }
 
 impl Detections {
-    fn push(&mut self, geometry: SplatGeometry, style: SplatStyle, member: Option<usize>) {
+    fn push(&mut self, geometry: SplatGeometry, style: SplatStyle, member: Option<ObjectId>) {
         self.geometry.push(geometry);
         self.style.push(style);
         self.members.push(match member {
-            Some(index) => index as u32,
+            Some(id) => id.raw(),
             None => STANDALONE,
         });
     }
@@ -254,7 +254,15 @@ fn spots(frame: &Frame) -> Geometry {
             time: frame.time,
             spots: Arc::clone(&frame.spots),
         },
-        members: Some((0..entries.len() as u32).collect()),
+        members: Some(
+            frame
+                .spots
+                .ids()
+                .as_slice()
+                .iter()
+                .map(|id| id.raw())
+                .collect(),
+        ),
     }
 }
 
@@ -276,7 +284,7 @@ fn cells(frames: &[Frame], level: u8, look: Look<'_>, pickable: bool) -> Geometr
             }
             let radiance = palette.radiance((look.color)(index, spot));
             let weight = look.weight.map_or(1.0, |scale| scale.of(spot));
-            let member = pickable.then_some(index);
+            let member = pickable.then(|| frame.spots.id(index)).flatten();
             grid.add(member, spot, radiance, look.categorical, weight);
         }
     }
@@ -296,7 +304,7 @@ fn cells(frames: &[Frame], level: u8, look: Look<'_>, pickable: bool) -> Geometr
 
 pub(crate) fn highlights<F>(
     spots: &SpotSet,
-    selected: &[u32],
+    selected: &[ObjectId],
     opacity: f32,
     visible: F,
 ) -> Detections
@@ -307,8 +315,10 @@ where
     let mut palette = Palette::default();
     let mut detections = Detections::default();
     let highlight = palette.radiance(SELECTED_COLOR);
-    for index in selected {
-        let index = *index as usize;
+    for id in selected {
+        let Some(index) = spots.index_of(*id) else {
+            continue;
+        };
         let Some(spot) = entries.get(index) else {
             continue;
         };
@@ -319,7 +329,7 @@ where
         detections.push(
             SplatGeometry::gaussian(spot.center(), sigma),
             SplatStyle::new(highlight, opacity),
-            Some(index),
+            Some(*id),
         );
     }
     detections
@@ -401,7 +411,7 @@ impl Grid {
 
     fn add(
         &mut self,
-        member: Option<usize>,
+        member: Option<ObjectId>,
         spot: &Spot,
         radiance: [f32; 3],
         categorical: bool,
@@ -423,7 +433,7 @@ impl Grid {
             if reach < cell.reach {
                 cell.reach = reach;
                 if let Some(member) = member {
-                    cell.member = member as u32;
+                    cell.member = member.raw();
                 }
                 cell.nearest = radiance.map(f64::from);
                 cell.categorical = categorical;

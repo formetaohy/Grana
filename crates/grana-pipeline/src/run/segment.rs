@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_object::{Mask, Roi, SurfaceSet};
+use grana_object::{Mask, ObjectIdSource, Roi, SurfaceSet};
 use grana_scene::{Drifts, ObjectFrame, SegmentParams};
 use grana_segment::{Segmenter, Settings, Volume, assemble};
 use grana_volume::{Level, Region};
@@ -15,6 +15,7 @@ mod prompt;
 
 pub struct SegmentRequest {
     channel: usize,
+    ids: ObjectIdSource,
     params: SegmentParams,
     region: Region,
     drifts: Drifts,
@@ -25,6 +26,7 @@ pub struct SegmentRequest {
 impl SegmentRequest {
     pub fn new(
         channel: usize,
+        ids: ObjectIdSource,
         params: SegmentParams,
         region: Region,
         drifts: Drifts,
@@ -32,6 +34,7 @@ impl SegmentRequest {
     ) -> Self {
         Self {
             channel,
+            ids,
             params,
             region,
             drifts,
@@ -259,10 +262,10 @@ impl Slicer<'_> {
             self.reader,
             time,
             0,
-            self.info,
             &assembly.ranges,
             assembly.volume.labels(),
             &self.request.drifts,
+            &self.request.ids,
         )
     }
 }

@@ -4,7 +4,7 @@ use grana_measure::{Aggregate, Group, Kind, Table};
 use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
 use grana_report::share::{Report, Section};
 
-use crate::support::measure_source;
+use crate::support::{measure_source, spot_set};
 
 fn spots(frame: u32, count: usize) -> SpotSet {
     let spots = (0..count)
@@ -29,7 +29,7 @@ fn spots(frame: u32, count: usize) -> SpotSet {
             ))
         })
         .collect::<Vec<_>>();
-    SpotSet::new(0, spots, IntensityTable::new(1, intensities))
+    spot_set(0, spots, IntensityTable::new(1, intensities))
 }
 
 #[test]

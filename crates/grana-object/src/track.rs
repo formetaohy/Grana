@@ -1,14 +1,18 @@
 use crate::TrackLayout;
+use crate::identity::ObjectId;
 use crate::lineage::Lineage;
+
+pub type NodeRef = (u32, ObjectId);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackDetection {
+    id: ObjectId,
     centroid: [f32; 3],
     radii: [f32; 3],
 }
 
 impl TrackDetection {
-    pub fn new(centroid: [f32; 3], radii: [f32; 3]) -> Self {
+    pub fn new(id: ObjectId, centroid: [f32; 3], radii: [f32; 3]) -> Self {
         assert!(
             centroid.iter().all(|value| value.is_finite()),
             "a tracked detection lies at a finite centroid"
@@ -17,7 +21,15 @@ impl TrackDetection {
             radii.iter().all(|value| value.is_finite() && *value > 0.0),
             "a tracked detection spans a positive radius on every axis"
         );
-        Self { centroid, radii }
+        Self {
+            id,
+            centroid,
+            radii,
+        }
+    }
+
+    pub fn id(self) -> ObjectId {
+        self.id
     }
 
     pub fn centroid(self) -> [f32; 3] {
@@ -36,29 +48,25 @@ impl TrackDetection {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackNode {
     time: u32,
-    object: usize,
+    id: ObjectId,
     centroid: [f32; 3],
 }
 
 impl TrackNode {
-    pub fn new(time: u32, object: usize, centroid: [f32; 3]) -> Self {
+    pub fn new(time: u32, id: ObjectId, centroid: [f32; 3]) -> Self {
         assert!(
             centroid.iter().all(|value| value.is_finite()),
             "a track node lies at a finite centroid"
         );
-        Self {
-            time,
-            object,
-            centroid,
-        }
+        Self { time, id, centroid }
     }
 
     pub fn time(self) -> u32 {
         self.time
     }
 
-    pub fn object(self) -> usize {
-        self.object
+    pub fn id(self) -> ObjectId {
+        self.id
     }
 
     pub fn centroid(self) -> [f32; 3] {
@@ -210,7 +218,7 @@ pub struct TrackSet {
     tracks: Vec<Track>,
     links: Vec<TrackLink>,
     by_child: Vec<u32>,
-    detections: Vec<(u32, usize, u32)>,
+    detections: Vec<(u32, ObjectId, u32)>,
     divisions: usize,
     merges: usize,
     layout: TrackLayout,
@@ -260,7 +268,7 @@ impl TrackSet {
                 return Err("track nodes follow consecutive frames".to_string());
             }
             for node in track.nodes() {
-                detections.push((node.time(), node.object(), index as u32));
+                detections.push((node.time(), node.id(), index as u32));
             }
         }
         detections.sort_unstable();
@@ -327,8 +335,8 @@ impl TrackSet {
 
     pub fn linked(
         frame_interval: f32,
-        nodes: &[(u32, usize, [f32; 3])],
-        edges: &[([u32; 2], [u32; 2])],
+        nodes: &[(u32, ObjectId, [f32; 3])],
+        edges: &[(NodeRef, NodeRef)],
     ) -> Result<Option<Self>, String> {
         if nodes.is_empty() {
             return Ok(None);
@@ -378,33 +386,33 @@ impl TrackSet {
         self.tracks.get(index)
     }
 
-    pub fn remapped(&self, mut centroid: impl FnMut(u32, usize, [f32; 3]) -> [f32; 3]) -> Self {
+    pub fn remapped(&self, mut centroid: impl FnMut(u32, ObjectId, [f32; 3]) -> [f32; 3]) -> Self {
+        self.rebuilt(|node| {
+            TrackNode::new(
+                node.time(),
+                node.id(),
+                centroid(node.time(), node.id(), node.centroid()),
+            )
+        })
+    }
+
+    pub fn renumbered(&self, mut identity: impl FnMut(ObjectId) -> ObjectId) -> Self {
+        self.rebuilt(|node| TrackNode::new(node.time(), identity(node.id()), node.centroid()))
+    }
+
+    fn rebuilt(&self, mut node_of: impl FnMut(TrackNode) -> TrackNode) -> Self {
         let tracks = self
             .tracks
             .iter()
-            .map(|track| {
-                Track::new(
-                    track
-                        .nodes()
-                        .iter()
-                        .map(|node| {
-                            TrackNode::new(
-                                node.time(),
-                                node.object(),
-                                centroid(node.time(), node.object(), node.centroid()),
-                            )
-                        })
-                        .collect(),
-                )
-            })
+            .map(|track| Track::new(track.nodes().iter().map(|node| node_of(*node)).collect()))
             .collect();
         Self::try_with_links(self.frame_interval, tracks, self.links.clone())
-            .expect("a remapped track set keeps its links")
+            .expect("a rebuilt track set keeps its links")
     }
 
-    pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
+    pub fn track_at(&self, time: u32, id: ObjectId) -> Option<usize> {
         self.detections
-            .binary_search_by_key(&(time, object), |detection| (detection.0, detection.1))
+            .binary_search_by_key(&(time, id), |detection| (detection.0, detection.1))
             .ok()
             .map(|index| self.detections[index].2 as usize)
     }
@@ -445,18 +453,22 @@ impl TrackSet {
         self.child_links(index).map(|link| link.child as usize)
     }
 
-    pub fn cut(&self, time: u32, object: usize) -> Option<Self> {
+    pub fn cut(&self, time: u32, id: ObjectId) -> Option<Self> {
         self.edit(|lineage| {
-            let node = lineage.node_at(time, object)?;
+            let node = lineage.node_at(time, id)?;
             lineage.cut(node).then_some(())
         })
     }
 
-    pub fn can_join(&self, source: (u32, usize), target: (u32, usize)) -> bool {
+    pub fn can_join(&self, source: (u32, ObjectId), target: (u32, ObjectId)) -> bool {
         target.0 > source.0 && self.ends_lineage(source) && self.begins_lineage(target)
     }
 
-    pub fn joinable(&self, source: (u32, usize), targets: &[Option<(u32, usize)>]) -> Vec<bool> {
+    pub fn joinable(
+        &self,
+        source: (u32, ObjectId),
+        targets: &[Option<(u32, ObjectId)>],
+    ) -> Vec<bool> {
         let open = self.ends_lineage(source);
         targets
             .iter()
@@ -467,33 +479,33 @@ impl TrackSet {
             .collect()
     }
 
-    fn ends_lineage(&self, node: (u32, usize)) -> bool {
+    fn ends_lineage(&self, node: (u32, ObjectId)) -> bool {
         self.track_at(node.0, node.1).is_some_and(|index| {
             self.finishes_track(index, node) && self.child_links(index).next().is_none()
         })
     }
 
-    fn begins_lineage(&self, node: (u32, usize)) -> bool {
+    fn begins_lineage(&self, node: (u32, ObjectId)) -> bool {
         self.track_at(node.0, node.1).is_some_and(|index| {
             self.begins_track(index, node) && self.parents(index).next().is_none()
         })
     }
 
-    fn begins_track(&self, track: usize, node: (u32, usize)) -> bool {
+    fn begins_track(&self, track: usize, node: (u32, ObjectId)) -> bool {
         self.tracks[track]
             .nodes()
             .first()
-            .is_some_and(|first| (first.time(), first.object()) == node)
+            .is_some_and(|first| (first.time(), first.id()) == node)
     }
 
-    fn finishes_track(&self, track: usize, node: (u32, usize)) -> bool {
+    fn finishes_track(&self, track: usize, node: (u32, ObjectId)) -> bool {
         self.tracks[track]
             .nodes()
             .last()
-            .is_some_and(|last| (last.time(), last.object()) == node)
+            .is_some_and(|last| (last.time(), last.id()) == node)
     }
 
-    pub fn join(&self, source: (u32, usize), target: (u32, usize)) -> Option<Self> {
+    pub fn join(&self, source: (u32, ObjectId), target: (u32, ObjectId)) -> Option<Self> {
         self.edit(|lineage| {
             let source = lineage.node_at(source.0, source.1)?;
             let target = lineage.node_at(target.0, target.1)?;
@@ -505,9 +517,9 @@ impl TrackSet {
 
     pub fn can_divide(
         &self,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
     ) -> bool {
         first != second
             && first.0 > parent.0
@@ -519,9 +531,9 @@ impl TrackSet {
 
     pub fn divide(
         &self,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
     ) -> Option<Self> {
         self.edit(|lineage| {
             let parent = lineage.node_at(parent.0, parent.1)?;
@@ -535,9 +547,9 @@ impl TrackSet {
 
     pub fn can_merge(
         &self,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
     ) -> bool {
         let lineage = Lineage::of(self);
         let (Some(first), Some(second), Some(child)) = (
@@ -552,9 +564,9 @@ impl TrackSet {
 
     pub fn merge(
         &self,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
     ) -> Option<Self> {
         self.edit(|lineage| {
             let first = lineage.node_at(first.0, first.1)?;
@@ -566,7 +578,7 @@ impl TrackSet {
         })
     }
 
-    pub fn can_reparent(&self, child: (u32, usize), parent: (u32, usize)) -> bool {
+    pub fn can_reparent(&self, child: (u32, ObjectId), parent: (u32, ObjectId)) -> bool {
         let Some(parent_track) = self.track_at(parent.0, parent.1) else {
             return false;
         };
@@ -582,7 +594,7 @@ impl TrackSet {
                 .all(|link| link.child as usize != child_track)
     }
 
-    pub fn reparent(&self, child: (u32, usize), parent: (u32, usize)) -> Option<Self> {
+    pub fn reparent(&self, child: (u32, ObjectId), parent: (u32, ObjectId)) -> Option<Self> {
         self.edit(|lineage| {
             let child = lineage.node_at(child.0, child.1)?;
             let parent = lineage.node_at(parent.0, parent.1)?;
@@ -592,13 +604,13 @@ impl TrackSet {
         })
     }
 
-    pub fn can_detach(&self, child: (u32, usize)) -> bool {
+    pub fn can_detach(&self, child: (u32, ObjectId)) -> bool {
         self.track_at(child.0, child.1).is_some_and(|index| {
             self.begins_track(index, child) && self.parents(index).next().is_some()
         })
     }
 
-    pub fn detach(&self, child: (u32, usize)) -> Option<Self> {
+    pub fn detach(&self, child: (u32, ObjectId)) -> Option<Self> {
         self.edit(|lineage| {
             let child = lineage.node_at(child.0, child.1)?;
             lineage.can_detach(child).then_some(())?;
@@ -607,27 +619,19 @@ impl TrackSet {
         })
     }
 
-    pub fn without(&self, time: u32, object: usize) -> Option<Self> {
-        self.without_objects(time, &[object])
+    pub fn without(&self, time: u32, id: ObjectId) -> Option<Self> {
+        self.without_objects(time, &[id])
     }
 
-    pub fn without_objects(&self, time: u32, objects: &[usize]) -> Option<Self> {
-        if objects.is_empty() {
+    pub fn without_objects(&self, time: u32, ids: &[ObjectId]) -> Option<Self> {
+        if ids.is_empty() {
             return None;
         }
         assert!(
-            objects.windows(2).all(|pair| pair[0] < pair[1]),
+            ids.windows(2).all(|pair| pair[0] < pair[1]),
             "removed track nodes are ordered and unique"
         );
-        self.edit(|lineage| lineage.without_objects(time, objects).then_some(()))
-    }
-
-    pub fn shift(&self, offsets: &[usize]) -> Self {
-        self.edit(|lineage| {
-            lineage.shift(offsets);
-            Some(())
-        })
-        .expect("shifting keeps every track")
+        self.edit(|lineage| lineage.without_objects(time, ids).then_some(()))
     }
 
     pub fn append(&self, other: &Self) -> Self {
@@ -728,13 +732,13 @@ fn distance(left: [f32; 3], right: [f32; 3]) -> f64 {
 
 pub fn grouped_tracks(
     frame_interval: f32,
-    groups: impl IntoIterator<Item = (u32, u32, usize, [f32; 3])>,
+    groups: impl IntoIterator<Item = (u32, u32, ObjectId, [f32; 3])>,
 ) -> Result<TrackSet, String> {
     let mut held = std::collections::BTreeMap::<u32, Vec<TrackNode>>::new();
-    for (group, time, object, centroid) in groups {
+    for (group, time, id, centroid) in groups {
         held.entry(group)
             .or_default()
-            .push(TrackNode::new(time, object, centroid));
+            .push(TrackNode::new(time, id, centroid));
     }
     let mut tracks = Vec::new();
     for nodes in held.values_mut() {

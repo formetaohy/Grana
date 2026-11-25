@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use grana_store::{Decode, Payload};
 
-use crate::{IntensityTable, SampleStatistics, Spot, SpotSet};
+use crate::{IntensityTable, ObjectId, ObjectIds, SampleStatistics, Spot, SpotSet};
 
 const SPOT_BYTES: usize = std::mem::size_of::<Spot>();
 const RECORD_BYTES: usize = 32;
+const ID_BYTES: usize = 4;
 const STATISTICS_BYTES: usize = 24;
 const HEADER_BYTES: usize = 12;
 
@@ -34,6 +35,9 @@ impl Payload for SpotPage {
         bytes.extend_from_slice(&(set.level() as u32).to_le_bytes());
         bytes.extend_from_slice(&(spots.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&(intensities.channels() as u32).to_le_bytes());
+        for id in set.ids().as_slice() {
+            bytes.extend_from_slice(&id.raw().to_le_bytes());
+        }
         for spot in spots {
             for value in spot.center().into_iter().chain(spot.sigma()) {
                 bytes.extend_from_slice(&value.to_le_bytes());
@@ -61,7 +65,8 @@ impl Payload for SpotPage {
 
     fn stored_bytes(&self) -> u64 {
         let set = self.spots.as_ref();
-        (set.len() * (SPOT_BYTES + STATISTICS_BYTES * set.intensities().channels())) as u64
+        (set.len() * (SPOT_BYTES + ID_BYTES + STATISTICS_BYTES * set.intensities().channels()))
+            as u64
     }
 
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
@@ -78,6 +83,13 @@ impl Decode for SpotPage {
             return None;
         }
         let mut cursor = HEADER_BYTES;
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let raw = u32::from_le_bytes(bytes.get(cursor..cursor + ID_BYTES)?.try_into().ok()?);
+            cursor += ID_BYTES;
+            ids.push(ObjectId::from_raw(raw)?);
+        }
+        let ids = ObjectIds::checked(ids)?;
         let mut spots = Vec::with_capacity(count);
         for _ in 0..count {
             let mut value = || -> Option<f32> {
@@ -135,6 +147,7 @@ impl Decode for SpotPage {
         }
         Some(Self::new(Arc::new(SpotSet::new(
             level,
+            ids,
             spots,
             IntensityTable::new(channels, table),
         ))))
@@ -142,5 +155,5 @@ impl Decode for SpotPage {
 }
 
 fn encoded_bytes(count: usize, channels: usize) -> usize {
-    HEADER_BYTES + count * (RECORD_BYTES + STATISTICS_BYTES * channels)
+    HEADER_BYTES + count * (ID_BYTES + RECORD_BYTES + STATISTICS_BYTES * channels)
 }

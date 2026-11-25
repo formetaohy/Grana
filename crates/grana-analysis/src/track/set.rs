@@ -27,7 +27,7 @@ pub(super) fn build(chains: &Chains, detections: &Detections, frame_interval: f3
                     .map(|&point| {
                         TrackNode::new(
                             detections.frame(point),
-                            detections.object(point),
+                            detections.id(point),
                             detections.centroid(point).to_array(),
                         )
                     })

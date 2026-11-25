@@ -18,8 +18,8 @@ use grana_measure::{
 };
 use grana_object::{
     CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit,
-    MaskMode, MaskTool, RelationFrame, RelationPair, SampleStatistics, Spot, SpotSet, SurfaceSet,
-    SurfaceStatistics, SurfaceTopology, Track, TrackLink, TrackNode, TrackSet,
+    MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair, SampleStatistics, Spot,
+    SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track, TrackLink, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
@@ -616,7 +616,7 @@ impl Decode for SelectionState {
 impl Decode for ItemState {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         match reader.u8()? {
-            0 => Ok(Self::Object(reader.count(1)?)),
+            0 => Ok(Self::Object(decode_id(reader)?)),
             1 => Ok(Self::Track(reader.count(1)?)),
             _ => Err(FAULT_SHAPE),
         }
@@ -653,14 +653,9 @@ impl Decode for SetState {
             let frames = reader.count(1)?;
             let mut hidden = Vec::with_capacity(frames.min(4096));
             for _ in 0..frames {
-                let count = reader.count(1)?;
-                let mut mask = Vec::with_capacity(count.min(1 << 20));
-                for _ in 0..count {
-                    mask.push(reader.bool()?);
-                }
-                hidden.push(mask);
+                hidden.push(decode_ids(reader)?);
             }
-            hidden
+            Arc::new(hidden)
         };
         let opacity = unit(reader.f32()?)?;
         let material = grana_display::Material::new(unit(reader.f32()?)?, unit(reader.f32()?)?);
@@ -694,7 +689,7 @@ impl Decode for SetState {
             visible,
             labels,
             label,
-            hidden: Arc::new(hidden),
+            hidden,
             opacity,
             material,
             params,
@@ -844,13 +839,13 @@ impl Decode for TrackEdit {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let node = |reader: &mut Reader<'_>| -> Result<TrackAnchor, &'static str> {
             let time = reader.u32()?;
-            let object = reader.count(1)?;
+            let id = decode_id(reader)?;
             let position = [
                 finite(reader.f32()?)?,
                 finite(reader.f32()?)?,
                 finite(reader.f32()?)?,
             ];
-            Ok(TrackAnchor::new(time, object, position))
+            Ok(TrackAnchor::new(time, id, position))
         };
         Ok(match reader.u8()? {
             0 => Self::Cut(node(reader)?),
@@ -1404,12 +1399,12 @@ impl Decode for TrackLink {
 impl Decode for TrackNode {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let time = reader.u32()?;
-        let object = reader.count(1)?;
+        let id = decode_id(reader)?;
         let mut centroid = [0.0; 3];
         for value in &mut centroid {
             *value = finite(reader.f32()?)?;
         }
-        Ok(Self::new(time, object, centroid))
+        Ok(Self::new(time, id, centroid))
     }
 }
 
@@ -1671,12 +1666,13 @@ impl Decode for CellSet {
 impl Decode for SpotSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
+        let ids = decode_ids(reader)?;
         let spots = Vec::<Spot>::decode(reader)?;
         let intensities = IntensityTable::decode(reader)?;
-        if intensities.objects() != spots.len() {
+        if intensities.objects() != spots.len() || ids.len() != spots.len() {
             return Err(FAULT_SHAPE);
         }
-        Ok(Self::new(level, spots, intensities))
+        Ok(Self::new(level, ids, spots, intensities))
     }
 }
 
@@ -1703,13 +1699,14 @@ impl Decode for Spot {
 impl Decode for SurfaceSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
+        let ids = decode_ids(reader)?;
         let objects = Vec::<SurfaceStatistics>::decode(reader)?;
         let store = Arc::clone(reader.store());
         let geometry =
             Geometry::paged(&store, PackedMesh::decode(reader)?).map_err(|_| FAULT_SPILL)?;
         let intensities = IntensityTable::decode(reader)?;
-        let Some(set) =
-            Self::from_geometry(level, geometry, objects, intensities).map_err(|_| FAULT_SPILL)?
+        let Some(set) = Self::from_geometry(level, ids, geometry, objects, intensities)
+            .map_err(|_| FAULT_SPILL)?
         else {
             return Err(FAULT_SHAPE);
         };
@@ -1806,12 +1803,13 @@ impl Decode for SurfaceStatistics {
 impl Decode for FilamentSet {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         let level = reader.count(1)?;
+        let ids = decode_ids(reader)?;
         let objects = Vec::<FilamentStatistics>::decode(reader)?;
         let store = Arc::clone(reader.store());
         let geometry =
             Geometry::paged(&store, PackedMesh::decode(reader)?).map_err(|_| FAULT_SPILL)?;
         let intensities = IntensityTable::decode(reader)?;
-        match Self::from_geometry(level, geometry, objects, intensities) {
+        match Self::from_geometry(level, ids, geometry, objects, intensities) {
             Ok(Some(set)) => Ok(set),
             Ok(None) => Err(FAULT_SHAPE),
             Err(_) => Err(FAULT_SPILL),
@@ -2426,4 +2424,17 @@ fn degrees(value: f32, limit: f32) -> Result<f32, &'static str> {
     } else {
         Err(FAULT_VALUE)
     }
+}
+
+fn decode_id(reader: &mut Reader<'_>) -> Result<ObjectId, &'static str> {
+    ObjectId::from_raw(reader.u32()?).ok_or(FAULT_VALUE)
+}
+
+fn decode_ids(reader: &mut Reader<'_>) -> Result<ObjectIds, &'static str> {
+    let count = reader.count(1)?;
+    let mut ids = Vec::with_capacity(reserve(count));
+    for _ in 0..count {
+        ids.push(decode_id(reader)?);
+    }
+    ObjectIds::checked(ids).ok_or(FAULT_VALUE)
 }

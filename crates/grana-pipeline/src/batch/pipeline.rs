@@ -589,14 +589,27 @@ impl Run<'_, '_> {
         let region = self.scene.region;
         let drifts = self.scene.drifts().clone();
         let store = Arc::clone(self.store);
+        let ids = self
+            .scene
+            .objects
+            .get(id)
+            .map(|set| set.id_source())
+            .ok_or_else(|| format!("the staged object set {name} left the scene"))?;
         let progress = &self.progress;
         let channels = &self.channels;
         arrive(&mut self.scene, id, progress, &mut |_| {}, |sink| {
             match (segmented, params) {
                 (Some(params), _) => run::segment(
                     channels,
-                    run::SegmentRequest::new(channel, params, region, drifts.clone(), roi)
-                        .with_seeds(seeds),
+                    run::SegmentRequest::new(
+                        channel,
+                        ids.clone(),
+                        params,
+                        region,
+                        drifts.clone(),
+                        roi,
+                    )
+                    .with_seeds(seeds),
                     task.cancel,
                     sink,
                 ),
@@ -608,6 +621,7 @@ impl Run<'_, '_> {
                         channels,
                         run::GrowRequest::new(
                             channel,
+                            ids.clone(),
                             params,
                             region,
                             drifts.clone(),
@@ -624,10 +638,13 @@ impl Run<'_, '_> {
                         channel,
                         params,
                         region,
-                        roi,
-                        drifts.clone(),
-                        grana_analysis::Budget::new(task.workers),
-                        store,
+                        run::DetectSources {
+                            roi,
+                            drifts: drifts.clone(),
+                            budget: grana_analysis::Budget::new(task.workers),
+                            store,
+                            ids: ids.clone(),
+                        },
                     )
                     .with_seeds(seeds, policy),
                     task.cancel,
@@ -693,11 +710,17 @@ impl Run<'_, '_> {
         let reader = &self.channels;
         let drifts = self.scene.drifts().clone();
         let channel = self.scene.objects.get(id).map_or(0, |set| set.channel());
+        let ids = self
+            .scene
+            .objects
+            .get(id)
+            .map(|set| set.id_source())
+            .ok_or_else(|| format!("the staged object set {name} left the scene"))?;
         let progress = &self.progress;
         arrive(&mut self.scene, id, progress, &mut |_| {}, |sink| {
             crate::run::import(
                 reader,
-                crate::run::ImportRequest::new(channel, label, drifts.clone()),
+                crate::run::ImportRequest::new(channel, label, drifts.clone(), ids.clone()),
                 task.cancel,
                 sink,
             )
@@ -717,6 +740,12 @@ impl Run<'_, '_> {
         });
         let reader = &self.channels;
         let alignment = self.alignment(id)?;
+        let ids = self
+            .scene
+            .objects
+            .get(id)
+            .map(|set| set.id_source())
+            .ok_or_else(|| format!("the staged object set {name} left the scene"))?;
         let progress = &self.progress;
         let mut localization = None;
         let mut extra = |event| {
@@ -735,7 +764,7 @@ impl Run<'_, '_> {
         arrive(&mut self.scene, id, progress, &mut extra, |sink| {
             crate::run::localization(
                 reader,
-                crate::run::LocalizationRequest::new(file, alignment),
+                crate::run::LocalizationRequest::new(file, alignment, ids.clone()),
                 task.cancel,
                 sink,
             )
@@ -1021,13 +1050,20 @@ impl Run<'_, '_> {
             .get(source)
             .map(|object| object.source())
             .ok_or_else(|| format!("{name} carries an edited object set that left the scene"))?;
+        let ids = self
+            .scene
+            .objects
+            .get(id)
+            .map(|set| set.id_source())
+            .ok_or_else(|| format!("the staged object set {name} left the scene"))?;
         let edited = match &provenance {
             grana_scene::Provenance::Edited { edits, .. } => {
-                crate::run::edit(&objects, edits, voxel, Some(self.store))?
+                crate::run::edit(&objects, edits, voxel, Some(self.store), &ids)?
             }
             grana_scene::Provenance::Masked { strokes, .. } => {
                 let request = crate::run::MaskRequest {
                     channel,
+                    ids: &ids,
                     strokes,
                     drifts: self.scene.drifts(),
                 };
@@ -1039,7 +1075,7 @@ impl Run<'_, '_> {
             match frame {
                 Some(frame) => self.scene.install_shared(id, time, frame),
                 None => self.scene.install_optional(id, time, None),
-            }
+            };
         }
         self.scene.clear_tracks(id);
         self.track(id)

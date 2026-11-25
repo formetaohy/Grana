@@ -2,6 +2,7 @@ mod algorithm;
 mod anchor;
 mod cell;
 mod filament;
+mod identity;
 mod intensity;
 mod label;
 mod layout;
@@ -22,6 +23,7 @@ pub use algorithm::Algorithm;
 pub use anchor::{ObjectAnchor, assign, match_anchor};
 pub use cell::CellSet;
 pub use filament::{FilamentSet, FilamentStatistics, FilamentTopology};
+pub use identity::{ObjectId, ObjectIdSource, ObjectIds};
 pub use intensity::{IntensityTable, SampleAccumulator, SampleStatistics};
 pub use label::LabelRaster;
 pub use layout::TrackLayout;
@@ -41,6 +43,7 @@ pub use surface::{
     SurfaceTopology, TopologyInfo,
 };
 pub use track::{
-    Link, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics, grouped_tracks,
+    Link, NodeRef, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics,
+    grouped_tracks,
 };
 pub use weight::{SpotWeight, SpotWeightSampler};

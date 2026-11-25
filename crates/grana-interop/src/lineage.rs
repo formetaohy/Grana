@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use grana_object::{Spot, TrackSet};
+use grana_object::{ObjectId, Spot, TrackSet};
 
 use crate::error::Error;
 
@@ -139,6 +139,14 @@ impl Lineage {
         &self.detections
     }
 
+    pub fn object_id(&self, slot: usize) -> ObjectId {
+        assert!(
+            slot < self.detections.len(),
+            "an imported spot names a detection of the lineage"
+        );
+        ObjectId::new(slot as u32 + 1)
+    }
+
     pub fn edges(&self) -> &[Edge] {
         &self.edges
     }
@@ -161,27 +169,28 @@ impl Lineage {
         times
     }
 
-    pub fn spots(&self) -> Vec<(u32, Vec<Spot>)> {
-        let mut frames: Vec<(u32, Vec<Spot>)> = Vec::new();
-        for detection in &self.detections {
+    pub fn spots(&self) -> Vec<(u32, Vec<Spot>, Vec<ObjectId>)> {
+        let mut frames: Vec<(u32, Vec<Spot>, Vec<ObjectId>)> = Vec::new();
+        for (slot, detection) in self.detections.iter().enumerate() {
             let spot = Spot::new(detection.position, detection.radius, detection.quality);
             match frames.last_mut() {
-                Some((time, spots)) if *time == detection.time => spots.push(spot),
-                _ => frames.push((detection.time, vec![spot])),
+                Some((time, spots, ids)) if *time == detection.time => {
+                    spots.push(spot);
+                    ids.push(self.object_id(slot));
+                }
+                _ => frames.push((detection.time, vec![spot], vec![self.object_id(slot)])),
             }
         }
         frames
     }
 
     pub fn tracks(&self, frame_interval: f32) -> Result<TrackSet, Error> {
-        let mut keys: HashMap<u64, [u32; 2]> = HashMap::with_capacity(self.detections.len());
-        let mut order: HashMap<u32, usize> = HashMap::new();
+        let mut keys: HashMap<u64, (u32, ObjectId)> = HashMap::with_capacity(self.detections.len());
         let mut nodes = Vec::with_capacity(self.detections.len());
-        for detection in &self.detections {
-            let ordinal = order.entry(detection.time).or_insert(0);
-            keys.insert(detection.id, [detection.time, *ordinal as u32]);
-            nodes.push((detection.time, *ordinal, detection.position));
-            *ordinal += 1;
+        for (slot, detection) in self.detections.iter().enumerate() {
+            let id = self.object_id(slot);
+            keys.insert(detection.id, (detection.time, id));
+            nodes.push((detection.time, id, detection.position));
         }
         let edges = self
             .edges

@@ -4,6 +4,7 @@ use glam::Vec2;
 use grana_animation::Timeline;
 use grana_display::Camera;
 use grana_measure::{MeasureView, Measurement};
+use grana_object::ObjectId;
 use grana_scene::{Measure, ObjectSet, ObjectSetId, Progress, Scene};
 use grana_session::{BatchView, Export, HistoryView, IoView, PlateView, SeriesView};
 use grana_ui::Key;
@@ -414,12 +415,12 @@ pub struct Workspace {
     pub playback: Playback,
     pub column_widths: HashMap<Key, f32>,
     pub track_set: Option<ObjectSetId>,
-    pub join: Option<(u32, usize)>,
-    pub divide: Option<(u32, usize)>,
-    pub divide_daughters: Vec<(u32, usize)>,
-    pub merge: Option<(u32, usize)>,
-    pub merge_parents: Vec<(u32, usize)>,
-    pub reparent: Option<(u32, usize)>,
+    pub join: Option<(u32, ObjectId)>,
+    pub divide: Option<(u32, ObjectId)>,
+    pub divide_daughters: Vec<(u32, ObjectId)>,
+    pub merge: Option<(u32, ObjectId)>,
+    pub merge_parents: Vec<(u32, ObjectId)>,
+    pub reparent: Option<(u32, ObjectId)>,
     pub seed: Option<ObjectSetId>,
     pub mask: Option<MaskBrush>,
     pub calibration: Option<CalibrationSheet>,

@@ -156,11 +156,11 @@ pub(super) fn measure<'a>(
     id: ObjectSetId,
     time: u32,
 ) -> Vec<Element<'a, Message>> {
-    let Some(index) = state.scene.selection().and_then(|selection| {
+    let Some(object_id) = state.scene.selection().and_then(|selection| {
         (selection.set == id)
             .then_some(selection.item)
             .and_then(|item| match item {
-                Item::Object(index) => Some(index),
+                Item::Object(id) => Some(id),
                 Item::Track(_) => None,
             })
     }) else {
@@ -175,6 +175,9 @@ pub(super) fn measure<'a>(
         return Vec::new();
     };
     let frame = frame.clone();
+    let Some(index) = frame.index_of(object_id) else {
+        return Vec::new();
+    };
     let channel = state
         .scene
         .objects
@@ -195,7 +198,7 @@ pub(super) fn measure<'a>(
             let centre = spot.center();
             let intensity = frame.intensities().object(index, channel);
             vec![
-                (property("Object"), format!("#{}", index + 1)),
+                (property("Object"), format!("#{}", object_id.raw())),
                 (
                     property("Position"),
                     format!("{:.2}, {:.2}, {:.2} µm", centre[0], centre[1], centre[2]),
@@ -227,7 +230,7 @@ pub(super) fn measure<'a>(
                 None => ("—".to_string(), "—".to_string(), "—".to_string()),
             };
             vec![
-                (property("Object"), format!("#{}", index + 1)),
+                (property("Object"), format!("#{}", object_id.raw())),
                 (property("Volume"), format!("{:.2} µm³", object.volume())),
                 (property("Area"), format!("{:.2} µm²", object.area())),
                 (
@@ -270,7 +273,7 @@ pub(super) fn measure<'a>(
                 None => ("—".to_string(), "—".to_string(), "—".to_string()),
             };
             vec![
-                (property("Object"), format!("#{}", index + 1)),
+                (property("Object"), format!("#{}", object_id.raw())),
                 (property("Volume"), format!("{:.2} µm³", body.volume())),
                 (property("Area"), format!("{:.2} µm²", body.area())),
                 (property("Sphericity"), format!("{:.3}", body.sphericity())),
@@ -320,7 +323,7 @@ pub(super) fn measure<'a>(
             let centroid = object.centroid();
             let size = object.bounds().size();
             vec![
-                (property("Object"), format!("#{}", index + 1)),
+                (property("Object"), format!("#{}", object_id.raw())),
                 (property("Length"), format!("{:.2} µm", object.length())),
                 (property("Diameter"), format!("{:.2} µm", object.diameter())),
                 (property("Volume"), format!("{:.2} µm³", object.volume())),
@@ -356,7 +359,7 @@ pub(super) fn measure<'a>(
         .press(Message::Command(Command::DeleteObject {
             set: id,
             time,
-            object: index,
+            object: object_id,
         })),
     );
     children

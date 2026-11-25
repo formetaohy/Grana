@@ -21,7 +21,13 @@ pub(super) fn appearance_fields<'a>(
         .scene
         .selection()
         .and_then(|selection| match selection.item {
-            Item::Object(object) if selection.set == id && set.visible_object(time, object) => {
+            Item::Object(object)
+                if selection.set == id
+                    && set
+                        .frame_shared(time)
+                        .and_then(|frame| frame.index_of(object))
+                        .is_some_and(|index| set.visible_object(time, index)) =>
+            {
                 Some(object)
             }
             _ => None,

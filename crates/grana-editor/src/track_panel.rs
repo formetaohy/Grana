@@ -208,14 +208,14 @@ fn tracking_controls<'a>(
         let last = track.nodes().last()?;
         let node = track.nodes().iter().find(|node| node.time() == time)?;
         let division = set.children(index).next().is_some();
-        (node.time() != last.time() || division).then_some((node.time(), node.object()))
+        (node.time() != last.time() || division).then_some((node.time(), node.id()))
     });
     let joins = object.tracks().map(|layer| layer.set()).and_then(|set| {
         let index = selected?;
         let track = set.track(index)?;
         let last = track.nodes().last()?;
         (set.children(index).next().is_none() && last.time() + 1 < scene.frame_count())
-            .then_some((last.time(), last.object()))
+            .then_some((last.time(), last.id()))
     });
     let joining = state.workspace.join.is_some();
     let language = ctx.language();
@@ -504,7 +504,7 @@ fn lineage<'a>(
                     .get(lane)
                     .and_then(|index| set.track(*index))
                     .and_then(|track| track.nodes().first())
-                    .map(|head| (head.time(), head.object()))
+                    .map(|head| (head.time(), head.id()))
             })
             .collect::<Vec<_>>();
         set.joinable(source, &heads)
@@ -610,7 +610,7 @@ fn lineage<'a>(
                 let daughter = set
                     .track(index)
                     .and_then(|track| track.nodes().first())
-                    .map(|node| (node.time(), node.object()))
+                    .map(|node| (node.time(), node.id()))
                     .filter(|daughter| {
                         if *daughter == parent {
                             return false;
@@ -629,7 +629,7 @@ fn lineage<'a>(
                 let parent = set
                     .track(index)
                     .and_then(|track| track.nodes().last())
-                    .map(|node| (node.time(), node.object()))
+                    .map(|node| (node.time(), node.id()))
                     .filter(|parent| {
                         parent.0 < child.0 && *parent != child && !merge_parents.contains(parent)
                     });
@@ -641,7 +641,7 @@ fn lineage<'a>(
                 let parent = set
                     .track(index)
                     .and_then(|track| track.nodes().last())
-                    .map(|node| (node.time(), node.object()))
+                    .map(|node| (node.time(), node.id()))
                     .filter(|parent| set.can_reparent(child, *parent));
                 (
                     parent.map(|parent| Message::PickReparent { set: id, parent }),
@@ -651,7 +651,7 @@ fn lineage<'a>(
                 let target = set
                     .track(index)
                     .and_then(|track| track.nodes().first())
-                    .map(|node| (node.time(), node.object()))
+                    .map(|node| (node.time(), node.id()))
                     .filter(|target| set.can_join(source, *target));
                 match target {
                     Some(target) => (
@@ -918,14 +918,8 @@ fn summary<'a>(
     );
     let parented = set.parents(index).next().is_some();
     let authoring = state.access.author();
-    let first = track
-        .nodes()
-        .first()
-        .map(|node| (node.time(), node.object()));
-    let last = track
-        .nodes()
-        .last()
-        .map(|node| (node.time(), node.object()));
+    let first = track.nodes().first().map(|node| (node.time(), node.id()));
+    let last = track.nodes().last().map(|node| (node.time(), node.id()));
     let divide = if state.workspace.divide.is_some() {
         grana_i18n::common::cancel(language)
     } else {

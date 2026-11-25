@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use grana_measure::{Filter, Group, Lasso, Table};
-use grana_object::{MaskEdit, SurfaceEdit, TrackSet};
+use grana_object::{MaskEdit, ObjectIds, SurfaceEdit, TrackSet};
 
 use crate::curation::Curation;
 use crate::object::{ObjectKind, ObjectParams};
@@ -141,7 +141,7 @@ impl Criteria {
         table: &Table,
         tracks: Option<&TrackSet>,
         groups: &[Vec<Option<u32>>],
-        counts: &[usize],
+        ids: &[ObjectIds],
     ) -> Result<Vec<Vec<bool>>, String> {
         let filters = self
             .filters
@@ -152,9 +152,9 @@ impl Criteria {
             Some(lasso) => Some(lasso.path(table)?),
             None => None,
         };
-        let mut keep = counts
+        let mut keep = ids
             .iter()
-            .map(|count| vec![false; *count])
+            .map(|ids| vec![false; ids.len()])
             .collect::<Vec<_>>();
         let matched = table.matching(&filters, lasso.as_ref(), None);
         if self.group == Group::Molecule {
@@ -177,9 +177,9 @@ impl Criteria {
                 Group::Object => {
                     if let (Some(time), Some(object)) = (observation.time(), observation.object())
                         && let Some(mask) = keep.get_mut(time as usize)
-                        && let Some(slot) = mask.get_mut(object)
+                        && let Some(index) = ids[time as usize].index_of(object)
                     {
-                        *slot = true;
+                        mask[index] = true;
                     }
                 }
                 Group::Track => {
@@ -191,9 +191,9 @@ impl Criteria {
                     };
                     for node in track.nodes() {
                         if let Some(mask) = keep.get_mut(node.time() as usize)
-                            && let Some(slot) = mask.get_mut(node.object())
+                            && let Some(index) = ids[node.time() as usize].index_of(node.id())
                         {
-                            *slot = true;
+                            mask[index] = true;
                         }
                     }
                 }

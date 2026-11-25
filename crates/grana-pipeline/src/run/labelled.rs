@@ -46,8 +46,8 @@ impl Surfaces {
         });
     }
 
-    pub(super) fn finish(self) -> Option<SurfaceSet> {
-        self.builder.finish()
+    pub(super) fn finish(self, ids: &grana_object::ObjectIdSource) -> Option<SurfaceSet> {
+        self.builder.finish(ids)
     }
 }
 
@@ -55,10 +55,10 @@ pub(super) fn surfaces(
     reader: &Channels,
     time: u32,
     level: usize,
-    info: Level,
     ranges: &[Range<u32>; 3],
     labels: &[u32],
     drifts: &Drifts,
+    ids: &grana_object::ObjectIdSource,
 ) -> Result<Option<SurfaceSet>, String> {
     let width = ranges[0].end - ranges[0].start;
     let height = ranges[1].end - ranges[1].start;
@@ -70,6 +70,7 @@ pub(super) fn surfaces(
         "the labels cover every voxel of their box"
     );
     let channels = reader.pyramid().channel_count();
+    let info = reader.pyramid().level(level);
     let mut builder = Surfaces::new(level, info, &reader.no_data());
     let mut z = 0u32;
     while z < depth {
@@ -98,5 +99,5 @@ pub(super) fn surfaces(
         );
         z += core;
     }
-    Ok(builder.finish())
+    Ok(builder.finish(ids))
 }

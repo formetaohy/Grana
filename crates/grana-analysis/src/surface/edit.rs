@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use grana_object::{
-    Basin, ObjectAnchor, SampleAccumulator, SurfaceEdit, SurfaceEditKind, SurfaceSet,
-    SurfaceTopology,
+    Basin, ObjectAnchor, ObjectIdSource, SampleAccumulator, SurfaceEdit, SurfaceEditKind,
+    SurfaceSet, SurfaceTopology,
 };
 use grana_store::SpillStore;
 
@@ -15,6 +15,7 @@ pub fn apply(
     edit: &SurfaceEdit,
     voxel: f32,
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<SurfaceSet, String> {
     let anchors = set
         .objects()
@@ -46,8 +47,8 @@ pub fn apply(
         ));
     }
     match edit.kind() {
-        SurfaceEditKind::Merge => merge(set, &objects, store),
-        SurfaceEditKind::Split => split(set, objects[0], store),
+        SurfaceEditKind::Merge => merge(set, &objects, store, ids),
+        SurfaceEditKind::Split => split(set, objects[0], store, ids),
     }
 }
 
@@ -55,6 +56,7 @@ pub fn merge(
     set: &SurfaceSet,
     objects: &[usize],
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<SurfaceSet, String> {
     let topology = loaded(set)?;
     let count = set.object_count();
@@ -86,13 +88,14 @@ pub fn merge(
         }
         merged[target].extend_from_slice(basins);
     }
-    rebuild(&topology, set, targets, merged, store)
+    rebuild(&topology, set, targets, merged, store, ids)
 }
 
 pub fn split(
     set: &SurfaceSet,
     object: usize,
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<SurfaceSet, String> {
     let topology = loaded(set)?;
     let count = set.object_count();
@@ -121,7 +124,7 @@ pub fn split(
     let mut edited = leaves.to_vec();
     edited[object] = split[0].clone();
     edited.extend(split.into_iter().skip(1));
-    rebuild(&topology, set, targets, edited, store)
+    rebuild(&topology, set, targets, edited, store, ids)
 }
 
 fn loaded(set: &SurfaceSet) -> Result<Arc<SurfaceTopology>, String> {
@@ -228,6 +231,7 @@ fn rebuild(
     targets: Vec<u32>,
     leaves: Vec<Vec<u32>>,
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<SurfaceSet, String> {
     let objects = leaves.len();
     let channels = topology.info().channels();
@@ -255,6 +259,7 @@ fn rebuild(
         leaves,
         set.removed(),
         store,
+        ids,
     )?;
     match set.topology() {
         Some(topology) => assembled

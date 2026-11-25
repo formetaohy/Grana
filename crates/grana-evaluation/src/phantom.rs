@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use grana_object::TrackDetection;
+use grana_object::{ObjectId, TrackDetection};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -145,11 +145,18 @@ impl Phantom {
             for cell in &live {
                 markers.push(Marker::new(cell.label, time, cell.position, cell.radii));
                 if rng.random::<f32>() >= spec.miss {
-                    found.push(TrackDetection::new(cell.position, cell.radii));
+                    found.push(TrackDetection::new(
+                        ObjectId::new(cell.label),
+                        cell.position,
+                        cell.radii,
+                    ));
                 }
             }
             if rng.random::<f32>() < spec.false_alarm {
+                let id = ObjectId::new(next);
+                next += 1;
                 found.push(TrackDetection::new(
+                    id,
                     spawn(&mut rng, spec.extent, radii),
                     radii,
                 ));

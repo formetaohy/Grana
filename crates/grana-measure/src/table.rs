@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
 
-use grana_object::{CellSet, FilamentSet, IntensityTable, SpotSet, SurfaceSet, TrackSet};
+use grana_object::{CellSet, FilamentSet, IntensityTable, ObjectId, SpotSet, SurfaceSet, TrackSet};
 
 use crate::child::Child;
 use crate::column::{Column, Unit, length_key};
@@ -259,7 +259,7 @@ const ABSENT: u32 = u32::MAX;
 impl Observation {
     fn new(
         time: Option<u32>,
-        object: Option<usize>,
+        object: Option<ObjectId>,
         track: Option<usize>,
         molecule: Option<u32>,
     ) -> Self {
@@ -270,7 +270,7 @@ impl Observation {
         };
         Self {
             time: time.unwrap_or(ABSENT),
-            object: index(object),
+            object: object.map_or(0, ObjectId::raw),
             track: index(track),
             molecule: molecule.unwrap_or(ABSENT),
         }
@@ -280,8 +280,8 @@ impl Observation {
         (self.time != ABSENT).then_some(self.time)
     }
 
-    pub fn object(self) -> Option<usize> {
-        (self.object != ABSENT).then_some(self.object as usize)
+    pub fn object(self) -> Option<ObjectId> {
+        ObjectId::from_raw(self.object)
     }
 
     pub fn track(self) -> Option<usize> {
@@ -327,6 +327,16 @@ impl<'a> Objects<'a> {
             Self::Spots(set) => set.spots()[object].group(),
             Self::Surfaces(_) | Self::Cells(_) | Self::Filaments(_) => None,
         }
+    }
+
+    pub fn id(self, object: usize) -> ObjectId {
+        match self {
+            Self::Spots(set) => set.id(object),
+            Self::Surfaces(set) => set.id(object),
+            Self::Cells(set) => set.id(object),
+            Self::Filaments(set) => set.id(object),
+        }
+        .expect("every object of a frame carries its id")
     }
 
     pub(crate) fn intensities(self) -> &'a IntensityTable {
@@ -382,12 +392,13 @@ impl ObjectCell {
         tracks: Option<&TrackSet>,
         frame_interval: f32,
     ) -> f32 {
+        let id = frame.objects().id(object);
         match self {
             Self::Frame => (frame.time() + 1) as f32,
             Self::Time => frame.time() as f32 * frame_interval,
-            Self::Object => (object + 1) as f32,
+            Self::Object => id.raw() as f32,
             Self::Track => tracks
-                .and_then(|set| set.track_at(frame.time(), object))
+                .and_then(|set| set.track_at(frame.time(), id))
                 .map_or(0.0, |track| (track + 1) as f32),
             Self::Measure(measurement) => measurement.value(frame.objects(), object),
             Self::Relation { index, field } => field.value(frame.relations()[*index], object),
@@ -871,7 +882,7 @@ impl Table {
         let mut collected = vec![vec![Vec::<f32>::new(); self.rows()]; entries.len()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
             for object in 0..frame.objects().count() {
-                let Some(track) = tracks.track_at(frame.time(), object) else {
+                let Some(track) = tracks.track_at(frame.time(), frame.objects().id(object)) else {
                     continue;
                 };
                 let Some(row) = self.row_of_track(track) else {
@@ -1145,7 +1156,7 @@ impl Table {
         let mut collected = vec![Vec::<f32>::new(); self.rows()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
             for object in 0..frame.objects().count() {
-                let Some(track) = tracks.track_at(frame.time(), object) else {
+                let Some(track) = tracks.track_at(frame.time(), frame.objects().id(object)) else {
                     continue;
                 };
                 let Some(row) = self.row_of_track(track) else {
@@ -1164,7 +1175,7 @@ impl Table {
         let mut collected = vec![Vec::<f32>::new(); self.rows()];
         self.source.visit_all(&mut |frame: Frame<'_>| {
             for object in 0..frame.objects().count() {
-                let Some(track) = tracks.track_at(frame.time(), object) else {
+                let Some(track) = tracks.track_at(frame.time(), frame.objects().id(object)) else {
                     continue;
                 };
                 let Some(row) = self.row_of_track(track) else {
@@ -1857,15 +1868,11 @@ fn object_table(
         );
         let parents = frame.objects().count();
         for object in 0..parents {
+            let id = frame.objects().id(object);
             let track = tracks
                 .as_deref()
-                .and_then(|set| set.track_at(frame.time(), object));
-            observations.push(Observation::new(
-                Some(frame.time()),
-                Some(object),
-                track,
-                None,
-            ));
+                .and_then(|set| set.track_at(frame.time(), id));
+            observations.push(Observation::new(Some(frame.time()), Some(id), track, None));
         }
     });
     if observations.is_empty() {

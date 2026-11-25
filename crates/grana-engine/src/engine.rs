@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use grana_display::CameraState;
 use grana_gpu::Pipelines;
+use grana_object::ObjectId;
 use grana_render::{Delivery, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
 use grana_volume::{BrickRequest, Clip, Damage, PackedBrick, Pyramid, Region};
@@ -433,10 +434,13 @@ impl Engine {
                     .find(|members| members.key() == key);
                 match members.and_then(|members| members.resolve(level, index)) {
                     Some((_, crate::spot::STANDALONE)) => Picked::Seed,
-                    Some((set, member)) => Picked::Hit(Selection {
-                        set,
-                        item: Item::Object(member as usize),
-                    }),
+                    Some((set, member)) => match ObjectId::from_raw(member) {
+                        Some(id) => Picked::Hit(Selection {
+                            set,
+                            item: Item::Object(id),
+                        }),
+                        None => Picked::Miss,
+                    },
                     None => Picked::Miss,
                 }
             }

@@ -486,6 +486,9 @@ impl Session {
                     removed.push(index);
                     match job {
                         Job::Detect(set) => {
+                            if let Some(scene) = self.scene.as_mut() {
+                                scene.end_replace(set);
+                            }
                             finished.push(job);
                             if self.recipe.is_none()
                                 && self.detect_input(set).as_ref() != inputs[index].as_ref()
@@ -554,6 +557,11 @@ impl Session {
                         .is_some_and(|recipe| recipe.matches(job))
                     {
                         self.abort_recipe();
+                    }
+                    if let Job::Detect(set) = job
+                        && let Some(scene) = self.scene.as_mut()
+                    {
+                        scene.end_replace(set);
                     }
                     if let Job::Import(set) = job {
                         failed.push(set);
@@ -782,6 +790,11 @@ impl Session {
             .and_then(Analysis::take_fallback);
         self.analysis.retain(|analysis| analysis.job() != job);
         self.progress.retain(|progress| progress.job != job);
+        if let Job::Detect(set) = job
+            && let Some(scene) = self.scene.as_mut()
+        {
+            scene.end_replace(set);
+        }
         fallback
     }
 
@@ -1150,7 +1163,7 @@ impl Session {
         self.message = None;
         self.record_progress(Job::Detect(set), 0, 0, 0);
         if let Some(scene) = self.scene.as_mut() {
-            scene.clear_object(set);
+            scene.begin_replace(set);
         }
         let Some(input) = self.detect_input(set) else {
             return;
@@ -1167,6 +1180,7 @@ impl Session {
         let scene = self.scene.as_ref()?;
         let object = scene.objects.get(set)?;
         let channel = object.channel();
+        let ids = object.id_source();
         if channel >= scene.base_channels() {
             let spec = scene.derived()[channel - scene.base_channels()].spec();
             if let Some(set) = spec.mask() {
@@ -1266,6 +1280,7 @@ impl Session {
                     channels,
                     request: GrowRequest::new(
                         channel,
+                        ids.clone(),
                         params,
                         region,
                         drifts,
@@ -1275,7 +1290,8 @@ impl Session {
                 }
             }
             (_, Some(segment)) => {
-                let request = SegmentRequest::new(channel, segment, region, drifts, roi);
+                let request =
+                    SegmentRequest::new(channel, ids.clone(), segment, region, drifts, roi);
                 DetectPlan::Segment {
                     channels,
                     request: if seeds.iter().any(|frame| !frame.is_empty()) {
@@ -1299,10 +1315,13 @@ impl Session {
                         channel,
                         params,
                         region,
-                        roi,
-                        drifts,
-                        grana_analysis::Budget::new(0),
-                        self.store(),
+                        grana_pipeline::DetectSources {
+                            roi,
+                            drifts,
+                            budget: grana_analysis::Budget::new(0),
+                            store: self.store(),
+                            ids: ids.clone(),
+                        },
                     )
                     .with_seeds(seeds, policy),
                 }
@@ -1415,6 +1434,7 @@ impl Session {
             return;
         };
         let source = object.source();
+        let ids = object.id_source();
         if source.counts().iter().all(Option::is_none) {
             return;
         }
@@ -1422,7 +1442,8 @@ impl Session {
         self.message = None;
         self.record_progress(Job::Recut(set), 0, 0, source.frames() as usize);
         self.analysis.push(
-            crate::recut(Job::Recut(set), source, cut, 0, self.store()).with_fallback(fallback),
+            crate::recut(Job::Recut(set), source, cut, 0, self.store(), ids)
+                .with_fallback(fallback),
         );
     }
 

@@ -14,7 +14,7 @@ use crate::key::ObjectSetKey;
 use crate::label_export::LabelExport;
 use crate::mask::{MaskFilter, MaskGate, RelationGate};
 use crate::object::{ObjectFrame, ObjectKind};
-use crate::object_set::{ObjectSet, ObjectSetId};
+use crate::object_set::{ObjectSet, ObjectSetId, Readoption};
 use crate::objects::Objects;
 use crate::overlay::Overlays;
 use crate::provenance::{Criteria, Provenance};
@@ -28,7 +28,9 @@ use grana_display::{
 };
 use grana_geometry::ray_hit;
 use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
-use grana_object::{MaskEdit, RelationFrame, SurfaceEdit, TrackParams, TrackSet};
+use grana_object::{
+    MaskEdit, ObjectId, ObjectIds, RelationFrame, SurfaceEdit, TrackParams, TrackSet,
+};
 use grana_optics::Psf;
 use grana_volume::{
     CHANNEL_LIMIT, Calibration, ChannelInfo, ChannelSet, Clip, Intensity, Region, Spacing,
@@ -44,7 +46,7 @@ pub struct Selection {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
-    Object(usize),
+    Object(ObjectId),
     Track(usize),
 }
 
@@ -730,7 +732,7 @@ impl Scene {
         &mut self,
         id: ObjectSetId,
         time: u32,
-        object: usize,
+        object: ObjectId,
     ) -> Result<bool, String> {
         self.delete_objects(id, &[(time, vec![object])])
     }
@@ -738,59 +740,36 @@ impl Scene {
     pub fn delete_objects(
         &mut self,
         id: ObjectSetId,
-        plan: &[(u32, Vec<usize>)],
+        plan: &[(u32, Vec<ObjectId>)],
     ) -> Result<bool, String> {
         let mut keeps = Vec::with_capacity(plan.len());
         for (time, objects) in plan {
             if objects.is_empty() {
                 continue;
             }
-            let count = self
+            let frame = self
                 .objects
                 .get(id)
                 .and_then(|set| set.frame_shared(*time))
-                .map(|frame| frame.object_count())
                 .ok_or_else(|| {
                     format!("the deleted objects name the frame {time} of no picture")
                 })?;
-            let mut keep = vec![true; count];
+            let mut keep = vec![true; frame.object_count()];
             for object in objects {
-                let slot = keep.get_mut(*object).ok_or_else(|| {
-                    format!("the frame {time} holds {count} objects and object {object} is named")
+                let index = frame.index_of(*object).ok_or_else(|| {
+                    format!(
+                        "the frame {time} holds no object {} of the set",
+                        object.raw()
+                    )
                 })?;
-                *slot = false;
+                keep[index] = false;
             }
             keeps.push((*time, keep));
         }
         if self.objects.retain_objects(id, &keeps)? == 0 {
             return Ok(false);
         }
-        let time = self.time();
-        if let Some((_, keep)) = keeps.iter().find(|(at, _)| *at == time) {
-            let mut positions = Vec::with_capacity(keep.len());
-            let mut next = 0;
-            for kept in keep {
-                positions.push(kept.then_some(next));
-                if *kept {
-                    next += 1;
-                }
-            }
-            self.selections.retain_mut(|selection| {
-                if selection.set != id {
-                    return true;
-                }
-                let Item::Object(index) = selection.item else {
-                    return true;
-                };
-                match positions.get(index).copied().flatten() {
-                    Some(mapped) => {
-                        selection.item = Item::Object(mapped);
-                        true
-                    }
-                    None => false,
-                }
-            });
-        }
+        self.settle_install(id);
         self.sync_coloc_mask();
         self.sync_masks();
         Ok(true)
@@ -878,11 +857,9 @@ impl Scene {
                 set.name()
             ));
         };
-        let counts = (0..self.frame_count())
-            .map(|time| filtered.object_count(time))
-            .collect::<Vec<_>>();
+        let ids = filtered.id_frames();
         let params = filtered.params();
-        if counts.iter().all(|count| *count == 0) {
+        if ids.iter().all(ObjectIds::is_empty) {
             for time in 0..self.frame_count() {
                 self.install_optional(id, time, None);
             }
@@ -912,7 +889,7 @@ impl Scene {
                     set.name()
                 )
             })?;
-        let keep = criteria.keep(&table, tracks, &groups, &counts)?;
+        let keep = criteria.keep(&table, tracks, &groups, &ids)?;
         if keep.iter().flatten().all(|kept| !kept) {
             return Err(format!(
                 "the filter of {} keeps no object of {}",
@@ -1057,10 +1034,10 @@ impl Scene {
         &mut self,
         id: ObjectSetId,
         time: u32,
-        objects: &[usize],
+        ids: &[ObjectId],
         hidden: bool,
     ) -> bool {
-        self.objects.set_hidden(id, time, objects, hidden)
+        self.objects.set_hidden(id, time, ids, hidden)
     }
 
     pub fn clear_hidden(&mut self, id: ObjectSetId) -> bool {
@@ -1316,8 +1293,10 @@ impl Scene {
                 let Some(group) = spot.group() else {
                     continue;
                 };
-                if object.visible_object(time, index) {
-                    grouped.push((group, time, index, spot.center()));
+                if object.visible_object(time, index)
+                    && let Some(id) = spots.id(index)
+                {
+                    grouped.push((group, time, id, spot.center()));
                 }
             }
         }
@@ -1579,33 +1558,85 @@ impl Scene {
         self.objects.set_object_coloc(id, None)
     }
 
-    pub fn install(&mut self, id: ObjectSetId, time: u32, frame: ObjectFrame) {
-        if !self.objects.install(id, time, frame) {
-            return;
-        }
-        self.settle_install(id, time);
+    pub fn begin_replace(&mut self, id: ObjectSetId) -> bool {
+        self.objects
+            .get_mut(id)
+            .is_some_and(ObjectSet::begin_replace)
     }
 
-    pub fn install_shared(&mut self, id: ObjectSetId, time: u32, frame: Arc<ObjectFrame>) {
-        if !self.objects.install_shared(id, time, frame) {
-            return;
+    pub fn end_replace(&mut self, id: ObjectSetId) {
+        if self.objects.get_mut(id).is_some_and(ObjectSet::end_replace) {
+            self.settle_install(id);
+            self.sync_masks();
         }
-        self.settle_install(id, time);
     }
 
-    pub fn install_optional(&mut self, id: ObjectSetId, time: u32, frame: Option<ObjectFrame>) {
-        if !self.objects.install_optional(id, time, frame.map(Arc::new)) {
-            return;
+    pub fn install(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: ObjectFrame,
+    ) -> Option<Readoption> {
+        let report = self.objects.install(id, time, frame)?;
+        if !self.replacing(id) {
+            self.settle_install(id);
         }
-        self.settle_install(id, time);
+        Some(report)
     }
 
-    fn settle_install(&mut self, id: ObjectSetId, time: u32) {
-        if time == self.time {
-            self.selections.retain(|selection| {
-                !(selection.set == id && matches!(selection.item, Item::Object(_)))
-            });
+    fn replacing(&self, id: ObjectSetId) -> bool {
+        self.objects.get(id).is_some_and(ObjectSet::replacing)
+    }
+
+    pub fn install_shared(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: Arc<ObjectFrame>,
+    ) -> Option<Readoption> {
+        let report = self.objects.install_shared(id, time, frame)?;
+        if !self.replacing(id) {
+            self.settle_install(id);
         }
+        Some(report)
+    }
+
+    pub fn install_optional(
+        &mut self,
+        id: ObjectSetId,
+        time: u32,
+        frame: Option<ObjectFrame>,
+    ) -> Option<Readoption> {
+        let report = self
+            .objects
+            .install_optional(id, time, frame.map(Arc::new))?;
+        if !self.replacing(id) {
+            self.settle_install(id);
+        }
+        Some(report)
+    }
+
+    fn settle_install(&mut self, id: ObjectSetId) {
+        let held = self
+            .objects
+            .get(id)
+            .map(|set| (0..set.frame_count()).map(|time| set.frame_shared(time)))
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        self.selections.retain(|selection| {
+            if selection.set != id {
+                return true;
+            }
+            let Item::Object(id) = selection.item else {
+                return true;
+            };
+            held.iter().any(|frame| {
+                frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.index_of(id).is_some())
+            })
+        });
         self.sync_coloc_mask();
         self.sync_masks();
     }
@@ -1697,7 +1728,7 @@ impl Scene {
         self.drop_track_selection(id);
     }
 
-    pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: usize) -> bool {
+    pub fn cut_track(&mut self, id: ObjectSetId, time: u32, object: ObjectId) -> bool {
         if !self.objects.cut_track(id, time, object) {
             return false;
         }
@@ -1708,8 +1739,8 @@ impl Scene {
     pub fn join_tracks(
         &mut self,
         id: ObjectSetId,
-        source: (u32, usize),
-        target: (u32, usize),
+        source: (u32, ObjectId),
+        target: (u32, ObjectId),
     ) -> bool {
         if !self.objects.join_tracks(id, source, target) {
             return false;
@@ -1721,9 +1752,9 @@ impl Scene {
     pub fn divide_tracks(
         &mut self,
         id: ObjectSetId,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
     ) -> bool {
         if !self.objects.divide_tracks(id, parent, first, second) {
             return false;
@@ -1735,9 +1766,9 @@ impl Scene {
     pub fn merge_tracks(
         &mut self,
         id: ObjectSetId,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
     ) -> bool {
         if !self.objects.merge_tracks(id, first, second, child) {
             return false;
@@ -1749,8 +1780,8 @@ impl Scene {
     pub fn reparent_track(
         &mut self,
         id: ObjectSetId,
-        child: (u32, usize),
-        parent: (u32, usize),
+        child: (u32, ObjectId),
+        parent: (u32, ObjectId),
     ) -> bool {
         if !self.objects.reparent_track(id, child, parent) {
             return false;
@@ -1759,7 +1790,7 @@ impl Scene {
         true
     }
 
-    pub fn detach_track(&mut self, id: ObjectSetId, child: (u32, usize)) -> bool {
+    pub fn detach_track(&mut self, id: ObjectSetId, child: (u32, ObjectId)) -> bool {
         if !self.objects.detach_track(id, child) {
             return false;
         }
@@ -1991,9 +2022,17 @@ impl Scene {
     }
 
     pub fn object_selected(&self, set: ObjectSetId, index: usize) -> bool {
+        let Some(id) = self
+            .objects
+            .get(set)
+            .and_then(|set| set.frame_shared(self.time))
+            .and_then(|frame| frame.id_of(index))
+        else {
+            return false;
+        };
         self.selections.contains(&Selection {
             set,
-            item: Item::Object(index),
+            item: Item::Object(id),
         })
     }
 

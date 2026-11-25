@@ -10,7 +10,7 @@ use grana_measure::{
     ObjectColocValue,
 };
 use grana_object::{
-    CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link,
+    CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, ObjectIds,
     RelationFrame, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Track,
     TrackLink, TrackNode, TrackSet,
 };
@@ -464,7 +464,7 @@ impl Encode for ItemState {
         match self {
             Self::Object(index) => {
                 writer.u8(0);
-                writer.count(*index);
+                writer.u32(index.raw());
             }
             Self::Track(index) => {
                 writer.u8(1);
@@ -488,11 +488,8 @@ impl Encode for SetState {
         writer.bool(self.labels);
         self.label.encode(writer);
         writer.count(self.hidden.len());
-        for mask in self.hidden.iter() {
-            writer.count(mask.len());
-            for hidden in mask {
-                writer.bool(*hidden);
-            }
+        for ids in self.hidden.iter() {
+            ids.encode(writer);
         }
         writer.f32(self.opacity);
         writer.f32(self.material.roughness());
@@ -676,7 +673,7 @@ impl Encode for TrackEdit {
 
 fn encode_node(node: TrackAnchor, writer: &mut Encoder<'_>) {
     writer.u32(node.time());
-    writer.count(node.object());
+    writer.u32(node.id().raw());
     for value in node.position() {
         writer.f32(value);
     }
@@ -903,7 +900,7 @@ impl Encode for TrackLink {
 impl Encode for TrackNode {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.u32(self.time());
-        writer.count(self.object());
+        writer.u32(self.id().raw());
         for value in self.centroid() {
             writer.f32(value);
         }
@@ -1124,9 +1121,19 @@ impl Encode for CellSet {
     }
 }
 
+impl Encode for ObjectIds {
+    fn encode(&self, writer: &mut Encoder<'_>) {
+        writer.count(self.len());
+        for id in self.as_slice() {
+            writer.u32(id.raw());
+        }
+    }
+}
+
 impl Encode for SpotSet {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
+        self.ids().encode(writer);
         self.spots().encode(writer);
         self.intensities().encode(writer);
     }
@@ -1154,6 +1161,7 @@ impl Encode for Spot {
 impl Encode for SurfaceSet {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
+        self.ids().encode(writer);
         self.objects().encode(writer);
         match self.geometry() {
             Ok(geometry) => geometry.encode(writer),
@@ -1211,6 +1219,7 @@ impl Encode for SurfaceStatistics {
 impl Encode for FilamentSet {
     fn encode(&self, writer: &mut Encoder<'_>) {
         writer.count(self.level());
+        self.ids().encode(writer);
         self.objects().encode(writer);
         match self.geometry() {
             Ok(geometry) => geometry.encode(writer),

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
+use grana_object::{IntensityTable, ObjectIdSource, SampleAccumulator, Spot, SpotSet};
 use grana_readout::localization::{self, Localization};
 use grana_scene::{LocalizationAlignment, ObjectFrame};
 use grana_warp::Warp;
@@ -17,10 +17,11 @@ const SAMPLE_LEVEL: usize = 0;
 pub struct LocalizationRequest {
     file: String,
     alignment: LocalizationAlignment,
+    ids: ObjectIdSource,
 }
 
 impl LocalizationRequest {
-    pub fn new(file: &str, alignment: LocalizationAlignment) -> Self {
+    pub fn new(file: &str, alignment: LocalizationAlignment, ids: ObjectIdSource) -> Self {
         assert!(
             !file.trim().is_empty(),
             "an import names a localization table"
@@ -28,6 +29,7 @@ impl LocalizationRequest {
         Self {
             file: file.to_string(),
             alignment,
+            ids,
         }
     }
 
@@ -75,7 +77,13 @@ pub fn localization(
         let time = frame.time();
         let rows = frame.rows();
         done += rows.len() as u64;
-        if let Some(set) = spots(reader, time, rows, &request.alignment.warp(time))? {
+        if let Some(set) = spots(
+            reader,
+            time,
+            rows,
+            &request.alignment.warp(time),
+            &request.ids,
+        )? {
             sink(Event::Frame {
                 time,
                 frame: ObjectFrame::Spots(Arc::new(set)),
@@ -99,6 +107,7 @@ fn spots(
     time: u32,
     entries: &[Localization],
     warp: &Warp,
+    ids: &ObjectIdSource,
 ) -> Result<Option<SpotSet>, String> {
     if entries.is_empty() {
         return Ok(None);
@@ -117,7 +126,12 @@ fn spots(
         })
         .collect::<Vec<_>>();
     let intensities = intensities(reader, time, &spots, warp)?;
-    Ok(Some(SpotSet::new(0, spots, intensities)))
+    Ok(Some(SpotSet::new(
+        0,
+        ids.allocate(spots.len()),
+        spots,
+        intensities,
+    )))
 }
 
 fn intensities(

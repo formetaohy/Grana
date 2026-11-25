@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction, VolumeStyle};
 use grana_measure::ObjectColoc;
-use grana_object::{RelationFrame, TrackSet};
+use grana_object::{ObjectId, ObjectIds, RelationFrame, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
 
 use crate::annotation::AnnotationState;
@@ -69,7 +69,7 @@ pub struct SelectionState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ItemState {
-    Object(usize),
+    Object(ObjectId),
     Track(usize),
 }
 
@@ -92,7 +92,7 @@ pub struct SetState {
     pub visible: bool,
     pub labels: bool,
     pub label: Option<ObjectColor>,
-    pub hidden: Arc<Vec<Vec<bool>>>,
+    pub hidden: Arc<Vec<ObjectIds>>,
     pub opacity: f32,
     pub material: Material,
     pub params: ObjectParams,
@@ -359,15 +359,14 @@ impl Scene {
     }
 
     pub(crate) fn validate_selections(&mut self) {
-        let time = self.time();
         let objects = &self.objects;
         self.selections.retain(|selection| {
             objects
                 .get(selection.set)
                 .is_some_and(|set| match selection.item {
-                    Item::Object(index) => set
-                        .frame_shared(time)
-                        .is_some_and(|frame| index < frame.object_count()),
+                    Item::Object(id) => (0..set.frame_count())
+                        .filter_map(|time| set.frame_shared(time))
+                        .any(|frame| frame.index_of(id).is_some()),
                     Item::Track(index) => {
                         set.tracks().is_some_and(|layer| index < layer.set().len())
                     }

@@ -1,33 +1,29 @@
-use grana_object::{ObjectAnchor, assign};
+use grana_object::{ObjectAnchor, ObjectId, assign};
 
 use crate::revision::Revision;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackAnchor {
     time: u32,
-    object: usize,
+    id: ObjectId,
     position: [f32; 3],
 }
 
 impl TrackAnchor {
-    pub fn new(time: u32, object: usize, position: [f32; 3]) -> Self {
+    pub fn new(time: u32, id: ObjectId, position: [f32; 3]) -> Self {
         assert!(
             position.iter().all(|value| value.is_finite()),
             "a track anchor names a finite position"
         );
-        Self {
-            time,
-            object,
-            position,
-        }
+        Self { time, id, position }
     }
 
     pub fn time(self) -> u32 {
         self.time
     }
 
-    pub fn object(self) -> usize {
-        self.object
+    pub fn id(self) -> ObjectId {
+        self.id
     }
 
     pub fn position(self) -> [f32; 3] {
@@ -140,7 +136,7 @@ impl Curation {
                     if first.time <= parent.time || second.time <= parent.time {
                         return Err("a division follows the time axis".to_string());
                     }
-                    if first.time == second.time && first.object == second.object {
+                    if first.id == second.id {
                         return Err("a division names two daughter tracks".to_string());
                     }
                 }
@@ -157,7 +153,7 @@ impl Curation {
                     if first.time >= child.time || second.time >= child.time {
                         return Err("a merge follows the time axis".to_string());
                     }
-                    if first.time == second.time && first.object == second.object {
+                    if first.id == second.id {
                         return Err("a merge names two parent tracks".to_string());
                     }
                 }
@@ -179,6 +175,16 @@ impl Curation {
 
     pub fn hidden(&self) -> &[Vec<ObjectAnchor>] {
         &self.hidden
+    }
+
+    pub fn hidden_targets(&self, time: u32, anchors: &[ObjectAnchor], voxel: f32) -> Vec<usize> {
+        let Some(records) = self.hidden.get(time as usize) else {
+            return Vec::new();
+        };
+        assign(records, anchors, voxel)
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     pub fn edits(&self) -> &[TrackEdit] {
@@ -234,15 +240,13 @@ impl Curation {
     }
 
     pub(crate) fn seed(&mut self, frames: usize) {
-        if !self.removed.is_empty() {
-            if self.hidden.len() != frames {
-                self.hidden = vec![Vec::new(); frames];
-            }
-            return;
+        if self.removed.is_empty() {
+            self.removed = vec![Vec::new(); frames];
+            self.applied = vec![Revision::ZERO; frames];
         }
-        self.removed = vec![Vec::new(); frames];
-        self.hidden = vec![Vec::new(); frames];
-        self.applied = vec![Revision::ZERO; frames];
+        if self.hidden.len() != frames {
+            self.hidden = vec![Vec::new(); frames];
+        }
     }
 
     pub(crate) fn record_hidden(&mut self, time: u32, anchors: Vec<ObjectAnchor>) {
@@ -261,21 +265,6 @@ impl Curation {
         for frame in &mut self.hidden {
             frame.clear();
         }
-    }
-
-    pub(crate) fn hidden_targets(
-        &self,
-        time: u32,
-        anchors: &[ObjectAnchor],
-        voxel: f32,
-    ) -> Vec<usize> {
-        let Some(records) = self.hidden.get(time as usize) else {
-            return Vec::new();
-        };
-        assign(records, anchors, voxel)
-            .into_iter()
-            .flatten()
-            .collect()
     }
 
     pub(crate) fn record(&mut self, time: u32, keep: &[bool], anchors: &[ObjectAnchor]) {

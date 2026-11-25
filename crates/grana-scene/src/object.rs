@@ -3,9 +3,9 @@ use std::sync::Arc;
 use grana_geometry::{Bounds, PackedMesh};
 use grana_measure::{Measurement, Objects};
 use grana_object::{
-    CellParams, CellSet, FilamentParams, FilamentSet, IntensityTable, ObjectAnchor, Shape, Spot,
-    SpotParams, SpotSet, SurfaceFilter, SurfaceParams, SurfaceSet, TrackDetection, TrackEvents,
-    TrackParams,
+    CellParams, CellSet, FilamentParams, FilamentSet, IntensityTable, ObjectAnchor, ObjectId,
+    ObjectIds, Shape, Spot, SpotParams, SpotSet, SurfaceFilter, SurfaceParams, SurfaceSet,
+    TrackDetection, TrackEvents, TrackParams,
 };
 
 const SPOT_STEP: f32 = 8.0;
@@ -369,6 +369,37 @@ impl ObjectFrame {
         Self::Spots(Arc::new(set))
     }
 
+    pub fn ids(&self) -> &ObjectIds {
+        match self {
+            Self::Spots(set) => set.ids(),
+            Self::Surfaces(set) => set.ids(),
+            Self::Filaments(set) => set.ids(),
+            Self::Cells(set) => set.ids(),
+        }
+    }
+
+    pub fn id_of(&self, object: usize) -> Option<ObjectId> {
+        self.ids().get(object)
+    }
+
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.ids().index_of(id)
+    }
+
+    pub fn reidentified(&self, ids: ObjectIds) -> Self {
+        assert_eq!(
+            ids.len(),
+            self.object_count(),
+            "a reidentified frame names every object it holds"
+        );
+        match self {
+            Self::Spots(set) => Self::Spots(Arc::new(set.reidentified(ids))),
+            Self::Surfaces(set) => Self::Surfaces(set.reidentified(ids)),
+            Self::Filaments(set) => Self::Filaments(set.reidentified(ids)),
+            Self::Cells(set) => Self::Cells(set.reidentified(ids)),
+        }
+    }
+
     pub fn anchors(&self) -> Vec<ObjectAnchor> {
         match self {
             Self::Spots(set) => set
@@ -512,32 +543,53 @@ impl ObjectFrame {
     }
 
     pub fn detections(&self) -> Vec<TrackDetection> {
+        let ids = self.ids();
+        let id = |object: usize| {
+            ids.get(object)
+                .expect("a detection names an object of its frame")
+        };
         match self {
             Self::Spots(set) => set
                 .spots()
                 .iter()
-                .map(|spot| TrackDetection::new(spot.center(), spot.radii()))
+                .enumerate()
+                .map(|(object, spot)| TrackDetection::new(id(object), spot.center(), spot.radii()))
                 .collect(),
             Self::Surfaces(set) => set
                 .objects()
                 .iter()
-                .map(|object| {
-                    TrackDetection::new(object.centroid(), [equivalent_radius(object.volume()); 3])
+                .enumerate()
+                .map(|(object, held)| {
+                    TrackDetection::new(
+                        id(object),
+                        held.centroid(),
+                        [equivalent_radius(held.volume()); 3],
+                    )
                 })
                 .collect(),
             Self::Filaments(set) => set
                 .objects()
                 .iter()
-                .map(|object| {
-                    TrackDetection::new(object.centroid(), [(0.5 * object.diameter()) as f32; 3])
+                .enumerate()
+                .map(|(object, held)| {
+                    TrackDetection::new(
+                        id(object),
+                        held.centroid(),
+                        [(0.5 * held.diameter()) as f32; 3],
+                    )
                 })
                 .collect(),
             Self::Cells(set) => set
                 .bodies()
                 .objects()
                 .iter()
-                .map(|object| {
-                    TrackDetection::new(object.centroid(), [equivalent_radius(object.volume()); 3])
+                .enumerate()
+                .map(|(object, held)| {
+                    TrackDetection::new(
+                        id(object),
+                        held.centroid(),
+                        [equivalent_radius(held.volume()); 3],
+                    )
                 })
                 .collect(),
         }

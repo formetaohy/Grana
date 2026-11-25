@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use grana_geometry::PackedMesh;
-use grana_object::TrackSet;
+use grana_object::{ObjectId, TrackSet};
 
 use crate::revision::Revision;
 
@@ -46,8 +46,8 @@ impl TrackLayer {
         self.revision = revision;
     }
 
-    pub fn cut(&mut self, time: u32, object: usize, thickness: f32, revision: Revision) -> bool {
-        let Some(set) = self.set.cut(time, object) else {
+    pub fn cut(&mut self, time: u32, id: ObjectId, thickness: f32, revision: Revision) -> bool {
+        let Some(set) = self.set.cut(time, id) else {
             return false;
         };
         self.install(set, thickness, revision);
@@ -56,8 +56,8 @@ impl TrackLayer {
 
     pub fn join(
         &mut self,
-        source: (u32, usize),
-        target: (u32, usize),
+        source: (u32, ObjectId),
+        target: (u32, ObjectId),
         thickness: f32,
         revision: Revision,
     ) -> bool {
@@ -70,9 +70,9 @@ impl TrackLayer {
 
     pub fn divide(
         &mut self,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
         thickness: f32,
         revision: Revision,
     ) -> bool {
@@ -85,9 +85,9 @@ impl TrackLayer {
 
     pub fn merge(
         &mut self,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
         thickness: f32,
         revision: Revision,
     ) -> bool {
@@ -100,8 +100,8 @@ impl TrackLayer {
 
     pub fn reparent(
         &mut self,
-        child: (u32, usize),
-        parent: (u32, usize),
+        child: (u32, ObjectId),
+        parent: (u32, ObjectId),
         thickness: f32,
         revision: Revision,
     ) -> bool {
@@ -112,7 +112,7 @@ impl TrackLayer {
         true
     }
 
-    pub fn detach(&mut self, child: (u32, usize), thickness: f32, revision: Revision) -> bool {
+    pub fn detach(&mut self, child: (u32, ObjectId), thickness: f32, revision: Revision) -> bool {
         let Some(set) = self.set.detach(child) else {
             return false;
         };

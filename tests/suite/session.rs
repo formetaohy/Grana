@@ -6,13 +6,15 @@ use grana_animation::Timeline;
 use grana_display::{Camera, CameraState};
 use grana_engine::Engine;
 use grana_object::{
-    IntensityTable, MaskMode, MaskTool, ObjectAnchor, SampleStatistics, Spot, SpotParams, SpotSet,
+    IntensityTable, MaskMode, MaskTool, ObjectAnchor, ObjectId, SampleStatistics, Spot, SpotParams,
     SurfaceFilter, SurfaceParams,
 };
 use grana_project::{Export, NamedView, Project, Source, ViewState};
 use grana_protocol::{NamedViewSpec, Protocol, ViewSpec};
 use grana_render::Delivery;
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene};
+use grana_scene::{
+    Dataset, Item, Measure, ObjectFrame, ObjectKind, ObjectParams, Scene, Selection,
+};
 use grana_session::{Command, Session};
 use grana_store::SpillStore;
 use grana_volume::{
@@ -20,7 +22,7 @@ use grana_volume::{
     VolumeSeries, VoxelData,
 };
 
-use crate::support::{self, Temp};
+use crate::support::{self, Temp, spot_set};
 
 const HIGH: u16 = 65_535;
 
@@ -96,6 +98,130 @@ fn series() -> VolumeSeries {
         HIGH,
     );
     VolumeSeries::new(vec![volume], 1.0)
+}
+
+fn nuclei_params() -> ObjectParams {
+    ObjectParams::Surfaces(SurfaceParams::new(
+        0.5,
+        0.0,
+        0.0,
+        0.0,
+        SurfaceFilter::new(0.0, 0.0, 0.0, 0.0),
+    ))
+}
+
+fn nuclei(session: &mut Session) -> grana_scene::ObjectSetId {
+    open_series(session, "nuclei", series());
+    session.execute(Command::SelectChannel(0));
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    let set = last_surfaces(session);
+    session.execute(Command::SetObjectParams {
+        set,
+        params: nuclei_params(),
+    });
+    session.execute(Command::Detect(set));
+    settle(session);
+    assert_eq!(objects(session, set), 2, "the two nuclei are detected");
+    set
+}
+
+fn identities(session: &Session, set: grana_scene::ObjectSetId) -> Vec<ObjectId> {
+    session
+        .scene()
+        .expect("the series opens")
+        .objects
+        .get(set)
+        .map(|held| held.ids(0).to_vec())
+        .unwrap_or_default()
+}
+
+fn hidden_identities(session: &Session, set: grana_scene::ObjectSetId) -> Vec<ObjectId> {
+    let scene = session.scene().expect("the series opens");
+    let held = scene.objects.get(set).expect("the object set is staged");
+    held.ids(0)
+        .as_slice()
+        .iter()
+        .copied()
+        .filter(|id| {
+            let index = held.frame_shared(0).and_then(|frame| frame.index_of(*id));
+            index.is_some_and(|index| held.hidden_object(0, index))
+        })
+        .collect()
+}
+
+#[test]
+fn keeps_identity_and_references_through_a_redetection() {
+    let mut session = Session::new();
+    let set = nuclei(&mut session);
+    let before = identities(&session, set);
+    let first = before[0];
+    session.execute(Command::Select(Some(Selection {
+        set,
+        item: Item::Object(first),
+    })));
+    session.execute(Command::SetObjectHidden {
+        set,
+        time: 0,
+        objects: vec![first],
+        hidden: true,
+    });
+    assert_eq!(hidden_identities(&session, set), vec![first]);
+    session.execute(Command::Detect(set));
+    settle(&mut session);
+    assert_eq!(
+        identities(&session, set),
+        before,
+        "detecting again keeps every identity"
+    );
+    assert_eq!(
+        hidden_identities(&session, set),
+        vec![first],
+        "the hidden object stays the one that was hidden"
+    );
+    let selection = session.scene().expect("the series opens").selection();
+    assert_eq!(
+        selection.map(|held| held.item),
+        Some(Item::Object(first)),
+        "the selection still names its own object"
+    );
+}
+
+#[test]
+fn drops_the_references_of_a_deleted_object() {
+    let mut session = Session::new();
+    let set = nuclei(&mut session);
+    let before = identities(&session, set);
+    let first = before[0];
+    session.execute(Command::Select(Some(Selection {
+        set,
+        item: Item::Object(first),
+    })));
+    session.execute(Command::SetObjectHidden {
+        set,
+        time: 0,
+        objects: vec![first],
+        hidden: true,
+    });
+    session.execute(Command::DeleteObject {
+        set,
+        time: 0,
+        object: first,
+    });
+    let after = identities(&session, set);
+    assert_eq!(after.len(), before.len() - 1, "one nucleus is dropped");
+    assert!(!after.contains(&first), "the deleted identity is gone");
+    assert!(
+        hidden_identities(&session, set).is_empty(),
+        "a deleted object leaves no hidden reference behind"
+    );
+    assert!(
+        session
+            .scene()
+            .expect("the series opens")
+            .selection()
+            .is_none(),
+        "a deleted object leaves no selection behind"
+    );
 }
 
 #[test]
@@ -641,7 +767,7 @@ fn round_trips_a_project() {
     scene.install(
         spots,
         0,
-        ObjectFrame::from_spots(SpotSet::new(
+        ObjectFrame::from_spots(spot_set(
             0,
             vec![
                 Spot::new([0.0, 0.0, 0.0], 1.0, 0.5),

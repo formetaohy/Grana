@@ -854,8 +854,12 @@ impl Builder<'_> {
         let Some(curation) = curation else {
             return Ok(());
         };
-        let frames = self.scene.dataset.frame_count() as usize;
-        let curation = curation.curation(frames).map_err(|detail| {
+        let Some(set) = self.scene.objects.get(id) else {
+            return Err(ProtocolError::Invalid(format!(
+                "the manual edits of {name} name an object set that left the scene"
+            )));
+        };
+        let curation = curation.curation(set).map_err(|detail| {
             ProtocolError::Invalid(format!("the manual edits of {name} {detail}"))
         })?;
         self.scene.set_curation(id, curation);

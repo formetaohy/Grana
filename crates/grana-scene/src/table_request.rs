@@ -294,19 +294,22 @@ impl TableRequest {
             for metric in ColocMetric::ALL {
                 let column = metric.column(coloc.pair(), source.channels(), &keys);
                 let values = match group {
-                    Group::Object => (0..table.rows())
-                        .map(|row| {
-                            let observation = table.observation(row);
-                            let (Some(time), Some(object)) =
-                                (observation.time(), observation.object())
-                            else {
-                                return Measured::ABSENT;
-                            };
-                            coloc
-                                .metric(time, object, metric)
-                                .map_or(Measured::ABSENT, |value| Measured::new(value as f32, 1))
-                        })
-                        .collect(),
+                    Group::Object => {
+                        let mut values = vec![Measured::ABSENT; table.rows()];
+                        source.visit_all(&mut |frame: Frame<'_>| {
+                            for object in 0..frame.objects().count() {
+                                let Some(row) = table.row_of_object(frame.time(), object) else {
+                                    continue;
+                                };
+                                values[row as usize] = coloc
+                                    .metric(frame.time(), object, metric)
+                                    .map_or(Measured::ABSENT, |value| {
+                                        Measured::new(value as f32, 1)
+                                    });
+                            }
+                        });
+                        values
+                    }
                     Group::Track | Group::Timepoint | Group::Molecule => aggregate_coloc(
                         source.as_ref(),
                         tracks.as_deref(),
@@ -351,7 +354,8 @@ fn aggregate_scores(
             let mut collected = vec![Vec::<f32>::new(); tracks.len()];
             source.visit_all(&mut |frame: Frame<'_>| {
                 for object in 0..frame.objects().count() {
-                    let Some(track) = tracks.track_at(frame.time(), object) else {
+                    let Some(track) = tracks.track_at(frame.time(), frame.objects().id(object))
+                    else {
                         continue;
                     };
                     collected[track].push(classifier.score(frame.objects(), object));
@@ -402,25 +406,21 @@ fn aggregate_coloc(
             let Some(tracks) = tracks else {
                 return Vec::new();
             };
-            (0..table.rows())
-                .map(|row| {
-                    let Some(track) = table.observation(row).track() else {
-                        return Measured::ABSENT;
+            let mut collected = vec![Vec::<f32>::new(); tracks.len()];
+            source.visit_all(&mut |frame: Frame<'_>| {
+                for object in 0..frame.objects().count() {
+                    let Some(track) = tracks.track_at(frame.time(), frame.objects().id(object))
+                    else {
+                        continue;
                     };
-                    let Some(track) = tracks.track(track) else {
-                        return Measured::ABSENT;
-                    };
-                    let values = track
-                        .nodes()
-                        .iter()
-                        .filter_map(|node| {
-                            coloc
-                                .metric(node.time(), node.object(), metric)
-                                .map(|v| v as f32)
-                        })
-                        .collect::<Vec<_>>();
-                    aggregate.apply(&values)
-                })
+                    if let Some(value) = coloc.metric(frame.time(), object, metric) {
+                        collected[track].push(value as f32);
+                    }
+                }
+            });
+            collected
+                .iter()
+                .map(|values| aggregate.apply(values))
                 .collect()
         }
         Group::Timepoint => (0..table.rows())

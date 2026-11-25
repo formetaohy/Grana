@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::IntensityTable;
+use crate::{IntensityTable, ObjectId, ObjectIds};
 use grana_geometry::{Bounds, Geometry, Mesh, PackedMesh};
 use grana_store::SpillStore;
 
@@ -134,6 +134,7 @@ impl FilamentStatistics {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilamentSet {
     level: usize,
+    ids: ObjectIds,
     geometry: Geometry<PackedMesh>,
     objects: Vec<FilamentStatistics>,
     intensities: IntensityTable,
@@ -142,17 +143,19 @@ pub struct FilamentSet {
 impl FilamentSet {
     pub fn new(
         level: usize,
+        ids: ObjectIds,
         mesh: Mesh,
         objects: Vec<FilamentStatistics>,
         intensities: IntensityTable,
     ) -> Self {
         let geometry = PackedMesh::new(mesh);
         assert!(
-            agrees(&geometry, &objects, &intensities),
+            agrees(&geometry, &ids, &objects, &intensities),
             "every packed filament names an object"
         );
         Self {
             level,
+            ids,
             geometry: Geometry::resident(geometry),
             objects,
             intensities,
@@ -161,6 +164,7 @@ impl FilamentSet {
 
     pub fn paged(
         level: usize,
+        ids: ObjectIds,
         store: &Arc<SpillStore>,
         mesh: Mesh,
         objects: Vec<FilamentStatistics>,
@@ -168,11 +172,12 @@ impl FilamentSet {
     ) -> Result<Self, grana_geometry::Error> {
         let geometry = PackedMesh::new(mesh);
         assert!(
-            agrees(&geometry, &objects, &intensities),
+            agrees(&geometry, &ids, &objects, &intensities),
             "every packed filament names an object"
         );
         Ok(Self {
             level,
+            ids,
             geometry: Geometry::paged(store, geometry)?,
             objects,
             intensities,
@@ -181,16 +186,18 @@ impl FilamentSet {
 
     pub fn from_geometry(
         level: usize,
+        ids: ObjectIds,
         geometry: Geometry<PackedMesh>,
         objects: Vec<FilamentStatistics>,
         intensities: IntensityTable,
     ) -> Result<Option<Self>, grana_geometry::Error> {
         let packed = geometry.load()?;
-        if !agrees(&packed, &objects, &intensities) {
+        if !agrees(&packed, &ids, &objects, &intensities) {
             return Ok(None);
         }
         Ok(Some(Self {
             level,
+            ids,
             geometry,
             objects,
             intensities,
@@ -201,8 +208,32 @@ impl FilamentSet {
         self.level
     }
 
+    pub fn ids(&self) -> &ObjectIds {
+        &self.ids
+    }
+
+    pub fn id(&self, object: usize) -> Option<ObjectId> {
+        self.ids.get(object)
+    }
+
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.ids.index_of(id)
+    }
+
     pub fn geometry(&self) -> Result<Arc<PackedMesh>, grana_geometry::Error> {
         self.geometry.load()
+    }
+
+    pub fn reidentified(&self, ids: ObjectIds) -> Self {
+        assert_eq!(
+            ids.len(),
+            self.objects.len(),
+            "a reidentified filament set names every filament"
+        );
+        Self {
+            ids,
+            ..self.clone()
+        }
     }
 
     pub fn bytes(&self) -> u64 {
@@ -236,10 +267,14 @@ impl FilamentSet {
         let Some(geometry) = self.geometry.without(object)? else {
             return Ok(None);
         };
+        let Some(ids) = self.ids.without(object) else {
+            return Ok(None);
+        };
         let mut objects = self.objects.clone();
         objects.remove(object);
         Self::from_geometry(
             self.level,
+            ids,
             geometry,
             objects,
             self.intensities.without(object),
@@ -261,6 +296,7 @@ impl FilamentSet {
         }
         Ok(Self {
             level: self.level,
+            ids: self.ids.retained(keep),
             geometry,
             objects,
             intensities: self.intensities.retain(keep),
@@ -272,17 +308,22 @@ impl FilamentSet {
             self.level, other.level,
             "a merged filament set holds one resolution level"
         );
+        let ids = self
+            .ids
+            .appended(&other.ids)
+            .expect("two merged filament sets name disjoint objects");
         let geometry = self.geometry.merge(&other.geometry)?;
         let mut objects = self.objects.clone();
         objects.extend_from_slice(&other.objects);
         let intensities = self.intensities.merge(&other.intensities);
         let packed = geometry.load()?;
         assert!(
-            agrees(&packed, &objects, &intensities),
+            agrees(&packed, &ids, &objects, &intensities),
             "a merged filament set names every object it holds"
         );
         Ok(Self {
             level: self.level,
+            ids,
             geometry,
             objects,
             intensities,
@@ -292,10 +333,12 @@ impl FilamentSet {
 
 fn agrees(
     geometry: &PackedMesh,
+    ids: &ObjectIds,
     objects: &[FilamentStatistics],
     intensities: &IntensityTable,
 ) -> bool {
     geometry.object_count() == objects.len()
         && geometry.is_empty() == objects.is_empty()
         && intensities.objects() == objects.len()
+        && ids.len() == objects.len()
 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_object::{SurfaceCut, SurfaceSet, TrackParams};
+use grana_object::{ObjectIdSource, SurfaceCut, SurfaceSet, TrackParams};
 use grana_pipeline::Channels;
 use grana_scene::{Job, ObjectFrame, ObjectSource};
 use grana_store::SpillStore;
@@ -93,6 +93,7 @@ pub fn recut(
     cut: SurfaceCut,
     workers: usize,
     store: Arc<SpillStore>,
+    ids: ObjectIdSource,
 ) -> Analysis {
     analyse(job, move |cancel, sink| {
         let total = source.frames() as usize;
@@ -115,7 +116,7 @@ pub fn recut(
             let ObjectFrame::Surfaces(set) = frame.as_ref() else {
                 continue;
             };
-            let frame = grana_analysis::recut(set, cut, workers, Some(&store))?
+            let frame = grana_analysis::recut(set, cut, workers, Some(&store), &ids)?
                 .unwrap_or_else(|| SurfaceSet::empty(set.level(), set.intensities().channels()));
             sink(Event::Frame {
                 time: time as u32,

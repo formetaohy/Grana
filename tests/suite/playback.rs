@@ -12,7 +12,7 @@ use grana_volume::{
     VoxelSemantics,
 };
 
-use crate::support::{budget, gpu};
+use crate::support::{budget, gpu, spot_set};
 
 const PLAYBACK: Duration = Duration::from_millis(90);
 
@@ -170,7 +170,7 @@ fn crowd(time: u32) -> SpotSet {
         })
         .collect::<Vec<_>>();
     let statistics = vec![Some(SampleStatistics::new(20.0, 10.0, 30.0, 0.0, 20.0)); spots.len()];
-    SpotSet::new(0, spots, IntensityTable::new(1, statistics))
+    spot_set(0, spots, IntensityTable::new(1, statistics))
 }
 
 fn load(session: &mut Session, path: std::path::PathBuf) {

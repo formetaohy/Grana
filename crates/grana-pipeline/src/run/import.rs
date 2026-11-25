@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::channels::Channels;
 use grana_analysis::{LabelBuilder, LabelSlab};
+use grana_object::ObjectIdSource;
 use grana_scene::{Drifts, ObjectFrame};
 use grana_volume::{Pyramid, VoxelData};
 
@@ -15,15 +16,17 @@ pub struct ImportRequest {
     channel: usize,
     label: String,
     drifts: Drifts,
+    ids: ObjectIdSource,
 }
 
 impl ImportRequest {
-    pub fn new(channel: usize, label: &str, drifts: Drifts) -> Self {
+    pub fn new(channel: usize, label: &str, drifts: Drifts, ids: ObjectIdSource) -> Self {
         assert!(!label.trim().is_empty(), "an import names a label image");
         Self {
             channel,
             label: label.to_string(),
             drifts,
+            ids,
         }
     }
 
@@ -126,7 +129,7 @@ pub fn import(
             done += 1;
             sink(Event::Progress { time, done, total });
         }
-        if let Some(set) = builder.finish() {
+        if let Some(set) = builder.finish(&request.ids) {
             sink(Event::Frame {
                 time,
                 frame: ObjectFrame::Surfaces(set),

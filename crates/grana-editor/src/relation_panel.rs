@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
-use grana_object::{RelationFrame, RelationPair};
+use grana_object::{ObjectId, RelationFrame, RelationPair};
 use grana_scene::{Item, Job, ObjectSetId, Scene, Selection};
 use grana_session::Command;
 use grana_ui::{
@@ -55,6 +55,8 @@ impl Choice {
 struct PairRow {
     source: usize,
     target: usize,
+    source_id: ObjectId,
+    target_id: ObjectId,
     value: f32,
     strength: f32,
 }
@@ -69,6 +71,8 @@ struct Matrix {
     maximum: f32,
     source: ObjectSetId,
     target: ObjectSetId,
+    source_ids: Vec<ObjectId>,
+    target_ids: Vec<ObjectId>,
     cell: f32,
     filtered: bool,
 }
@@ -307,15 +311,31 @@ fn matrix(
     let relation = source.relation(choice.target, choice.shift)?;
     let time = scene.time();
     let frame = relation.frame(time)?;
-    let target_objects = target_time(time, choice.shift)
+    let source_ids = source
+        .id_frames()
+        .get(time as usize)
+        .cloned()
+        .unwrap_or_else(grana_object::ObjectIds::empty);
+    let target_ids = target_time(time, choice.shift)
         .and_then(|shifted| {
             scene
                 .objects
                 .get(choice.target)
                 .and_then(|set| set.frame_shared(shifted))
         })
-        .map_or(0, |frame| frame.object_count());
-    Some(layout(frame, choice, metric, filter, width, target_objects))
+        .map_or_else(grana_object::ObjectIds::empty, |frame| frame.ids().clone());
+    Some(layout(
+        frame,
+        choice,
+        metric,
+        Scale {
+            filter,
+            width,
+            source_ids: &source_ids,
+            target_ids: &target_ids,
+        },
+        target_ids.len(),
+    ))
 }
 
 fn target_time(time: u32, shift: i32) -> Option<u32> {
@@ -325,14 +345,26 @@ fn target_time(time: u32, shift: i32) -> Option<u32> {
         .then_some(shifted as u32)
 }
 
+struct Scale<'a> {
+    filter: f32,
+    width: f32,
+    source_ids: &'a grana_object::ObjectIds,
+    target_ids: &'a grana_object::ObjectIds,
+}
+
 fn layout(
     frame: &RelationFrame,
     choice: Choice,
     metric: RelationMetric,
-    filter: f32,
-    width: f32,
+    scale: Scale<'_>,
     target_objects: usize,
 ) -> Matrix {
+    let Scale {
+        filter,
+        width,
+        source_ids,
+        target_ids,
+    } = scale;
     let objects = frame.objects();
     let mut values = frame
         .pairs()
@@ -349,11 +381,17 @@ fn layout(
     values.retain(|(_, value)| strength(*value) + 1.0e-6 >= filter);
     let mut pairs = values
         .into_iter()
-        .map(|(pair, value)| PairRow {
-            source: pair.source() as usize,
-            target: pair.target() as usize,
-            value,
-            strength: strength(value),
+        .filter_map(|(pair, value)| {
+            let source = pair.source() as usize;
+            let target = pair.target() as usize;
+            Some(PairRow {
+                source,
+                target,
+                source_id: *source_ids.as_slice().get(source)?,
+                target_id: *target_ids.as_slice().get(target)?,
+                value,
+                strength: strength(value),
+            })
         })
         .collect::<Vec<_>>();
     pairs.sort_by(|left, right| {
@@ -385,6 +423,14 @@ fn layout(
             ^ u64::from(pair.strength.to_bits());
     }
     let cell = (usable / columns.len().max(1) as f32).clamp(MINIMUM_CELL, CELL);
+    let source_ids = rows
+        .iter()
+        .map(|slot| source_ids.as_slice()[*slot])
+        .collect::<Vec<_>>();
+    let target_ids = columns
+        .iter()
+        .map(|slot| target_ids.as_slice()[*slot])
+        .collect::<Vec<_>>();
     Matrix {
         pairs,
         rows,
@@ -395,6 +441,8 @@ fn layout(
         maximum,
         source: choice.source,
         target: choice.target,
+        source_ids,
+        target_ids,
         cell,
         filtered,
     }
@@ -518,19 +566,22 @@ fn header_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &Matrix) -> Eleme
         .aligned(Align::Center);
     let step = ((24.0 / cell).ceil() as usize).max(1);
     let mut labels = Vec::with_capacity(matrix.columns.len());
-    for (index, column) in matrix.columns.iter().copied().enumerate() {
+    for index in 0..matrix.columns.len() {
         let shown = index % step == 0;
+        let Some(id) = matrix.target_ids.get(index).copied() else {
+            continue;
+        };
         let selection = Selection {
             set: matrix.target,
-            item: Item::Object(column),
+            item: Item::Object(id),
         };
         labels.push(
             grana_ui::canvas(Length::Fixed(cell), HEADER)
-                .view((column, shown), move |(column, shown), painter, info| {
+                .view((id, shown), move |(id, shown), painter, info| {
                     if !*shown {
                         return;
                     }
-                    let text = (column + 1).to_string();
+                    let text = id.raw().to_string();
                     painter.text_in(info.rect, &text, style, Align::Center);
                 })
                 .key(Key::index("relation.column", index))
@@ -557,15 +608,18 @@ fn body_row<'a>(ctx: &mut BuildContext<'_, Message>, matrix: &'a Matrix) -> Elem
     let label_style =
         TextStyle::new(theme.font(Level::Caption), palette.on_surface_variant).aligned(Align::End);
     let mut gutter = Vec::with_capacity(matrix.rows.len());
-    for (index, row) in matrix.rows.iter().copied().enumerate() {
+    for index in 0..matrix.rows.len() {
+        let Some(id) = matrix.source_ids.get(index).copied() else {
+            continue;
+        };
         let selection = Selection {
             set: matrix.source,
-            item: Item::Object(row),
+            item: Item::Object(id),
         };
         gutter.push(
             grana_ui::canvas(Length::Fixed(GUTTER), cell)
-                .view(row, move |row, painter, info| {
-                    let text = (row + 1).to_string();
+                .view(id, move |id, painter, info| {
+                    let text = id.raw().to_string();
                     painter.text_in(
                         info.rect.shrink2(Vec2::new(6.0, 0.0)),
                         &text,
@@ -698,7 +752,7 @@ fn pairs_card<'a>(
         let message = Message::SelectPair {
             source: matrix.source,
             target: matrix.target,
-            objects: (pair.source, pair.target),
+            objects: (pair.source_id, pair.target_id),
         };
         rows.push(
             grana_ui::canvas(Length::Fill, ROW_HEIGHT)

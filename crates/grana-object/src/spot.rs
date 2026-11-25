@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_geometry::Ellipsoid;
 
-use crate::IntensityTable;
+use crate::{IntensityTable, ObjectId, ObjectIds};
 
 pub const RADIUS_PER_SIGMA: f32 = 1.177_410_1;
 
@@ -89,22 +89,30 @@ impl Spot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpotSet {
     level: usize,
+    ids: ObjectIds,
     spots: Arc<[Spot]>,
     quality: Option<f32>,
     intensities: IntensityTable,
 }
 
 impl SpotSet {
-    pub fn new(level: usize, spots: Vec<Spot>, intensities: IntensityTable) -> Self {
+    pub fn new(
+        level: usize,
+        ids: ObjectIds,
+        spots: Vec<Spot>,
+        intensities: IntensityTable,
+    ) -> Self {
         assert_eq!(
             intensities.objects(),
             spots.len(),
             "every spot is measured in every channel"
         );
+        assert_eq!(ids.len(), spots.len(), "every spot carries one object id");
         let quality = (!spots.is_empty())
             .then(|| spots.iter().map(|spot| spot.quality).sum::<f32>() / spots.len() as f32);
         Self {
             level,
+            ids,
             spots: spots.into(),
             quality,
             intensities,
@@ -113,6 +121,18 @@ impl SpotSet {
 
     pub fn level(&self) -> usize {
         self.level
+    }
+
+    pub fn ids(&self) -> &ObjectIds {
+        &self.ids
+    }
+
+    pub fn id(&self, object: usize) -> Option<ObjectId> {
+        self.ids.get(object)
+    }
+
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.ids.index_of(id)
     }
 
     pub fn spots(&self) -> &[Spot] {
@@ -148,6 +168,7 @@ impl SpotSet {
         spots.extend_from_slice(&self.spots[object + 1..]);
         Some(Self::new(
             self.level,
+            self.ids.without(object)?,
             spots,
             self.intensities.without(object),
         ))
@@ -165,7 +186,12 @@ impl SpotSet {
                 spots.push(self.spots[object]);
             }
         }
-        Self::new(self.level, spots, self.intensities.retain(keep))
+        Self::new(
+            self.level,
+            self.ids.retained(keep),
+            spots,
+            self.intensities.retain(keep),
+        )
     }
 
     pub fn merge(&self, other: &Self) -> Self {
@@ -176,11 +202,28 @@ impl SpotSet {
         let mut spots = Vec::with_capacity(self.spots.len() + other.spots.len());
         spots.extend_from_slice(&self.spots);
         spots.extend_from_slice(&other.spots);
+        let ids = self
+            .ids
+            .appended(&other.ids)
+            .unwrap_or_else(|| panic!("two merged spot sets name disjoint objects"));
         Self::new(
             self.level,
+            ids,
             spots,
             self.intensities.merge(&other.intensities),
         )
+    }
+
+    pub fn reidentified(&self, ids: ObjectIds) -> Self {
+        assert_eq!(
+            ids.len(),
+            self.spots.len(),
+            "a reidentified spot set names every spot"
+        );
+        Self {
+            ids,
+            ..self.clone()
+        }
     }
 
     pub fn regrouped(&self, groups: &[Option<u32>]) -> Self {
@@ -195,6 +238,11 @@ impl SpotSet {
             .zip(groups)
             .map(|(spot, group)| spot.with_group(*group))
             .collect::<Vec<_>>();
-        Self::new(self.level, spots, self.intensities.clone())
+        Self::new(
+            self.level,
+            self.ids.clone(),
+            spots,
+            self.intensities.clone(),
+        )
     }
 }

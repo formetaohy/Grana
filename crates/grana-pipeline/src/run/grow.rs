@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_analysis::{CellField, CellSeed, GrowField, Growth, cell_band, cell_level};
-use grana_object::{CellParams, CellSet, Roi, SurfaceSet};
+use grana_object::{CellParams, CellSet, ObjectIdSource, Roi, SurfaceSet};
 use grana_scene::{Drifts, ObjectFrame, ObjectSource};
 use grana_volume::Region;
 use grana_warp::Warp;
@@ -15,6 +15,7 @@ use crate::run::level::Leveling;
 
 pub struct GrowRequest {
     channel: usize,
+    ids: ObjectIdSource,
     params: CellParams,
     region: Region,
     drifts: Drifts,
@@ -25,6 +26,7 @@ pub struct GrowRequest {
 impl GrowRequest {
     pub fn new(
         channel: usize,
+        ids: ObjectIdSource,
         params: CellParams,
         region: Region,
         drifts: Drifts,
@@ -33,6 +35,7 @@ impl GrowRequest {
     ) -> Self {
         Self {
             channel,
+            ids,
             params,
             region,
             drifts,
@@ -221,7 +224,7 @@ pub fn grow(
         if halted {
             return Ok(());
         }
-        let Some(bodies) = surfaces.finish() else {
+        let Some(bodies) = surfaces.finish(&request.ids) else {
             sink(Event::Progress {
                 time,
                 done: time as usize + 1,

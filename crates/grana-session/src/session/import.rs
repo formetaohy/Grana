@@ -49,6 +49,7 @@ impl Session {
         };
         let provenance = object.provenance().clone();
         let channel = object.channel();
+        let ids = object.id_source();
         let drifts = scene.drifts().clone();
         let alignment = grana_scene::LocalizationAlignment::new(
             channel,
@@ -73,7 +74,7 @@ impl Session {
                     crate::import(
                         Job::Import(set),
                         channels,
-                        ImportRequest::new(channel, &label, drifts),
+                        ImportRequest::new(channel, &label, drifts, ids.clone()),
                     )
                     .keyed(input)
                     .with_fallback(fallback),
@@ -86,7 +87,7 @@ impl Session {
                         crate::localize(
                             Job::Import(set),
                             channels,
-                            LocalizationRequest::new(&file, alignment),
+                            LocalizationRequest::new(&file, alignment, ids.clone()),
                         )
                         .keyed(input)
                         .with_fallback(fallback),

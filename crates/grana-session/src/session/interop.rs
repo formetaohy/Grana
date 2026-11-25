@@ -376,7 +376,15 @@ fn lineage(
                 radius,
                 quality,
             ));
-            ids.insert((row.time, object), next);
+            ids.insert(
+                (
+                    row.time,
+                    row.frame
+                        .id_of(object)
+                        .expect("a spread object carries its id"),
+                ),
+                next,
+            );
             next += 1;
         }
         progress(done + 1, total);
@@ -385,8 +393,8 @@ fn lineage(
     if let Some(tracks) = tracks {
         for (index, track) in tracks.tracks().iter().enumerate() {
             for pair in track.nodes().windows(2) {
-                let source = ids.get(&(pair[0].time(), pair[0].object()));
-                let target = ids.get(&(pair[1].time(), pair[1].object()));
+                let source = ids.get(&(pair[0].time(), pair[0].id()));
+                let target = ids.get(&(pair[1].time(), pair[1].id()));
                 if let (Some(source), Some(target)) = (source, target) {
                     edges.push(Edge::new(*source, *target));
                 }
@@ -399,11 +407,11 @@ fn lineage(
                     parent
                         .nodes()
                         .last()
-                        .and_then(|node| ids.get(&(node.time(), node.object()))),
+                        .and_then(|node| ids.get(&(node.time(), node.id()))),
                     track
                         .nodes()
                         .first()
-                        .and_then(|node| ids.get(&(node.time(), node.object()))),
+                        .and_then(|node| ids.get(&(node.time(), node.id()))),
                 );
                 if let (Some(source), Some(target)) = ends {
                     edges.push(Edge::new(*source, *target));

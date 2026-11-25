@@ -1,4 +1,5 @@
 use glam::Vec2;
+use grana_object::ObjectId;
 use grana_scene::ObjectSetId;
 use grana_session::Command;
 use grana_ui::Key;
@@ -58,21 +59,21 @@ pub enum Message {
     SetPlaybackPosition(f32),
     SetPlaybackSelected(Option<usize>),
     SetTrackSet(Option<ObjectSetId>),
-    SetJoin(Option<(u32, usize)>),
-    SetDivide(Option<(u32, usize)>),
+    SetJoin(Option<(u32, ObjectId)>),
+    SetDivide(Option<(u32, ObjectId)>),
     PickDivide {
         set: ObjectSetId,
-        daughter: (u32, usize),
+        daughter: (u32, ObjectId),
     },
-    SetMerge(Option<(u32, usize)>),
+    SetMerge(Option<(u32, ObjectId)>),
     PickMerge {
         set: ObjectSetId,
-        parent: (u32, usize),
+        parent: (u32, ObjectId),
     },
-    SetReparent(Option<(u32, usize)>),
+    SetReparent(Option<(u32, ObjectId)>),
     PickReparent {
         set: ObjectSetId,
-        parent: (u32, usize),
+        parent: (u32, ObjectId),
     },
     CancelLineage,
     ExportLineage(ObjectSetId),
@@ -104,7 +105,7 @@ pub enum Message {
     SelectPair {
         source: ObjectSetId,
         target: ObjectSetId,
-        objects: (usize, usize),
+        objects: (ObjectId, ObjectId),
     },
     SetClassifierFeatures {
         set: ObjectSetId,

@@ -250,11 +250,13 @@ impl SceneState {
         }
         if !set.hidden.is_empty()
             && (set.hidden.len() != set.frames.len()
-                || set
-                    .hidden
-                    .iter()
-                    .zip(&set.frames)
-                    .any(|(mask, frame)| mask.len() != object_count(frame)))
+                || set.hidden.iter().zip(&set.frames).any(|(hidden, frame)| {
+                    hidden.as_slice().iter().any(|id| {
+                        frame
+                            .as_ref()
+                            .is_none_or(|frame| frame.index_of(*id).is_none())
+                    })
+                }))
         {
             return Err(fault("the hidden objects cover another set of frames"));
         }
@@ -527,10 +529,11 @@ impl SceneState {
                 ));
             };
             let valid = match selection.item {
-                ItemState::Object(index) => set
-                    .frames
-                    .iter()
-                    .any(|frame| frame.as_ref().is_some_and(|frame| index < frame.objects())),
+                ItemState::Object(id) => set.frames.iter().any(|frame| {
+                    frame
+                        .as_ref()
+                        .is_some_and(|frame| frame.index_of(id).is_some())
+                }),
                 ItemState::Track(index) => set
                     .tracks
                     .as_ref()

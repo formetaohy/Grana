@@ -3,10 +3,10 @@ use std::collections::{BTreeSet, VecDeque};
 use super::*;
 
 use crate::task::Progress;
-use grana_object::{MaskEdit, MaskMode, MaskTool, ObjectAnchor};
+use grana_object::{MaskEdit, MaskMode, MaskTool, ObjectAnchor, ObjectId};
 use grana_scene::{ObjectKind, ObjectSet, Provenance, SurfaceEdit, SurfaceEditKind};
 
-type Deletions = (ObjectSetId, Vec<(u32, Vec<usize>)>);
+type Deletions = (ObjectSetId, Vec<(u32, Vec<ObjectId>)>);
 type Edited = Vec<grana_pipeline::run::EditedFrame>;
 type EditTask = Progress<Result<Edited, String>>;
 type EditStart = (EditTask, usize, usize);
@@ -88,8 +88,8 @@ pub(super) struct MaskPaint {
 
 #[derive(Clone, Debug)]
 pub(super) enum SurfaceEditRequest {
-    Merge(Vec<usize>),
-    Split(usize),
+    Merge(Vec<ObjectId>),
+    Split(ObjectId),
 }
 
 impl Session {
@@ -126,7 +126,10 @@ impl Session {
         let Some(set) = scene.objects.get(selection.set) else {
             return false;
         };
-        if !set.visible_object(time, object) {
+        let index = set
+            .frame_shared(time)
+            .and_then(|frame| frame.index_of(object));
+        if index.is_none_or(|index| !set.visible_object(time, index)) {
             return false;
         }
         self.execute(Command::SetObjectHidden {
@@ -212,11 +215,11 @@ impl Session {
             Group::Object => {
                 for row in rows {
                     let observation = table.observation(row as usize);
-                    if let (Some(time), Some(index)) = (observation.time(), observation.object())
+                    if let (Some(time), Some(id)) = (observation.time(), observation.object())
                         && let Some(mask) = keep.get_mut(time as usize)
-                        && let Some(slot) = mask.get_mut(index)
+                        && let Some(index) = object.ids(time).index_of(id)
                     {
-                        *slot = true;
+                        mask[index] = true;
                     }
                 }
             }
@@ -233,9 +236,9 @@ impl Session {
                     };
                     for node in track.nodes() {
                         if let Some(mask) = keep.get_mut(node.time() as usize)
-                            && let Some(slot) = mask.get_mut(node.object())
+                            && let Some(index) = object.ids(node.time()).index_of(node.id())
                         {
-                            *slot = true;
+                            mask[index] = true;
                         }
                     }
                 }
@@ -274,8 +277,10 @@ impl Session {
             if current && time != scene.time() as usize {
                 continue;
             }
+            let ids = scene.objects.get(set).map(|object| object.ids(time as u32));
             let objects = (0..mask.len())
                 .filter(|object| !mask[*object])
+                .filter_map(|object| ids.as_ref().and_then(|ids| ids.get(object)))
                 .collect::<Vec<_>>();
             if !objects.is_empty() {
                 deletions.push((time as u32, objects));
@@ -595,6 +600,7 @@ impl Session {
         let source = provenance
             .source()
             .ok_or_else(|| "the object set carries no edits".to_string())?;
+        let ids = object.id_source();
         let objects = scene
             .objects
             .get(source)
@@ -611,7 +617,7 @@ impl Session {
                     }
                     progress(0, 1);
                     let edited =
-                        grana_pipeline::run::edit(&objects, &edits, voxel, store.as_ref())?;
+                        grana_pipeline::run::edit(&objects, &edits, voxel, store.as_ref(), &ids)?;
                     progress(1, 1);
                     Ok(edited)
                 })
@@ -628,6 +634,7 @@ impl Session {
                     progress(0, 1);
                     let request = grana_pipeline::run::MaskRequest {
                         channel,
+                        ids: &ids,
                         strokes: &strokes,
                         drifts: &drifts,
                     };
@@ -668,7 +675,7 @@ impl Session {
                 match frame {
                     Some(frame) => scene.install_shared(queued.set, time, frame),
                     None => scene.install_optional(queued.set, time, None),
-                }
+                };
             }
             scene.clear_tracks(queued.set);
             true
@@ -1055,14 +1062,14 @@ fn surface_plan(
     time: u32,
     request: SurfaceEditRequest,
 ) -> Result<Vec<SurfaceEdit>, String> {
-    let (objects, kind) = match request {
-        SurfaceEditRequest::Merge(objects) => (objects, SurfaceEditKind::Merge),
-        SurfaceEditRequest::Split(object) => (vec![object], SurfaceEditKind::Split),
+    let (ids, kind) = match request {
+        SurfaceEditRequest::Merge(ids) => (ids, SurfaceEditKind::Merge),
+        SurfaceEditRequest::Split(id) => (vec![id], SurfaceEditKind::Split),
     };
-    let mut unique = objects.clone();
+    let mut unique = ids.clone();
     unique.sort_unstable();
     unique.dedup();
-    if unique.len() != objects.len() {
+    if unique.len() != ids.len() {
         return Err("the surface edit names one surface twice".to_string());
     }
     if kind == SurfaceEditKind::Merge && unique.len() < 2 {
@@ -1076,10 +1083,10 @@ fn surface_plan(
     }
     let anchors = frame.anchors();
     let mut recorded = Vec::with_capacity(unique.len());
-    for index in &unique {
-        let Some(anchor) = anchors.get(*index) else {
+    for id in &unique {
+        let Some(anchor) = frame.index_of(*id).and_then(|index| anchors.get(index)) else {
             return Err(format!(
-                "the frame {time} holds {} surfaces but names {index}",
+                "the frame {time} holds {} surfaces but not the one it edits",
                 anchors.len()
             ));
         };
@@ -1117,7 +1124,7 @@ fn counterparts(
     object: &ObjectSet,
     current: u32,
     recorded_time: u32,
-    objects: &[usize],
+    ids: &[ObjectId],
 ) -> Option<Vec<ObjectAnchor>> {
     let frame = object.frame_shared(current)?;
     if frame.kind() != ObjectKind::Surfaces {
@@ -1125,15 +1132,15 @@ fn counterparts(
     }
     let anchors = frame.anchors();
     let tracks = object.tracks()?.set();
-    let mut indices = Vec::with_capacity(objects.len());
-    for index in objects {
-        let track = tracks.track_at(recorded_time, *index)?;
+    let mut indices = Vec::with_capacity(ids.len());
+    for id in ids {
+        let track = tracks.track_at(recorded_time, *id)?;
         let node = tracks
             .track(track)?
             .nodes()
             .iter()
             .find(|node| node.time() == current)?;
-        indices.push(node.object());
+        indices.push(frame.index_of(node.id())?);
     }
     indices
         .into_iter()

@@ -7,7 +7,7 @@ mod volume;
 use std::sync::Arc;
 
 use grana_geometry::Mesh;
-use grana_object::{FilamentSet, IntensityTable, SampleAccumulator};
+use grana_object::{FilamentSet, IntensityTable, ObjectIdSource, ObjectIds, SampleAccumulator};
 use grana_store::SpillStore;
 use grana_volume::{Intensity, Level, Pyramid, Region, VoxelData};
 
@@ -173,10 +173,12 @@ impl FilamentScan {
         roi: Option<&Mask>,
         store: &Arc<SpillStore>,
         mut read: impl FnMut(usize) -> Result<VoxelData, String>,
+        ids: &ObjectIdSource,
     ) -> Result<FilamentSet, String> {
         if self.empty {
             return Ok(FilamentSet::new(
                 self.level,
+                ObjectIds::empty(),
                 Mesh::new(Vec::new(), Vec::new()),
                 Vec::new(),
                 IntensityTable::empty(self.channels.count()),
@@ -280,6 +282,7 @@ impl FilamentScan {
         );
         FilamentSet::paged(
             self.level,
+            ids.allocate(objects.len()),
             store,
             Mesh::new(vertices, indices),
             objects,

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
-use grana_object::{IntensityTable, SampleAccumulator, SurfaceSet, SurfaceStatistics};
+use grana_object::{
+    IntensityTable, ObjectIdSource, SampleAccumulator, SurfaceSet, SurfaceStatistics,
+};
 use grana_volume::{Level, NoData, VoxelData};
 use rayon::prelude::*;
 
@@ -90,7 +92,7 @@ impl LabelBuilder {
         self.geometry(origin, core, extent, labels);
     }
 
-    pub fn finish(self) -> Option<SurfaceSet> {
+    pub fn finish(self, ids: &ObjectIdSource) -> Option<SurfaceSet> {
         if self.objects.is_empty() {
             return None;
         }
@@ -162,6 +164,7 @@ impl LabelBuilder {
         }
         Some(SurfaceSet::new(
             self.level,
+            ids.allocate(statistics.len()),
             Mesh::new(vertices, indices),
             statistics,
             IntensityTable::new(self.channels, intensities),

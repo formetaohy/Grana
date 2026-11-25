@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::sync::atomic::AtomicBool;
 
-use grana_object::{IntensityTable, SampleAccumulator, Spot, SpotSet};
+use grana_object::{IntensityTable, ObjectIdSource, ObjectIds, SampleAccumulator, Spot, SpotSet};
 use grana_volume::{Intensity, Level, Pyramid, Region as VolumeRegion, VoxelData};
 
 use grana_object::{Mask, SpotParams};
@@ -55,23 +55,34 @@ pub fn spot_level(
 
 pub struct SpotScanner {
     level_index: usize,
+    ids: ObjectIdSource,
     channels: ChannelSet,
     budget: Budget,
     template: SpotScan,
 }
 
+pub struct SpotSetup {
+    pub level_index: usize,
+    pub level: Level,
+    pub intensity: Intensity,
+    pub channels: ChannelSet,
+    pub budget: Budget,
+    pub ids: ObjectIdSource,
+}
+
 impl SpotScanner {
-    pub fn new(
-        level_index: usize,
-        level: Level,
-        intensity: Intensity,
-        params: SpotParams,
-        region: VolumeRegion,
-        channels: ChannelSet,
-        budget: Budget,
-    ) -> Self {
+    pub fn new(setup: SpotSetup, params: SpotParams, region: VolumeRegion) -> Self {
+        let SpotSetup {
+            level_index,
+            level,
+            intensity,
+            channels,
+            budget,
+            ids,
+        } = setup;
         Self {
             level_index,
+            ids,
             channels,
             budget,
             template: SpotScan::new(level, intensity, params, region, budget),
@@ -95,6 +106,7 @@ impl SpotScanner {
         if total == 0 {
             return Ok(Some(SpotSet::new(
                 self.level_index,
+                ObjectIds::empty(),
                 Vec::new(),
                 IntensityTable::new(channels, Vec::new()),
             )));
@@ -155,6 +167,7 @@ impl SpotScanner {
             .collect::<Vec<_>>();
         Ok(Some(SpotSet::new(
             self.level_index,
+            self.ids.allocate(spots.len()),
             spots,
             IntensityTable::new(channels, intensities),
         )))

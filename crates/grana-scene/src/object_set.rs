@@ -7,7 +7,7 @@ use grana_measure::{
 };
 use grana_object::TrackParams;
 use grana_object::match_anchor;
-use grana_object::{RelationFrame, SpotSet, TrackSet};
+use grana_object::{ObjectId, ObjectIdSource, ObjectIds, RelationFrame, SpotSet, TrackSet};
 use grana_store::SpillStore;
 
 use crate::alignment::LocalizationAlignment;
@@ -47,6 +47,36 @@ impl ObjectSetId {
 
     pub fn raw(self) -> u64 {
         self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Readoption {
+    carried: usize,
+    fresh: usize,
+    vanished: usize,
+    purged: usize,
+}
+
+impl Readoption {
+    pub fn carried(self) -> usize {
+        self.carried
+    }
+
+    pub fn fresh(self) -> usize {
+        self.fresh
+    }
+
+    pub fn vanished(self) -> usize {
+        self.vanished
+    }
+
+    pub fn purged(self) -> usize {
+        self.purged
+    }
+
+    pub fn inherited(self) -> bool {
+        self.carried > 0
     }
 }
 
@@ -130,7 +160,7 @@ pub struct ObjectSet {
     visible: bool,
     labels: bool,
     label: Option<ObjectColor>,
-    hidden: Arc<Vec<Vec<bool>>>,
+    hidden: Arc<Vec<ObjectIds>>,
     hidden_total: usize,
     opacity: f32,
     material: Material,
@@ -157,6 +187,8 @@ pub struct ObjectSet {
     provenance: Provenance,
     version: u32,
     curation: Arc<Curation>,
+    source: ObjectIdSource,
+    replaced: Option<Arc<Vec<Option<Arc<ObjectFrame>>>>>,
 }
 
 impl ObjectSet {
@@ -213,7 +245,37 @@ impl ObjectSet {
             provenance: Provenance::detection(),
             version: grana_object::Algorithm::Detection.version(),
             curation: Arc::new(Curation::default()),
+            source: ObjectIdSource::new(),
+            replaced: None,
         }
+    }
+
+    pub fn id_source(&self) -> ObjectIdSource {
+        self.source.clone()
+    }
+
+    pub(crate) fn begin_replace(&mut self) -> bool {
+        if self.replaced.is_some() {
+            return false;
+        }
+        let frames = self
+            .frames
+            .iter()
+            .map(FrameSlot::shared)
+            .collect::<Vec<_>>();
+        if frames.iter().all(Option::is_none) {
+            return false;
+        }
+        self.replaced = Some(Arc::new(frames));
+        true
+    }
+
+    pub(crate) fn end_replace(&mut self) -> bool {
+        self.replaced.take().is_some()
+    }
+
+    pub fn replacing(&self) -> bool {
+        self.replaced.is_some()
     }
 
     pub fn id(&self) -> ObjectSetId {
@@ -710,7 +772,13 @@ impl ObjectSet {
         let relation = metric
             .relation()
             .and_then(|(target, shift)| self.relation(target, shift));
-        metric.value(track, layer.set(), relation)
+        let frames = &self.frames;
+        metric.value(track, layer.set(), relation, |time, id| {
+            frames
+                .get(time as usize)
+                .and_then(FrameSlot::shared)
+                .and_then(|frame| frame.index_of(id))
+        })
     }
 
     pub fn visible(&self) -> bool {
@@ -743,11 +811,12 @@ impl ObjectSet {
     }
 
     pub fn hidden_object(&self, time: u32, object: usize) -> bool {
-        self.hidden
-            .get(time as usize)
-            .and_then(|mask| mask.get(object))
-            .copied()
-            .unwrap_or(false)
+        let Some(hidden) = self.hidden.get(time as usize) else {
+            return false;
+        };
+        self.frame_shared(time)
+            .and_then(|frame| frame.id_of(object))
+            .is_some_and(|id| hidden.contains(id))
     }
 
     pub fn hidden_count(&self) -> usize {
@@ -757,23 +826,22 @@ impl ObjectSet {
     pub(crate) fn set_hidden(
         &mut self,
         time: u32,
-        objects: &[usize],
+        ids: &[ObjectId],
         hidden: bool,
         stamp: Revision,
     ) -> bool {
-        let changed = self.hide(time, objects, hidden, stamp);
+        let changed = self.hide(time, ids, hidden, stamp);
         if changed {
             self.record_hidden(time);
         }
         changed
     }
 
-    fn hide(&mut self, time: u32, objects: &[usize], hidden: bool, stamp: Revision) -> bool {
-        let Some(count) = self
+    fn hide(&mut self, time: u32, ids: &[ObjectId], hidden: bool, stamp: Revision) -> bool {
+        let Some(frame) = self
             .frames
             .get(time as usize)
-            .and_then(|slot| slot.frame.as_ref())
-            .map(Frame::objects)
+            .and_then(|slot| slot.shared())
         else {
             return false;
         };
@@ -781,54 +849,73 @@ impl ObjectSet {
             if !hidden {
                 return false;
             }
-            self.hidden = Arc::new(
-                self.frames
-                    .iter()
-                    .map(|slot| vec![false; slot.objects()])
-                    .collect::<Vec<_>>(),
-            );
+            self.hidden = Arc::new(vec![ObjectIds::empty(); self.frames.len()]);
         }
-        let mask = &mut Arc::make_mut(&mut self.hidden)[time as usize];
-        let mut changed = false;
-        let mut delta = 0isize;
-        for object in objects {
-            if *object >= count || mask[*object] == hidden {
+        let held = self
+            .hidden
+            .get(time as usize)
+            .cloned()
+            .unwrap_or_else(ObjectIds::empty);
+        let mut next = held.to_vec();
+        for id in ids {
+            if frame.index_of(*id).is_none() {
                 continue;
             }
-            mask[*object] = hidden;
-            delta += if hidden { 1 } else { -1 };
-            changed = true;
-        }
-        self.hidden_total = self.hidden_total.saturating_add_signed(delta);
-        if changed {
-            self.shape = stamp;
-            self.document = Revision::mint();
-            if let Some(slot) = self.frames.get_mut(time as usize) {
-                slot.appearance = Revision::mint();
+            match next.binary_search(id) {
+                Ok(at) if !hidden => {
+                    next.remove(at);
+                }
+                Ok(_) => {}
+                Err(at) if hidden => next.insert(at, *id),
+                Err(_) => {}
             }
         }
-        changed
+        if next.len() == held.len() {
+            return false;
+        }
+        let next = ObjectIds::new(next);
+        self.hidden_total = self
+            .hidden_total
+            .saturating_sub(held.len())
+            .saturating_add(next.len());
+        Arc::make_mut(&mut self.hidden)[time as usize] = next;
+        self.shape = stamp;
+        self.document = Revision::mint();
+        if let Some(slot) = self.frames.get_mut(time as usize) {
+            slot.appearance = Revision::mint();
+        }
+        true
     }
 
     fn record_hidden(&mut self, time: u32) {
         let Some(frame) = self.frame_shared(time) else {
             return;
         };
-        let mask = self.hidden.get(time as usize).cloned().unwrap_or_default();
-        let anchors = frame
-            .anchors()
-            .into_iter()
-            .zip(mask)
-            .filter_map(|(anchor, hidden)| hidden.then_some(anchor))
-            .collect();
+        let ids = self
+            .hidden
+            .get(time as usize)
+            .cloned()
+            .unwrap_or_else(ObjectIds::empty);
+        let anchors = frame.anchors();
+        let records = ids
+            .as_slice()
+            .iter()
+            .filter_map(|id| frame.index_of(*id))
+            .filter_map(|object| anchors.get(object).copied())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            records.len(),
+            ids.len(),
+            "a hidden object lives in the frame that hides it"
+        );
         let counts = self
             .frames
             .iter()
-            .map(|slot| slot.frame.as_ref().map(Frame::objects))
+            .map(|slot| slot.objects())
             .collect::<Vec<_>>();
         let curation = Arc::make_mut(&mut self.curation);
         curation.seed(counts.len());
-        curation.record_hidden(time, anchors);
+        curation.record_hidden(time, records);
     }
 
     pub(crate) fn clear_hidden(&mut self, stamp: Revision) -> bool {
@@ -845,14 +932,10 @@ impl ObjectSet {
     }
 
     fn recount_hidden(&mut self) {
-        self.hidden_total = self
-            .hidden
-            .iter()
-            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
-            .sum();
+        self.hidden_total = self.hidden.iter().map(ObjectIds::len).sum();
     }
 
-    pub(crate) fn restore_hidden(&mut self, hidden: Arc<Vec<Vec<bool>>>) {
+    pub(crate) fn restore_hidden(&mut self, hidden: Arc<Vec<ObjectIds>>) {
         if hidden.is_empty() {
             self.hidden = hidden;
             self.hidden_total = 0;
@@ -863,12 +946,14 @@ impl ObjectSet {
             self.frames.len(),
             "the hidden objects cover every frame of the set"
         );
-        for (mask, slot) in hidden.iter().zip(&self.frames) {
-            assert_eq!(
-                mask.len(),
-                slot.objects(),
-                "the hidden objects cover every object of a frame"
-            );
+        for (ids, slot) in hidden.iter().zip(&self.frames) {
+            let frame = slot.shared();
+            let live = ids.as_slice().iter().all(|id| {
+                frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.index_of(*id).is_some())
+            });
+            assert!(live, "a hidden object lives in the frame that hides it");
         }
         self.hidden = hidden;
         self.recount_hidden();
@@ -1201,6 +1286,19 @@ impl ObjectSet {
         self.frames.len() as u32
     }
 
+    pub fn ids(&self, time: u32) -> ObjectIds {
+        self.frames
+            .get(time as usize)
+            .and_then(FrameSlot::shared)
+            .map_or_else(ObjectIds::empty, |frame| frame.ids().clone())
+    }
+
+    pub fn id_frames(&self) -> Vec<ObjectIds> {
+        (0..self.frames.len())
+            .map(|time| self.ids(time as u32))
+            .collect()
+    }
+
     pub fn revision(&self) -> Revision {
         self.revision
     }
@@ -1348,6 +1446,8 @@ impl ObjectSet {
             provenance,
             version,
             curation,
+            source: ObjectIdSource::new(),
+            replaced: None,
         };
         match &seeds {
             Seeds::Points(frames) => {
@@ -1388,6 +1488,11 @@ impl ObjectSet {
         for (time, frame) in frames.into_iter().enumerate() {
             if let Some(frame) = frame {
                 set.install_frame(time as u32, frame, stamps.mint());
+            }
+        }
+        for slot in &set.frames {
+            if let Some(frame) = slot.shared() {
+                set.source.observe(frame.ids());
             }
         }
         set.settle_pages();
@@ -1550,7 +1655,9 @@ impl ObjectSet {
                 .and_then(|base| base.checked_add(u32::try_from(object).ok()?))
                 .is_some_and(|row| mask.contains(row as usize)),
             Visibility::Tracks(mask) => self
-                .track_at(time, object)
+                .frame_shared(time)
+                .and_then(|frame| frame.id_of(object))
+                .and_then(|id| self.track_at(time, id))
                 .is_some_and(|track| mask.contains(track)),
             Visibility::Molecules { mask, rows } => self
                 .frames
@@ -1713,7 +1820,7 @@ impl ObjectSet {
             let retained = frame.retain(keep).map_err(|error| {
                 format!("the objects of frame {time} cannot be dropped: {error}")
             })?;
-            pruned.push((*time, retained, keep, frame.anchors()));
+            pruned.push((*time, retained, keep, frame));
         }
         if pruned.is_empty() {
             return Ok(0);
@@ -1724,20 +1831,15 @@ impl ObjectSet {
         {
             let curation = Arc::make_mut(&mut self.curation);
             curation.seed(self.frames.len());
-            for (time, _, keep, anchors) in &pruned {
-                curation.record(*time, keep, anchors);
+            for (time, _, keep, frame) in &pruned {
+                curation.record(*time, keep, &frame.anchors());
             }
         }
         let mut removed = 0usize;
-        for (time, retained, keep, _) in pruned {
-            let objects = keep
-                .iter()
-                .enumerate()
-                .filter(|(_, kept)| !**kept)
-                .map(|(object, _)| object)
-                .collect::<Vec<_>>();
-            removed += objects.len();
-            self.install_retained(time, retained, &objects, stamp);
+        for (time, retained, keep, frame) in pruned {
+            let ids = removed_ids(&frame, keep);
+            removed += ids.len();
+            self.install_retained(time, retained, &ids, stamp);
         }
         Ok(removed)
     }
@@ -1776,21 +1878,16 @@ impl ObjectSet {
             let Some(frame) = self.frames[time as usize].shared() else {
                 continue;
             };
-            let removed = keep
-                .iter()
-                .enumerate()
-                .filter(|(_, kept)| !**kept)
-                .map(|(object, _)| object)
-                .collect::<Vec<_>>();
             let retained = frame.retain(&keep).map_err(|error| {
                 format!("the edits of frame {time} cannot drop the objects they hide: {error}")
             })?;
-            pruned.push((time, retained, removed));
+            let ids = removed_ids(&frame, &keep);
+            pruned.push((time, ids, retained));
         }
         let mut applied = 0usize;
-        for (time, retained, removed) in pruned {
-            applied += removed.len();
-            self.install_retained(time, retained, &removed, stamp);
+        for (time, ids, retained) in pruned {
+            applied += ids.len();
+            self.install_retained(time, retained, &ids, stamp);
         }
         let curation = Arc::make_mut(&mut self.curation);
         for (time, frame) in self.frames.iter().enumerate() {
@@ -1810,11 +1907,15 @@ impl ObjectSet {
             let targets = self
                 .curation
                 .hidden_targets(time as u32, &frame.anchors(), self.voxel);
-            if targets.is_empty() {
+            let ids = targets
+                .into_iter()
+                .filter_map(|object| frame.id_of(object))
+                .collect::<Vec<_>>();
+            if ids.is_empty() {
                 continue;
             }
-            hidden += targets.len();
-            self.hide(time as u32, &targets, true, stamp);
+            hidden += ids.len();
+            self.hide(time as u32, &ids, true, stamp);
         }
         hidden
     }
@@ -1843,10 +1944,10 @@ impl ObjectSet {
                 break;
             };
             let done = match edit {
-                TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), thickness, stamp),
+                TrackEdit::Cut(node) => layer.cut(node.time(), node.id(), thickness, stamp),
                 TrackEdit::Join { source, target } => layer.join(
-                    (source.time(), source.object()),
-                    (target.time(), target.object()),
+                    (source.time(), source.id()),
+                    (target.time(), target.id()),
                     thickness,
                     stamp,
                 ),
@@ -1855,9 +1956,9 @@ impl ObjectSet {
                     first,
                     second,
                 } => layer.divide(
-                    (parent.time(), parent.object()),
-                    (first.time(), first.object()),
-                    (second.time(), second.object()),
+                    (parent.time(), parent.id()),
+                    (first.time(), first.id()),
+                    (second.time(), second.id()),
                     thickness,
                     stamp,
                 ),
@@ -1866,20 +1967,20 @@ impl ObjectSet {
                     second,
                     child,
                 } => layer.merge(
-                    (first.time(), first.object()),
-                    (second.time(), second.object()),
-                    (child.time(), child.object()),
+                    (first.time(), first.id()),
+                    (second.time(), second.id()),
+                    (child.time(), child.id()),
                     thickness,
                     stamp,
                 ),
                 TrackEdit::Reparent { child, parent } => layer.reparent(
-                    (child.time(), child.object()),
-                    (parent.time(), parent.object()),
+                    (child.time(), child.id()),
+                    (parent.time(), parent.id()),
                     thickness,
                     stamp,
                 ),
                 TrackEdit::Detach { child } => {
-                    layer.detach((child.time(), child.object()), thickness, stamp)
+                    layer.detach((child.time(), child.id()), thickness, stamp)
                 }
             };
             if done {
@@ -1904,8 +2005,13 @@ impl ObjectSet {
     fn resolve_edit(&self, edit: TrackEdit) -> Option<TrackEdit> {
         let resolve = |node: TrackAnchor| -> Option<TrackAnchor> {
             let frame = self.frames.get(node.time() as usize)?.shared()?;
-            let object = match_anchor(&frame.anchors(), node.position(), self.voxel)?;
-            Some(TrackAnchor::new(node.time(), object, node.position()))
+            let id = match frame.index_of(node.id()) {
+                Some(_) => node.id(),
+                None => {
+                    frame.id_of(match_anchor(&frame.anchors(), node.position(), self.voxel)?)?
+                }
+            };
+            Some(TrackAnchor::new(node.time(), id, node.position()))
         };
         match edit {
             TrackEdit::Cut(node) => Some(TrackEdit::Cut(resolve(node)?)),
@@ -1949,10 +2055,10 @@ impl ObjectSet {
             return false;
         };
         let done = match edit {
-            TrackEdit::Cut(node) => layer.cut(node.time(), node.object(), thickness, stamp),
+            TrackEdit::Cut(node) => layer.cut(node.time(), node.id(), thickness, stamp),
             TrackEdit::Join { source, target } => layer.join(
-                (source.time(), source.object()),
-                (target.time(), target.object()),
+                (source.time(), source.id()),
+                (target.time(), target.id()),
                 thickness,
                 stamp,
             ),
@@ -1961,9 +2067,9 @@ impl ObjectSet {
                 first,
                 second,
             } => layer.divide(
-                (parent.time(), parent.object()),
-                (first.time(), first.object()),
-                (second.time(), second.object()),
+                (parent.time(), parent.id()),
+                (first.time(), first.id()),
+                (second.time(), second.id()),
                 thickness,
                 stamp,
             ),
@@ -1972,20 +2078,20 @@ impl ObjectSet {
                 second,
                 child,
             } => layer.merge(
-                (first.time(), first.object()),
-                (second.time(), second.object()),
-                (child.time(), child.object()),
+                (first.time(), first.id()),
+                (second.time(), second.id()),
+                (child.time(), child.id()),
                 thickness,
                 stamp,
             ),
             TrackEdit::Reparent { child, parent } => layer.reparent(
-                (child.time(), child.object()),
-                (parent.time(), parent.object()),
+                (child.time(), child.id()),
+                (parent.time(), parent.id()),
                 thickness,
                 stamp,
             ),
             TrackEdit::Detach { child } => {
-                layer.detach((child.time(), child.object()), thickness, stamp)
+                layer.detach((child.time(), child.id()), thickness, stamp)
             }
         };
         if !done {
@@ -2005,7 +2111,7 @@ impl ObjectSet {
         &mut self,
         time: u32,
         pruned: Option<ObjectFrame>,
-        objects: &[usize],
+        removed: &[ObjectId],
         stamp: Revision,
     ) {
         self.discard_object_coloc();
@@ -2014,7 +2120,10 @@ impl ObjectSet {
         let pruned_tracks = self
             .tracks
             .as_ref()
-            .map(|layer| layer.set().without_objects(time, objects));
+            .map(|layer| layer.set().without_objects(time, removed));
+        let kept = pruned
+            .as_ref()
+            .map_or_else(ObjectIds::empty, |frame| frame.ids().clone());
         let placed = if empty {
             None
         } else {
@@ -2028,11 +2137,7 @@ impl ObjectSet {
         slot.geometry = GeometryId::mint();
         slot.appearance = Revision::mint();
         slot.frame = placed;
-        let hidden = Arc::make_mut(&mut self.hidden);
-        if let Some(mask) = hidden.get_mut(time as usize) {
-            *mask = retained(mask, objects);
-        }
-        self.recount_hidden();
+        self.hide_retained(time, &kept);
         if let Some((thickness, pruned)) = self.track_thickness().zip(pruned_tracks.flatten()) {
             self.tracks = (!pruned.is_empty()).then(|| TrackLayer::new(pruned, thickness, stamp));
             visibility = Visibility::All;
@@ -2050,6 +2155,20 @@ impl ObjectSet {
         self.shape = stamp;
         self.document = Revision::mint();
         self.visibility = visibility;
+    }
+
+    fn hide_retained(&mut self, time: u32, kept: &ObjectIds) {
+        let hidden = Arc::make_mut(&mut self.hidden);
+        if let Some(held) = hidden.get_mut(time as usize) {
+            *held = ObjectIds::new(
+                held.as_slice()
+                    .iter()
+                    .copied()
+                    .filter(|id| kept.contains(*id))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        self.recount_hidden();
     }
 
     pub(crate) fn duplicate(
@@ -2126,12 +2245,15 @@ impl ObjectSet {
             version: provenance.algorithm().version(),
             provenance,
             curation: Arc::new(Curation::default()),
+            source: ObjectIdSource::new(),
+            replaced: None,
         };
-        if duplicate
-            .hidden
-            .iter()
-            .any(|mask| mask.iter().any(|hidden| *hidden))
-        {
+        for slot in &duplicate.frames {
+            if let Some(frame) = slot.shared() {
+                duplicate.source.observe(frame.ids());
+            }
+        }
+        if duplicate.hidden.iter().any(|hidden| !hidden.is_empty()) {
             for time in 0..duplicate.frames.len() {
                 duplicate.record_hidden(time as u32);
             }
@@ -2151,12 +2273,24 @@ impl ObjectSet {
                 other.name
             ));
         }
+        let mut renumber = HashMap::new();
+        let mut absorbed_frames = Vec::with_capacity(other.frames.len());
+        for slot in &other.frames {
+            let Some(frame) = slot.frame.as_ref().map(Frame::shared) else {
+                absorbed_frames.push(None);
+                continue;
+            };
+            let ids = self.source.allocate(frame.object_count());
+            for (held, next) in frame.ids().as_slice().iter().zip(ids.as_slice()) {
+                renumber.insert(*held, *next);
+            }
+            absorbed_frames.push(Some(Arc::new(frame.reidentified(ids))));
+        }
         let mut frames = Vec::with_capacity(self.frames.len());
-        for (left, right) in self.frames.iter().zip(&other.frames) {
-            let frame = match (left.frame.as_ref(), right.frame.as_ref()) {
+        for ((left, right), absorbed) in self.frames.iter().zip(&other.frames).zip(absorbed_frames)
+        {
+            let frame = match (left.frame.as_ref().map(Frame::shared), absorbed) {
                 (Some(carried), Some(absorbed)) => {
-                    let carried = carried.shared();
-                    let absorbed = absorbed.shared();
                     if carried.level() != absorbed.level() {
                         return Err(format!(
                             "the object set {} detects another resolution",
@@ -2166,9 +2300,10 @@ impl ObjectSet {
                     Some(Frame::resident(Arc::new(carried.merge(&absorbed)?)))
                 }
                 (Some(_), None) => left.frame.clone(),
-                (None, Some(_)) => right.frame.clone(),
+                (None, Some(absorbed)) => Some(Frame::resident(absorbed)),
                 (None, None) => None,
             };
+            let _ = right;
             frames.push(FrameSlot {
                 stamp,
                 geometry: GeometryId::mint(),
@@ -2176,17 +2311,39 @@ impl ObjectSet {
                 frame,
             });
         }
-        let offsets = self
-            .frames
+        let absorbed_hidden = other
+            .hidden
             .iter()
-            .map(|slot| slot.objects())
+            .map(|hidden| {
+                ObjectIds::new(
+                    hidden
+                        .as_slice()
+                        .iter()
+                        .map(|id| {
+                            renumber.get(id).copied().unwrap_or_else(|| {
+                                panic!("a hidden object stands in the frames it names")
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect::<Vec<_>>();
         let tracks = match (&self.tracks, &other.tracks) {
             (None, None) => None,
             (Some(layer), None) => Some(layer.set().clone()),
-            (None, Some(layer)) => Some(layer.set().shift(&offsets)),
+            (None, Some(layer)) => Some(layer.set().renumbered(|id| {
+                renumber
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_else(|| panic!("a tracked object stands in the frames it names"))
+            })),
             (Some(layer), Some(absorbed)) => {
-                Some(layer.set().append(&absorbed.set().shift(&offsets)))
+                Some(layer.set().append(&absorbed.set().renumbered(|id| {
+                    renumber
+                        .get(&id)
+                        .copied()
+                        .unwrap_or_else(|| panic!("a tracked object stands in the frames it names"))
+                })))
             }
         };
         let tracks = self
@@ -2239,11 +2396,8 @@ impl ObjectSet {
             ));
         }
         let seeds = self.seeds.clone();
-        let hidden = self.combined_hidden(other, &offsets, &frames);
-        let hidden_total = hidden
-            .iter()
-            .map(|mask| mask.iter().filter(|hidden| **hidden).count())
-            .sum();
+        let hidden = self.combined_hidden(&absorbed_hidden, &frames);
+        let hidden_total = hidden.iter().map(ObjectIds::len).sum();
         let label = self
             .label
             .filter(|metric| !matches!(metric, ObjectColor::Coloc { .. }));
@@ -2285,38 +2439,32 @@ impl ObjectSet {
             provenance: self.provenance.clone(),
             version: self.version,
             curation: Arc::new(self.curation.combined(&other.curation)),
+            source: self.source.clone(),
+            replaced: None,
         };
         Ok(merged)
     }
 
-    fn combined_hidden(
-        &self,
-        other: &Self,
-        offsets: &[usize],
-        frames: &[FrameSlot],
-    ) -> Vec<Vec<bool>> {
-        if self.hidden.is_empty() && other.hidden.is_empty() {
+    fn combined_hidden(&self, absorbed: &[ObjectIds], frames: &[FrameSlot]) -> Vec<ObjectIds> {
+        if self.hidden.is_empty()
+            && absorbed.is_empty()
+            && frames.iter().all(|slot| slot.objects() == 0)
+        {
             return Vec::new();
         }
         let mut hidden = Vec::with_capacity(frames.len());
-        for (time, slot) in frames.iter().enumerate() {
-            let mut mask = vec![false; slot.objects()];
-            if let Some(source) = self.hidden.get(time) {
-                for (index, flag) in source.iter().enumerate() {
-                    if *flag && let Some(slot) = mask.get_mut(index) {
-                        *slot = true;
-                    }
-                }
+        for time in 0..frames.len() {
+            let mut ids = self
+                .hidden
+                .get(time)
+                .cloned()
+                .unwrap_or_else(ObjectIds::empty)
+                .as_slice()
+                .to_vec();
+            if let Some(source) = absorbed.get(time) {
+                ids.extend_from_slice(source.as_slice());
             }
-            if let Some(source) = other.hidden.get(time) {
-                let offset = offsets[time];
-                for (index, flag) in source.iter().enumerate() {
-                    if *flag && let Some(slot) = mask.get_mut(offset + index) {
-                        *slot = true;
-                    }
-                }
-            }
-            hidden.push(mask);
+            hidden.push(ObjectIds::new(ids));
         }
         hidden
     }
@@ -2451,6 +2599,7 @@ impl ObjectSet {
                 store.as_ref(),
                 Arc::new(ObjectFrame::Spots(Arc::new(SpotSet::new(
                     spots.level(),
+                    spots.ids().clone(),
                     aligned,
                     spots.intensities().clone(),
                 )))),
@@ -2481,14 +2630,13 @@ impl ObjectSet {
             return;
         };
         let frames = &self.frames;
-        let remapped = layer.set().remapped(|time, object, centroid| {
+        let remapped = layer.set().remapped(|time, id, centroid| {
             let Some(spots) = frames.get(time as usize).and_then(|slot| slot.spot_frame()) else {
                 return centroid;
             };
             spots
-                .spots()
-                .get(object)
-                .map_or(centroid, |spot| spot.center())
+                .index_of(id)
+                .map_or(centroid, |object| spots.spots()[object].center())
         });
         let stamp = stamps.mint();
         self.tracks = Some(TrackLayer::new(remapped, thickness, stamp));
@@ -2496,54 +2644,23 @@ impl ObjectSet {
         self.shape = stamp;
     }
 
-    pub(crate) fn install(&mut self, time: u32, frame: ObjectFrame, stamp: Revision) {
-        self.install_shared(time, Arc::new(frame), stamp);
-    }
-    pub(crate) fn install_shared(&mut self, time: u32, frame: Arc<ObjectFrame>, stamp: Revision) {
+    pub(crate) fn install_shared(
+        &mut self,
+        time: u32,
+        frame: Arc<ObjectFrame>,
+        stamp: Revision,
+    ) -> Readoption {
         assert_eq!(
             frame.kind(),
             self.kind,
             "an object frame matches its object set"
         );
-        let placed = self.manage(frame);
-        self.discard_object_coloc();
+        let (frame, report) = self.adopt(time, Some(frame));
+        let placed = frame.map(|frame| self.manage(frame));
         self.revision = stamp;
         self.shape = stamp;
         self.document = Revision::mint();
         self.visibility = Visibility::All;
-        Arc::make_mut(&mut self.hidden).clear();
-        self.hidden_total = 0;
-        self.refresh_appearance();
-        let slot = self
-            .frames
-            .get_mut(time as usize)
-            .expect("the object frame lies inside the time series");
-        slot.stamp = stamp;
-        slot.geometry = GeometryId::mint();
-        slot.frame = Some(placed);
-    }
-
-    pub(crate) fn install_optional(
-        &mut self,
-        time: u32,
-        frame: Option<Arc<ObjectFrame>>,
-        stamp: Revision,
-    ) {
-        let placed = frame.map(|frame| {
-            assert_eq!(
-                frame.kind(),
-                self.kind,
-                "an object frame matches its object set"
-            );
-            self.manage(frame)
-        });
-        self.discard_object_coloc();
-        self.revision = stamp;
-        self.shape = stamp;
-        self.document = Revision::mint();
-        self.visibility = Visibility::All;
-        Arc::make_mut(&mut self.hidden).clear();
-        self.hidden_total = 0;
         self.refresh_appearance();
         let slot = self
             .frames
@@ -2552,8 +2669,131 @@ impl ObjectSet {
         slot.stamp = stamp;
         slot.geometry = GeometryId::mint();
         slot.frame = placed;
+        report
     }
 
+    pub(crate) fn install_optional(
+        &mut self,
+        time: u32,
+        frame: Option<Arc<ObjectFrame>>,
+        stamp: Revision,
+    ) -> Readoption {
+        if let Some(frame) = frame.as_ref() {
+            assert_eq!(
+                frame.kind(),
+                self.kind,
+                "an object frame matches its object set"
+            );
+        }
+        let (frame, report) = self.adopt(time, frame);
+        let placed = frame.map(|frame| self.manage(frame));
+        self.revision = stamp;
+        self.shape = stamp;
+        self.document = Revision::mint();
+        self.visibility = Visibility::All;
+        self.refresh_appearance();
+        let slot = self
+            .frames
+            .get_mut(time as usize)
+            .expect("the object frame lies inside the time series");
+        slot.stamp = stamp;
+        slot.geometry = GeometryId::mint();
+        slot.frame = placed;
+        report
+    }
+
+    fn adopt(
+        &mut self,
+        time: u32,
+        next: Option<Arc<ObjectFrame>>,
+    ) -> (Option<Arc<ObjectFrame>>, Readoption) {
+        let held = self
+            .replaced
+            .as_ref()
+            .and_then(|frames| frames.get(time as usize).cloned().flatten())
+            .or_else(|| self.frames.get(time as usize).and_then(FrameSlot::shared));
+        let held_ids = held
+            .as_ref()
+            .map_or_else(ObjectIds::empty, |held| held.ids().clone());
+        let (next, carried) = match next {
+            Some(next) => {
+                let inherits = held
+                    .as_ref()
+                    .filter(|held| !held.is_empty() && !next.is_empty())
+                    .map_or_else(
+                        || vec![None; next.object_count()],
+                        |held| match_objects(held, &next, self.voxel),
+                    );
+                let mut ids = Vec::with_capacity(next.object_count());
+                let mut carried = 0;
+                for (object, inherits) in inherits.iter().enumerate() {
+                    match inherits {
+                        Some(id) => {
+                            ids.push(*id);
+                            carried += 1;
+                        }
+                        None => ids.push(
+                            next.id_of(object)
+                                .expect("an object of a frame carries its id"),
+                        ),
+                    }
+                }
+                let ids =
+                    ObjectIds::checked(ids).expect("a readopted frame names every object once");
+                self.source.observe(&ids);
+                (Some(Arc::new(next.reidentified(ids))), carried)
+            }
+            None => (None, 0),
+        };
+        let next_ids = next
+            .as_ref()
+            .map_or_else(ObjectIds::empty, |next| next.ids().clone());
+        let mut gone = held_ids
+            .as_slice()
+            .iter()
+            .copied()
+            .filter(|id| !next_ids.contains(*id))
+            .collect::<Vec<_>>();
+        gone.sort_unstable();
+        let purged = self.purge(time, &gone);
+        (
+            next,
+            Readoption {
+                carried,
+                fresh: next_ids.len() - carried,
+                vanished: gone.len(),
+                purged,
+            },
+        )
+    }
+
+    fn purge(&mut self, time: u32, gone: &[ObjectId]) -> usize {
+        let mut purged = 0;
+        if let Some(held) = Arc::make_mut(&mut self.hidden).get_mut(time as usize) {
+            let before = held.len();
+            *held = ObjectIds::new(
+                held.as_slice()
+                    .iter()
+                    .copied()
+                    .filter(|id| gone.binary_search(id).is_err())
+                    .collect::<Vec<_>>(),
+            );
+            purged += before - held.len();
+        }
+        self.recount_hidden();
+        if gone.is_empty() {
+            return purged;
+        }
+        let pruned = self
+            .tracks
+            .as_ref()
+            .and_then(|layer| layer.set().without_objects(time, gone));
+        if let Some((thickness, pruned)) = self.track_thickness().zip(pruned) {
+            self.tracks =
+                (!pruned.is_empty()).then(|| TrackLayer::new(pruned, thickness, self.revision));
+        }
+        purged
+    }
     fn manage(&mut self, frame: Arc<ObjectFrame>) -> Frame {
         let spots = match frame.as_ref() {
             ObjectFrame::Spots(spots) => spots.len(),
@@ -2704,20 +2944,17 @@ impl ObjectSet {
         self.tracks = None;
     }
 
-    pub(crate) fn cut_track(&mut self, time: u32, object: usize, stamp: Revision) -> bool {
-        let Some(position) = self.anchor_at(time, object) else {
+    pub(crate) fn cut_track(&mut self, time: u32, id: ObjectId, stamp: Revision) -> bool {
+        let Some(position) = self.anchor_at(time, id) else {
             return false;
         };
-        self.edit_track(
-            TrackEdit::Cut(TrackAnchor::new(time, object, position)),
-            stamp,
-        )
+        self.edit_track(TrackEdit::Cut(TrackAnchor::new(time, id, position)), stamp)
     }
 
     pub(crate) fn join_tracks(
         &mut self,
-        source: (u32, usize),
-        target: (u32, usize),
+        source: (u32, ObjectId),
+        target: (u32, ObjectId),
         stamp: Revision,
     ) -> bool {
         let (Some(source_position), Some(target_position)) = (
@@ -2737,9 +2974,9 @@ impl ObjectSet {
 
     pub(crate) fn divide_tracks(
         &mut self,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
         stamp: Revision,
     ) -> bool {
         let (Some(parent_position), Some(first_position), Some(second_position)) = (
@@ -2761,9 +2998,9 @@ impl ObjectSet {
 
     pub(crate) fn merge_tracks(
         &mut self,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
         stamp: Revision,
     ) -> bool {
         let (Some(first_position), Some(second_position), Some(child_position)) = (
@@ -2785,8 +3022,8 @@ impl ObjectSet {
 
     pub(crate) fn reparent_track(
         &mut self,
-        child: (u32, usize),
-        parent: (u32, usize),
+        child: (u32, ObjectId),
+        parent: (u32, ObjectId),
         stamp: Revision,
     ) -> bool {
         let (Some(child_position), Some(parent_position)) = (
@@ -2804,7 +3041,7 @@ impl ObjectSet {
         )
     }
 
-    pub(crate) fn detach_track(&mut self, child: (u32, usize), stamp: Revision) -> bool {
+    pub(crate) fn detach_track(&mut self, child: (u32, ObjectId), stamp: Revision) -> bool {
         let Some(child_position) = self.anchor_at(child.0, child.1) else {
             return false;
         };
@@ -2816,10 +3053,10 @@ impl ObjectSet {
         )
     }
 
-    fn anchor_at(&self, time: u32, object: usize) -> Option<[f32; 3]> {
+    fn anchor_at(&self, time: u32, id: ObjectId) -> Option<[f32; 3]> {
         let frame = self.frames.get(time as usize)?.shared()?;
-        let anchors = frame.anchors();
-        Some(anchors.get(object)?.position())
+        let object = frame.index_of(id)?;
+        Some(frame.anchors().get(object)?.position())
     }
 
     fn cached_track_bounds(&self) -> Option<TrackBounds> {
@@ -2882,17 +3119,64 @@ impl ObjectSet {
         }
     }
 
-    pub fn track_at(&self, time: u32, object: usize) -> Option<usize> {
-        self.tracks.as_ref()?.set().track_at(time, object)
+    pub fn track_at(&self, time: u32, id: ObjectId) -> Option<usize> {
+        self.tracks.as_ref()?.set().track_at(time, id)
     }
 }
 
-fn retained(mask: &[bool], objects: &[usize]) -> Vec<bool> {
-    mask.iter()
+fn match_objects(held: &ObjectFrame, next: &ObjectFrame, voxel: f32) -> Vec<Option<ObjectId>> {
+    let anchors = held.anchors();
+    let reach = |anchor: &grana_object::ObjectAnchor| {
+        let size = anchor.bounds().size();
+        [0, 1, 2].map(|axis| (0.5 * size[axis]).max(0.5 * voxel))
+    };
+    let bvh = grana_geometry::Bvh::new(anchors.iter().enumerate().map(|(object, anchor)| {
+        (
+            object as u32,
+            grana_geometry::Primitive::ellipsoid(grana_geometry::Ellipsoid::new(
+                anchor.position(),
+                reach(anchor),
+            )),
+        )
+    }));
+    let mut claims = Vec::new();
+    for (object, anchor) in next.anchors().iter().enumerate() {
+        let Some((distance, owner)) = bvh.nearest(glam::Vec3::from(anchor.position())) else {
+            continue;
+        };
+        if distance > voxel {
+            continue;
+        }
+        let Some(id) = held.id_of(owner as usize) else {
+            continue;
+        };
+        claims.push((distance, object, id));
+    }
+    claims.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+    });
+    let mut matched = vec![None; next.object_count()];
+    let mut taken = std::collections::BTreeSet::new();
+    for (_, object, id) in claims {
+        if taken.insert(id) {
+            matched[object] = Some(id);
+        }
+    }
+    matched
+}
+
+fn removed_ids(frame: &ObjectFrame, keep: &[bool]) -> Vec<ObjectId> {
+    let mut ids = keep
+        .iter()
         .enumerate()
-        .filter(|(index, _)| objects.binary_search(index).is_err())
-        .map(|(_, value)| *value)
-        .collect()
+        .filter(|(_, kept)| !**kept)
+        .filter_map(|(object, _)| frame.id_of(object))
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
 }
 
 fn accumulate(accumulated: Option<Extent>, value: f32) -> Option<Extent> {

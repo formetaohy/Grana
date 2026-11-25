@@ -6,7 +6,7 @@ use grana_measure::{
     Measurement, PlotAxis, Scope,
 };
 use grana_mesh::Format as MeshFormat;
-use grana_object::{MaskMode, MaskTool, ObjectAnchor, TrackParams};
+use grana_object::{MaskMode, MaskTool, ObjectAnchor, ObjectId, TrackParams};
 use grana_optics::Psf;
 
 use grana_scene::{
@@ -53,7 +53,7 @@ pub enum Command {
     DeleteObject {
         set: ObjectSetId,
         time: u32,
-        object: usize,
+        object: ObjectId,
     },
     DeleteFiltered,
     ExtractFiltered,
@@ -65,12 +65,12 @@ pub enum Command {
     MergeSurfaces {
         set: ObjectSetId,
         time: u32,
-        objects: Vec<usize>,
+        objects: Vec<ObjectId>,
     },
     SplitSurface {
         set: ObjectSetId,
         time: u32,
-        object: usize,
+        object: ObjectId,
     },
     PaintMask {
         set: ObjectSetId,
@@ -221,7 +221,7 @@ pub enum Command {
     SetObjectHidden {
         set: ObjectSetId,
         time: u32,
-        objects: Vec<usize>,
+        objects: Vec<ObjectId>,
         hidden: bool,
     },
     ClearHidden(ObjectSetId),
@@ -296,33 +296,33 @@ pub enum Command {
     CutTrack {
         set: ObjectSetId,
         time: u32,
-        object: usize,
+        object: ObjectId,
     },
     JoinTracks {
         set: ObjectSetId,
-        source: (u32, usize),
-        target: (u32, usize),
+        source: (u32, ObjectId),
+        target: (u32, ObjectId),
     },
     DivideTracks {
         set: ObjectSetId,
-        parent: (u32, usize),
-        first: (u32, usize),
-        second: (u32, usize),
+        parent: (u32, ObjectId),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
     },
     MergeTracks {
         set: ObjectSetId,
-        first: (u32, usize),
-        second: (u32, usize),
-        child: (u32, usize),
+        first: (u32, ObjectId),
+        second: (u32, ObjectId),
+        child: (u32, ObjectId),
     },
     ReparentTrack {
         set: ObjectSetId,
-        child: (u32, usize),
-        parent: (u32, usize),
+        child: (u32, ObjectId),
+        parent: (u32, ObjectId),
     },
     DetachTrack {
         set: ObjectSetId,
-        child: (u32, usize),
+        child: (u32, ObjectId),
     },
     SetRegion(Region),
     SetClip(Clip),

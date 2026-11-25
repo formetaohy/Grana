@@ -7,7 +7,7 @@ use std::sync::Arc;
 use grana_geometry::{Bounds, Geometry, Mesh, PackedMesh, SurfaceShape};
 use grana_store::SpillStore;
 
-use crate::IntensityTable;
+use crate::{IntensityTable, ObjectId, ObjectIds};
 
 pub use edit::{SurfaceEdit, SurfaceEditKind};
 pub use topology::{Basin, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
@@ -92,6 +92,7 @@ impl SurfaceStatistics {
 #[derive(Clone, Debug)]
 pub struct SurfaceSet {
     level: usize,
+    ids: ObjectIds,
     geometry: Geometry<PackedMesh>,
     objects: Vec<SurfaceStatistics>,
     intensities: IntensityTable,
@@ -105,6 +106,7 @@ pub struct SurfaceSet {
 impl SurfaceSet {
     pub fn new(
         level: usize,
+        ids: ObjectIds,
         mesh: Mesh,
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
@@ -112,11 +114,12 @@ impl SurfaceSet {
         let triangles = mesh.triangle_count();
         let geometry = PackedMesh::new(mesh);
         assert!(
-            agrees(&geometry, &objects, &intensities),
+            agrees(&geometry, &ids, &objects, &intensities),
             "every packed surface names an object"
         );
         Self {
             level,
+            ids,
             geometry: Geometry::resident(geometry),
             objects,
             intensities,
@@ -130,6 +133,7 @@ impl SurfaceSet {
 
     pub fn paged(
         level: usize,
+        ids: ObjectIds,
         store: &Arc<SpillStore>,
         mesh: Mesh,
         objects: Vec<SurfaceStatistics>,
@@ -138,11 +142,12 @@ impl SurfaceSet {
         let triangles = mesh.triangle_count();
         let geometry = PackedMesh::new(mesh);
         assert!(
-            agrees(&geometry, &objects, &intensities),
+            agrees(&geometry, &ids, &objects, &intensities),
             "every packed surface names an object"
         );
         Ok(Self {
             level,
+            ids,
             geometry: Geometry::paged(store, geometry)?,
             objects,
             intensities,
@@ -156,17 +161,19 @@ impl SurfaceSet {
 
     pub fn from_geometry(
         level: usize,
+        ids: ObjectIds,
         geometry: Geometry<PackedMesh>,
         objects: Vec<SurfaceStatistics>,
         intensities: IntensityTable,
     ) -> Result<Option<Self>, grana_geometry::Error> {
         let packed = geometry.load()?;
-        if !agrees(&packed, &objects, &intensities) {
+        if !agrees(&packed, &ids, &objects, &intensities) {
             return Ok(None);
         }
         let triangles = packed.triangle_count();
         Ok(Some(Self {
             level,
+            ids,
             geometry,
             objects,
             intensities,
@@ -176,6 +183,18 @@ impl SurfaceSet {
             triangles,
             details: Arc::new(Details::new()),
         }))
+    }
+
+    pub fn reidentified(&self, ids: ObjectIds) -> Self {
+        assert_eq!(
+            ids.len(),
+            self.objects.len(),
+            "a reidentified surface set names every surface"
+        );
+        Self {
+            ids,
+            ..self.clone()
+        }
     }
 
     pub fn with_cut(mut self, leaves: Vec<Vec<u32>>, removed: Vec<u32>) -> Self {
@@ -279,6 +298,18 @@ impl SurfaceSet {
         &self.objects
     }
 
+    pub fn ids(&self) -> &ObjectIds {
+        &self.ids
+    }
+
+    pub fn id(&self, object: usize) -> Option<ObjectId> {
+        self.ids.get(object)
+    }
+
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.ids.index_of(id)
+    }
+
     pub fn intensities(&self) -> &IntensityTable {
         &self.intensities
     }
@@ -298,6 +329,7 @@ impl SurfaceSet {
     pub fn empty(level: usize, channels: usize) -> Self {
         Self::new(
             level,
+            ObjectIds::empty(),
             Mesh::new(Vec::new(), Vec::new()),
             Vec::new(),
             IntensityTable::empty(channels),
@@ -316,6 +348,9 @@ impl SurfaceSet {
         let Some(geometry) = self.geometry.without(object)? else {
             return Ok(None);
         };
+        let Some(ids) = self.ids.without(object) else {
+            return Ok(None);
+        };
         let mut objects = self.objects.clone();
         objects.remove(object);
         let intensities = self.intensities.without(object);
@@ -328,6 +363,7 @@ impl SurfaceSet {
         }
         Ok(Some(Self {
             level: self.level,
+            ids,
             geometry,
             objects,
             intensities,
@@ -375,6 +411,7 @@ impl SurfaceSet {
         }
         Ok(Self {
             level: self.level,
+            ids: self.ids.retained(keep),
             geometry,
             objects,
             intensities: self.intensities.retain(keep),
@@ -433,6 +470,9 @@ impl SurfaceSet {
             .filter(|(_, replacement)| replacement.is_none())
             .map(|(object, _)| *object)
             .collect::<std::collections::BTreeSet<_>>();
+        let kept = (0..self.objects.len())
+            .map(|object| !dropped.contains(&object))
+            .collect::<Vec<_>>();
         let replaced = edits.iter().any(|(_, replacement)| replacement.is_some());
         let channels = self.intensities.channels();
         let mut objects = Vec::with_capacity(self.objects.len() - dropped.len());
@@ -482,6 +522,7 @@ impl SurfaceSet {
         };
         Ok(Some(Self {
             level: self.level,
+            ids: self.ids.retained(&kept),
             geometry,
             objects,
             intensities,
@@ -498,6 +539,10 @@ impl SurfaceSet {
             self.level, other.level,
             "a merged surface set holds one resolution level"
         );
+        let ids = self
+            .ids
+            .appended(&other.ids)
+            .expect("two merged surface sets name disjoint objects");
         let geometry = self.geometry.merge(&other.geometry)?;
         let mut objects = self.objects.clone();
         objects.extend_from_slice(&other.objects);
@@ -537,6 +582,7 @@ impl SurfaceSet {
         };
         Ok(Self {
             level: self.level,
+            ids,
             geometry,
             objects,
             intensities,
@@ -559,6 +605,7 @@ fn unions(leaves: &[Vec<u32>], base: u32) -> Vec<Vec<u32>> {
 impl PartialEq for SurfaceSet {
     fn eq(&self, other: &Self) -> bool {
         self.level == other.level
+            && self.ids == other.ids
             && self.geometry == other.geometry
             && self.objects == other.objects
             && self.intensities == other.intensities
@@ -569,10 +616,12 @@ impl PartialEq for SurfaceSet {
 
 fn agrees(
     geometry: &PackedMesh,
+    ids: &ObjectIds,
     objects: &[SurfaceStatistics],
     intensities: &IntensityTable,
 ) -> bool {
     geometry.object_count() == objects.len()
         && geometry.is_empty() == objects.is_empty()
         && intensities.objects() == objects.len()
+        && ids.len() == objects.len()
 }

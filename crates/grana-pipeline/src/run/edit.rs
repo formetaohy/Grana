@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_object::{SurfaceEdit, SurfaceSet};
+use grana_object::{ObjectIdSource, SurfaceEdit, SurfaceSet};
 use grana_scene::{ObjectFrame, ObjectSource};
 use grana_store::SpillStore;
 
@@ -9,6 +9,7 @@ pub fn edit(
     edits: &[SurfaceEdit],
     voxel: f32,
     store: Option<&Arc<SpillStore>>,
+    ids: &ObjectIdSource,
 ) -> Result<Vec<crate::run::EditedFrame>, String> {
     let mut edited = Vec::new();
     for (frame, edits) in grouped(edits) {
@@ -28,7 +29,7 @@ pub fn edit(
         let mut next: Option<SurfaceSet> = None;
         for edit in edits {
             let base = next.as_ref().unwrap_or(set);
-            next = Some(grana_analysis::apply(base, edit, voxel, store)?);
+            next = Some(grana_analysis::apply(base, edit, voxel, store, ids)?);
         }
         edited.push((frame, next.map(|set| Arc::new(ObjectFrame::Surfaces(set)))));
     }

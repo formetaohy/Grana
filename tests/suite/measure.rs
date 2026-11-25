@@ -5,7 +5,7 @@ use grana_object::{
     IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
 };
 
-use crate::support::measure_source;
+use crate::support::{id, measure_source, node, spot_set};
 
 const CHANNEL: &str = "EGFP 488";
 
@@ -72,7 +72,7 @@ fn summarises_spots_and_exports_a_csv() {
     assert!((value(&table, 0, "nearest_distance_um") - 27.0f32.sqrt()).abs() < 1.0e-5);
     assert_eq!(value(&table, 2, "frame"), 2.0);
     assert_eq!(value(&table, 2, "time_s"), 2.0);
-    assert_eq!(table.observation(3).object(), Some(1));
+    assert_eq!(table.observation(3).object(), Some(id(1)));
     assert_eq!(table.observation(3).track(), Some(1));
 
     let per_track = Table::build(
@@ -406,7 +406,7 @@ fn spots() -> SpotSet {
             Some(SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0)),
         ],
     );
-    SpotSet::new(
+    spot_set(
         0,
         vec![
             Spot::new([1.0, 2.0, 3.0], 0.5, 0.25),
@@ -417,7 +417,7 @@ fn spots() -> SpotSet {
 }
 
 fn unmeasured() -> SpotSet {
-    SpotSet::new(
+    spot_set(
         0,
         vec![Spot::new([1.0, 2.0, 3.0], 0.5, 0.25)],
         IntensityTable::new(1, vec![None]),
@@ -432,7 +432,7 @@ fn grouped(z: f32) -> SpotSet {
             Some(SampleStatistics::new(20.0, 19.0, 21.0, 0.5, 200.0)),
         ],
     );
-    SpotSet::new(
+    spot_set(
         0,
         vec![
             Spot::grouped([1.0, 2.0, z], [0.5; 3], 0.5, Some(1)),
@@ -444,12 +444,12 @@ fn grouped(z: f32) -> SpotSet {
 
 fn tracks() -> TrackSet {
     let first = Track::new(vec![
-        TrackNode::new(0, 0, [1.0, 2.0, 3.0]),
-        TrackNode::new(1, 0, [1.5, 2.0, 3.0]),
+        TrackNode::new(0, id(0), [1.0, 2.0, 3.0]),
+        TrackNode::new(1, id(0), [1.5, 2.0, 3.0]),
     ]);
     let second = Track::new(vec![
-        TrackNode::new(0, 1, [4.0, 5.0, 6.0]),
-        TrackNode::new(1, 1, [4.0, 5.0, 6.5]),
+        TrackNode::new(0, id(1), [4.0, 5.0, 6.0]),
+        TrackNode::new(1, id(1), [4.0, 5.0, 6.5]),
     ]);
     TrackSet::new(1.0, vec![first, second])
 }
@@ -457,45 +457,45 @@ fn tracks() -> TrackSet {
 #[test]
 fn edits_a_lineage_between_divisions_and_parents() {
     let mother = Track::new(vec![
-        TrackNode::new(0, 0, [0.0, 0.0, 0.0]),
-        TrackNode::new(1, 0, [1.0, 0.0, 0.0]),
+        TrackNode::new(0, id(0), [0.0, 0.0, 0.0]),
+        TrackNode::new(1, id(0), [1.0, 0.0, 0.0]),
     ]);
     let left = Track::new(vec![
-        TrackNode::new(2, 1, [2.0, 0.0, 0.0]),
-        TrackNode::new(3, 1, [3.0, 0.0, 0.0]),
+        TrackNode::new(2, id(1), [2.0, 0.0, 0.0]),
+        TrackNode::new(3, id(1), [3.0, 0.0, 0.0]),
     ]);
     let right = Track::new(vec![
-        TrackNode::new(2, 2, [2.0, 1.0, 0.0]),
-        TrackNode::new(3, 2, [3.0, 1.0, 0.0]),
+        TrackNode::new(2, id(2), [2.0, 1.0, 0.0]),
+        TrackNode::new(3, id(2), [3.0, 1.0, 0.0]),
     ]);
     let later = Track::new(vec![
-        TrackNode::new(4, 3, [4.0, 0.0, 0.0]),
-        TrackNode::new(5, 3, [5.0, 0.0, 0.0]),
+        TrackNode::new(4, id(3), [4.0, 0.0, 0.0]),
+        TrackNode::new(5, id(3), [5.0, 0.0, 0.0]),
     ]);
     let set = TrackSet::new(1.0, vec![mother, left, right, later]);
-    assert!(set.can_divide((1, 0), (2, 1), (2, 2)));
+    assert!(set.can_divide(node(1, 0), node(2, 1), node(2, 2)));
     let divided = set
-        .divide((1, 0), (2, 1), (2, 2))
+        .divide(node(1, 0), node(2, 1), node(2, 2))
         .expect("a division joins two daughter tracks");
     assert_eq!(divided.divisions(), 1);
     assert_eq!(divided.children(0).collect::<Vec<_>>(), vec![1, 2]);
     assert_eq!(divided.parent(1), Some(0));
 
     let adopted = divided
-        .reparent((4, 3), (3, 1))
+        .reparent(node(4, 3), node(3, 1))
         .expect("a root track adopts an earlier end");
     assert_eq!(adopted.parent(3), Some(1));
     assert_eq!(adopted.divisions(), 1);
     assert_eq!(adopted.children(1).collect::<Vec<_>>(), vec![3]);
 
     let detached = adopted
-        .detach((4, 3))
+        .detach(node(4, 3))
         .expect("an adopted track returns to a lineage start");
     assert_eq!(detached.parent(3), None);
     assert_eq!(detached.divisions(), 1);
 
     let opened = divided
-        .detach((2, 2))
+        .detach(node(2, 2))
         .expect("a division opens into separate lineages");
     assert_eq!(opened.divisions(), 0);
     assert_eq!(opened.parent(2), None);

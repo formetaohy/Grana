@@ -1,3 +1,5 @@
+use crate::NodeRef;
+use crate::identity::ObjectId;
 use crate::{Link, Track, TrackLink, TrackNode, TrackSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +32,7 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Detection {
     time: u32,
-    object: usize,
+    id: ObjectId,
     centroid: [f32; 3],
 }
 
@@ -75,7 +77,7 @@ impl Lineage {
             for (index, node) in track.nodes().iter().enumerate() {
                 detections.push(Detection {
                     time: node.time(),
-                    object: node.object(),
+                    id: node.id(),
                     centroid: node.centroid(),
                 });
                 if index > 0 {
@@ -106,14 +108,14 @@ impl Lineage {
     }
 
     pub(crate) fn from_edges(
-        nodes: &[(u32, usize, [f32; 3])],
-        edges: &[([u32; 2], [u32; 2])],
+        nodes: &[(u32, ObjectId, [f32; 3])],
+        edges: &[(NodeRef, NodeRef)],
     ) -> Result<Self, String> {
         let mut detections = nodes
             .iter()
-            .map(|(time, object, centroid)| Detection {
+            .map(|(time, id, centroid)| Detection {
                 time: *time,
-                object: *object,
+                id: *id,
                 centroid: *centroid,
             })
             .collect::<Vec<_>>();
@@ -121,15 +123,15 @@ impl Lineage {
         detections = sorted_of(&detections, &remap);
         if detections
             .windows(2)
-            .any(|pair| (pair[0].time, pair[0].object) == (pair[1].time, pair[1].object))
+            .any(|pair| (pair[0].time, pair[0].id) == (pair[1].time, pair[1].id))
         {
             return Err("a detection appears twice".to_string());
         }
         let mut held = Vec::new();
         for (source, target) in edges {
             let (Some(source), Some(target)) = (
-                find(&detections, source[0], source[1] as usize),
-                find(&detections, target[0], target[1] as usize),
+                find(&detections, source.0, source.1),
+                find(&detections, target.0, target.1),
             ) else {
                 continue;
             };
@@ -157,7 +159,7 @@ impl Lineage {
             if adjacency.incoming[node].len() > 2 {
                 return Err(format!(
                     "the detection {} of the frame {} follows {} detections",
-                    lineage.detections[node].object,
+                    lineage.detections[node].id.raw(),
                     lineage.detections[node].time,
                     adjacency.incoming[node].len()
                 ));
@@ -165,7 +167,7 @@ impl Lineage {
             if adjacency.outgoing[node].len() > 2 {
                 return Err(format!(
                     "the detection {} of the frame {} leads to {} detections",
-                    lineage.detections[node].object,
+                    lineage.detections[node].id.raw(),
                     lineage.detections[node].time,
                     adjacency.outgoing[node].len()
                 ));
@@ -175,8 +177,8 @@ impl Lineage {
         Ok(lineage)
     }
 
-    pub(crate) fn node_at(&self, time: u32, object: usize) -> Option<usize> {
-        find(&self.detections, time, object)
+    pub(crate) fn node_at(&self, time: u32, id: ObjectId) -> Option<usize> {
+        find(&self.detections, time, id)
     }
 
     pub(crate) fn cut(&mut self, node: usize) -> bool {
@@ -328,32 +330,23 @@ impl Lineage {
         self.normalize();
     }
 
-    pub(crate) fn without_objects(&mut self, time: u32, objects: &[usize]) -> bool {
-        if objects.is_empty() {
+    pub(crate) fn without_objects(&mut self, time: u32, ids: &[ObjectId]) -> bool {
+        if ids.is_empty() {
             return false;
         }
-        let mut kept = Vec::with_capacity(self.detections.len());
+        let dropped = |detection: &Detection| {
+            detection.time == time && ids.binary_search(&detection.id).is_ok()
+        };
         let mut remap = vec![usize::MAX; self.detections.len()];
-        let mut changed = false;
+        let mut kept = Vec::with_capacity(self.detections.len());
         for (slot, detection) in self.detections.iter().enumerate() {
-            let removed = if detection.time == time {
-                objects.partition_point(|object| *object < detection.object)
-            } else {
-                0
-            };
-            let dropped = detection.time == time && objects.get(removed) == Some(&detection.object);
-            if dropped {
-                changed = true;
+            if dropped(detection) {
                 continue;
             }
-            changed |= removed > 0;
             remap[slot] = kept.len();
-            kept.push(Detection {
-                object: detection.object - removed,
-                ..*detection
-            });
+            kept.push(*detection);
         }
-        if !changed {
+        if kept.len() == self.detections.len() {
             return false;
         }
         self.detections = kept;
@@ -371,19 +364,6 @@ impl Lineage {
             .collect();
         self.normalize();
         true
-    }
-
-    pub(crate) fn shift(&mut self, offsets: &[usize]) {
-        for detection in &mut self.detections {
-            detection.object += offsets.get(detection.time as usize).copied().unwrap_or(0);
-        }
-        let remap = remap_of(&self.detections);
-        self.detections = sorted_of(&self.detections, &remap);
-        for edge in &mut self.edges {
-            edge.source = remap[edge.source];
-            edge.target = remap[edge.target];
-        }
-        self.normalize();
     }
 
     pub(crate) fn into_set(mut self, frame_interval: f32) -> Result<TrackSet, String> {
@@ -418,7 +398,7 @@ impl Lineage {
                 .iter()
                 .map(|slot| {
                     let detection = self.detections[*slot];
-                    TrackNode::new(detection.time, detection.object, detection.centroid)
+                    TrackNode::new(detection.time, detection.id, detection.centroid)
                 })
                 .collect::<Vec<_>>();
             tracks.push(Track::new(nodes));
@@ -530,7 +510,7 @@ fn sorted_of(detections: &[Detection], remap: &[usize]) -> Vec<Detection> {
     let mut sorted = vec![
         Detection {
             time: 0,
-            object: 0,
+            id: ObjectId::FIRST,
             centroid: [0.0; 3],
         };
         detections.len()
@@ -543,14 +523,12 @@ fn sorted_of(detections: &[Detection], remap: &[usize]) -> Vec<Detection> {
 
 fn order(detections: &[Detection]) -> Vec<usize> {
     let mut order = (0..detections.len()).collect::<Vec<_>>();
-    order.sort_unstable_by_key(|slot| (detections[*slot].time, detections[*slot].object));
+    order.sort_unstable_by_key(|slot| (detections[*slot].time, detections[*slot].id));
     order
 }
 
-fn find(detections: &[Detection], time: u32, object: usize) -> Option<usize> {
+fn find(detections: &[Detection], time: u32, id: ObjectId) -> Option<usize> {
     detections
-        .binary_search_by_key(&(time, object), |detection| {
-            (detection.time, detection.object)
-        })
+        .binary_search_by_key(&(time, id), |detection| (detection.time, detection.id))
         .ok()
 }

@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_interop::{Kind, Objects, Shape};
 use grana_object::{
-    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics,
+    FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, ObjectIds, SampleStatistics,
+    Spot, SpotSet, SurfaceSet, SurfaceStatistics,
 };
 use grana_scene::{Drifts, ObjectFrame};
 use grana_store::SpillStore;
@@ -63,6 +63,12 @@ pub fn interop(
             return Ok(());
         }
         let detections = lineage.detections();
+        let ids = ObjectIds::new(
+            slots
+                .iter()
+                .map(|slot| lineage.object_id(*slot))
+                .collect::<Vec<_>>(),
+        );
         let frame = match objects.kind() {
             Kind::Points => {
                 let spots = slots
@@ -79,7 +85,7 @@ pub fn interop(
                 let table = intensities(
                     reader, &request, *time, slots, detections, &objects, &samples,
                 )?;
-                ObjectFrame::Spots(Arc::new(SpotSet::new(0, spots, table)))
+                ObjectFrame::Spots(Arc::new(SpotSet::new(0, ids, spots, table)))
             }
             Kind::Surfaces => {
                 let (mesh, statistics) = surfaces(slots, detections, &objects)?;
@@ -87,7 +93,7 @@ pub fn interop(
                     reader, &request, *time, slots, detections, &objects, &samples,
                 )?;
                 ObjectFrame::Surfaces(
-                    SurfaceSet::paged(0, &request.store, mesh, statistics, table)
+                    SurfaceSet::paged(0, ids, &request.store, mesh, statistics, table)
                         .map_err(|error| error.to_string())?,
                 )
             }
@@ -97,7 +103,7 @@ pub fn interop(
                     reader, &request, *time, slots, detections, &objects, &samples,
                 )?;
                 ObjectFrame::Filaments(
-                    FilamentSet::paged(0, &request.store, mesh, statistics, table)
+                    FilamentSet::paged(0, ids, &request.store, mesh, statistics, table)
                         .map_err(|error| error.to_string())?,
                 )
             }

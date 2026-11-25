@@ -454,27 +454,23 @@ impl Measure {
         }
     }
 
-    pub fn row_of(
-        &self,
-        time: Option<u32>,
-        object: Option<usize>,
-        track: Option<usize>,
-    ) -> Option<u32> {
-        self.table.as_deref()?.row(time, object, track, None)
-    }
-
     pub fn current_row(&self, scene: &Scene) -> Option<u32> {
         let selection = scene.selection()?;
         if Some(selection.set) != self.set {
             return None;
         }
         let table = self.table.as_deref()?;
+        let object = match selection.item {
+            crate::Item::Object(id) => scene
+                .objects
+                .get(selection.set)
+                .and_then(|set| set.frame_shared(scene.time()))
+                .and_then(|frame| frame.index_of(id)),
+            crate::Item::Track(_) => None,
+        };
         table.row(
             Some(scene.time()),
-            match selection.item {
-                crate::Item::Object(object) => Some(object),
-                crate::Item::Track(_) => None,
-            },
+            object,
             match selection.item {
                 crate::Item::Track(track) => Some(track),
                 crate::Item::Object(_) => None,

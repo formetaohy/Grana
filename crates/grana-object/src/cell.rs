@@ -4,6 +4,7 @@ use grana_geometry::PackedMesh;
 
 use crate::intensity::IntensityTable;
 use crate::surface::{SurfaceSet, SurfaceStatistics};
+use crate::{ObjectId, ObjectIds};
 
 #[derive(Clone, Debug)]
 pub struct CellSet {
@@ -35,6 +36,18 @@ impl CellSet {
         &self.bodies
     }
 
+    pub fn ids(&self) -> &ObjectIds {
+        self.bodies.ids()
+    }
+
+    pub fn id(&self, object: usize) -> Option<ObjectId> {
+        self.bodies.id(object)
+    }
+
+    pub fn index_of(&self, id: ObjectId) -> Option<usize> {
+        self.bodies.index_of(id)
+    }
+
     pub fn nuclei(&self) -> &[SurfaceStatistics] {
         &self.nuclei
     }
@@ -57,6 +70,10 @@ impl CellSet {
 
     pub fn geometry(&self) -> Result<Arc<PackedMesh>, grana_geometry::Error> {
         self.bodies.geometry()
+    }
+
+    pub fn reidentified(&self, ids: ObjectIds) -> Self {
+        Self::new(self.bodies.reidentified(ids), self.nuclei.clone())
     }
 
     pub fn detail(&self, level: usize) -> Result<(Arc<PackedMesh>, usize), grana_geometry::Error> {
