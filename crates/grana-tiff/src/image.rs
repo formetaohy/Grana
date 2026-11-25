@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use grana_volume::{
     Calibration, Census, ChannelInfo, Extent, Intensity, Level, NoData, Placement, Pyramid,
-    Spacing, Statistics, VoxelData, VoxelFormat, VoxelSemantics, name_of, tint_of,
+    Spacing, Statistics, VoxelData, VoxelFormat, name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
@@ -281,16 +281,30 @@ impl Image {
             let tint = info
                 .and_then(|channel| channel.tint)
                 .unwrap_or_else(|| sample_tint(samples, index));
+            let color_table = match levels[0].planes.chunky() {
+                true => page.color.color_table(),
+                false => {
+                    let raster = levels[0].planes.index(0, index, 0);
+                    let slot = levels[0].slots[raster];
+                    files
+                        .file(slot.file)
+                        .page(slot.page, 0)?
+                        .color
+                        .color_table()
+                }
+            };
+            if let Some(color_table) = color_table {
+                channels.push(
+                    ChannelInfo::declared(name, tint, color_table.indices(), format)
+                        .with_color_table(color_table),
+                );
+                continue;
+            }
             let window = window(lookup, index as usize, path)?;
             let sampled = sample_range(&files, &levels, index, sizes[0])?;
             let sampled = sampled.ok_or_else(|| {
                 Error::metadata(path, "a TIFF channel exposes no voxel to census")
             })?;
-            let sampled = if page.color.indexed() {
-                Statistics::declared(sampled.intensity(), VoxelSemantics::Label)
-            } else {
-                sampled
-            };
             let info = match window {
                 Some((data, window)) => ChannelInfo::new(
                     name,

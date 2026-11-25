@@ -1089,6 +1089,51 @@ fn painted(pixels: &[[u8; 4]], reference: &[[u8; 4]]) -> usize {
 }
 
 #[test]
+fn an_indexed_transfer_holds_its_entries_at_the_texels_their_indices_sample() {
+    let colors = (0..256u32)
+        .map(|index| {
+            [
+                (index % 7) as f32 / 6.0,
+                (index % 11) as f32 / 10.0,
+                (index % 13) as f32 / 12.0,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let table = grana_volume::ColorTable::new(colors.clone());
+    let transfer = TransferFunction::indexed(table.colors());
+    let lut = transfer.lut(1024);
+    let domain = table.indices();
+    for (index, color) in colors.iter().enumerate() {
+        let position = (index as f32 - domain.min()) / domain.span();
+        let held = sample_lut(&lut, position);
+        let expected = grana_display::srgb_to_linear(*color);
+        for channel in 0..3 {
+            assert!(
+                (held[channel] - expected[channel]).abs() < 1.0e-3,
+                "entry {index} channel {channel} reads {} against {}",
+                held[channel],
+                expected[channel]
+            );
+        }
+        assert_eq!(
+            held[3] > 0.5,
+            index > 0,
+            "only the entry an unlabelled voxel reads stays transparent"
+        );
+    }
+}
+
+fn sample_lut(lut: &[[f32; 4]], position: f32) -> [f32; 4] {
+    let x = position * lut.len() as f32 - 0.5;
+    let lower = (x.floor().max(0.0) as usize).min(lut.len() - 1);
+    let upper = (lower + 1).min(lut.len() - 1);
+    let fraction = (x - lower as f32).clamp(0.0, 1.0);
+    std::array::from_fn(|component| {
+        lut[lower][component] + (lut[upper][component] - lut[lower][component]) * fraction
+    })
+}
+
+#[test]
 fn projects_the_maximum_and_surfaces_the_isovalue() {
     let Some(gpu) = gpu() else {
         return;

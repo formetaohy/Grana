@@ -2695,10 +2695,10 @@ impl VolumeSpec {
 }
 
 impl TransferSpec {
-    pub fn of(transfer: &TransferFunction) -> Self {
-        Self {
-            stops: transfer
-                .stops()
+    pub fn of(transfer: &TransferFunction) -> Option<Self> {
+        let stops = transfer.stops()?;
+        Some(Self {
+            stops: stops
                 .iter()
                 .map(|stop| StopSpec {
                     position: stop.position(),
@@ -2706,7 +2706,7 @@ impl TransferSpec {
                     opacity: stop.opacity(),
                 })
                 .collect(),
-        }
+        })
     }
 
     pub fn transfer(&self) -> TransferFunction {

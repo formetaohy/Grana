@@ -12,7 +12,7 @@ const MINIMUM_SLOTS: u64 = 2;
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Allocation {
     Display(u64),
-    Export { slots: usize, ceiling: u64 },
+    Export { slots: usize },
 }
 
 impl Allocation {
@@ -45,9 +45,7 @@ impl Reservation {
             Allocation::Display(budget) => {
                 Self::display(pyramid, budget, slot_bytes, max_dimension)
             }
-            Allocation::Export { slots, ceiling } => {
-                Self::export(pyramid, slots, slot_bytes, max_dimension, ceiling)
-            }
+            Allocation::Export { slots } => Self::export(pyramid, slots, slot_bytes, max_dimension),
         }
     }
 
@@ -91,7 +89,6 @@ impl Reservation {
         wanted: usize,
         slot_bytes: u64,
         max_dimension: u32,
-        ceiling: u64,
     ) -> Result<Self, String> {
         let slots = Slots::covering(wanted, max_dimension)?;
         let atlas = slots.capacity() as u64 * slot_bytes;
@@ -101,13 +98,6 @@ impl Reservation {
         let records = records as u64 * RECORD_BYTES;
         let surface = (atlas + records) / (SURFACE_SHARE - 1);
         let bytes = atlas + records + surface;
-        if bytes > ceiling {
-            return Err(format!(
-                "an export at this size needs {:.1} GiB of brick residency at full detail, above the {:.1} GiB export ceiling",
-                bytes as f64 / (1u64 << 30) as f64,
-                ceiling as f64 / (1u64 << 30) as f64
-            ));
-        }
         Ok(Self {
             slots,
             record_limit,

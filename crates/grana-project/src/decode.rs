@@ -526,11 +526,31 @@ impl Decode for ChannelState {
 
 impl Decode for TransferFunction {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let stops = Vec::<Stop>::decode(reader)?;
-        if stops.is_empty() {
-            return Err(FAULT_SHAPE);
+        match reader.u8()? {
+            0 => {
+                let stops = Vec::<Stop>::decode(reader)?;
+                if stops.is_empty() {
+                    return Err(FAULT_SHAPE);
+                }
+                Ok(Self::new(stops))
+            }
+            1 => {
+                let count = reader.count(2)?;
+                if count > 256 {
+                    return Err(FAULT_VALUE);
+                }
+                let mut colors = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let mut color = [0.0; 3];
+                    for value in &mut color {
+                        *value = unit(reader.f32()?)?;
+                    }
+                    colors.push(color);
+                }
+                Ok(Self::indexed(colors))
+            }
+            _ => Err(FAULT_TAG),
         }
-        Ok(Self::new(stops))
     }
 }
 

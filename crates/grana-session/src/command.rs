@@ -475,6 +475,7 @@ pub enum Command {
     SetExport(Export),
     ExportSequence,
     CancelExport,
+    RetryUnavailable,
     Undo,
     Redo,
 }
@@ -941,6 +942,7 @@ impl Command {
             Self::ExportMovie { .. } => Nature::View(None),
             Self::ExportSequence => Nature::View(None),
             Self::CancelExport => Nature::View(None),
+            Self::RetryUnavailable => Nature::View(None),
             Self::DiscardAnalysis => Nature::Authored,
             Self::SaveProject => Nature::Authored,
             Self::SaveProjectAs => Nature::Authored,

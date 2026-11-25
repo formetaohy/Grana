@@ -1469,6 +1469,7 @@ fn measures_a_sheared_placement_on_a_metric_grid() {
         tint: [0.2, 0.4, 1.0],
         data: Intensity::new(0.0, 50_000.0),
         window: Intensity::new(0.0, 50_000.0),
+        color_table: None,
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;

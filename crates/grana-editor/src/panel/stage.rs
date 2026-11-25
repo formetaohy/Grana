@@ -41,8 +41,53 @@ pub(super) fn view<'a>(
     }
     elements.extend(recording_chip(ctx, layout, state));
     elements.extend(viewer_chip(ctx, layout, state));
+    elements.extend(unreadable_chip(ctx, layout, state));
     elements.extend(mask_bar(ctx, state, layout));
     elements
+}
+
+fn unreadable_chip<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    layout: &Layout,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    let unreadable = state.io.unreadable;
+    if unreadable.blocks == 0 {
+        return Vec::new();
+    }
+    let language = ctx.language();
+    let title = grana_i18n::app::unreadable(language, unreadable.blocks);
+    let tint = ctx.theme().palette.error;
+    let style = TextStyle::new(ctx.theme().font(Level::Label), tint);
+    let safe = layout.safe.shrink(STAGE_INSET);
+    let maximum = (safe.width() - 64.0).max(96.0);
+    let text = ctx.layout_text(&title, style, maximum);
+    let width = (text.size.x + 40.0).min(maximum + 24.0);
+    let origin = Vec2::new(safe.max.x - width, safe.min.y);
+    let surface = ctx.theme().surface(Role::FloatingToolbar, State::Rest);
+    let key = title.clone();
+    vec![
+        grana_ui::canvas(Length::Fixed(width), 28.0)
+            .view((tint, key), move |_, painter, info| {
+                let rect = info.rect;
+                icon::paint(
+                    Icon::Warning,
+                    painter,
+                    Vec2::new(rect.min.x + 14.0, rect.center().y),
+                    14.0,
+                    tint,
+                    IconStyle::FILLED,
+                );
+                painter.text(&text, Vec2::new(rect.min.x + 25.0, rect.min.y + 6.0), tint);
+            })
+            .named("stage.unreadable")
+            .at(Rect::from_min_size(origin, Vec2::new(width, 28.0)))
+            .background(surface)
+            .layer(Layer::Hud)
+            .tooltip(grana_i18n::app::unreadable_detail(language))
+            .blocks_pointer()
+            .press(Message::Command(grana_session::Command::RetryUnavailable)),
+    ]
 }
 
 fn viewer_chip<'a>(

@@ -31,7 +31,7 @@ pub use brick::{
 };
 pub use calibration::Calibration;
 pub use census::Census;
-pub use channel::{ChannelInfo, ChannelSet, name_of, tint_of};
+pub use channel::{ChannelInfo, ChannelSet, ColorTable, name_of, tint_of};
 pub use clip::Clip;
 pub use damage::Damage;
 pub use extent::Extent;

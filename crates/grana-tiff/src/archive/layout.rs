@@ -1,5 +1,5 @@
 use grana_archive::ImageSpec;
-use grana_volume::VoxelFormat;
+use grana_volume::{ColorTable, VoxelFormat};
 
 use super::tile::SIDE;
 
@@ -18,6 +18,7 @@ const TAG_IMAGE_DESCRIPTION: u16 = 270;
 const TAG_SAMPLES_PER_PIXEL: u16 = 277;
 const TAG_PLANAR_CONFIGURATION: u16 = 284;
 const TAG_SOFTWARE: u16 = 305;
+const TAG_COLOR_MAP: u16 = 320;
 const TAG_TILE_WIDTH: u16 = 322;
 const TAG_TILE_LENGTH: u16 = 323;
 const TAG_TILE_OFFSETS: u16 = 324;
@@ -27,6 +28,7 @@ const TAG_SAMPLE_FORMAT: u16 = 339;
 
 const DEFLATE: u16 = 8;
 const BLACK_IS_ZERO: u16 = 1;
+const PALETTE: u16 = 3;
 const CHUNKY: u16 = 1;
 const UNSIGNED: u16 = 1;
 const FLOAT: u16 = 3;
@@ -39,6 +41,7 @@ const NEXT_BYTES: usize = 8;
 const FIELD_BYTES: usize = 8;
 const VALUE_BYTES: usize = 12;
 const BLOCK_ALIGN: usize = 2;
+const COLOR_MAP_ENTRIES: usize = 1 << 8;
 
 pub(crate) struct Spots {
     pub(crate) next: u64,
@@ -69,13 +72,19 @@ pub(crate) fn header() -> [u8; 16] {
     head
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct Sample<'a> {
+    pub(crate) format: VoxelFormat,
+    pub(crate) color_table: Option<&'a ColorTable>,
+}
+
 pub(crate) fn page(
     at: u64,
     width: u32,
     height: u32,
     tiles: usize,
     sub_levels: usize,
-    sample: VoxelFormat,
+    sample: Sample<'_>,
     description: Option<&str>,
 ) -> (Vec<u8>, Spots) {
     block(
@@ -89,7 +98,7 @@ pub(crate) fn sub_page(
     width: u32,
     height: u32,
     tiles: usize,
-    sample: VoxelFormat,
+    sample: Sample<'_>,
 ) -> (Vec<u8>, Spots) {
     block(at, entries(width, height, tiles, 0, sample, None))
 }
@@ -99,22 +108,29 @@ fn entries(
     height: u32,
     tiles: usize,
     sub_levels: usize,
-    sample: VoxelFormat,
+    sample: Sample<'_>,
     description: Option<&str>,
 ) -> Vec<Entry> {
-    let mut entries = Vec::with_capacity(15);
+    let Sample {
+        format,
+        color_table,
+    } = sample;
+    let mut entries = Vec::with_capacity(16);
     entries.push(scalar(TAG_IMAGE_WIDTH, KIND_LONG, u64::from(width)));
     entries.push(scalar(TAG_IMAGE_LENGTH, KIND_LONG, u64::from(height)));
     entries.push(scalar(
         TAG_BITS_PER_SAMPLE,
         KIND_SHORT,
-        u64::from(bits(sample)),
+        u64::from(bits(format)),
     ));
     entries.push(scalar(TAG_COMPRESSION, KIND_SHORT, u64::from(DEFLATE)));
     entries.push(scalar(
         TAG_PHOTOMETRIC,
         KIND_SHORT,
-        u64::from(BLACK_IS_ZERO),
+        u64::from(match color_table {
+            Some(_) => PALETTE,
+            None => BLACK_IS_ZERO,
+        }),
     ));
     if let Some(description) = description {
         entries.push(text(TAG_IMAGE_DESCRIPTION, description));
@@ -128,6 +144,9 @@ fn entries(
     if description.is_some() {
         entries.push(text(TAG_SOFTWARE, SOFTWARE));
     }
+    if let Some(color_table) = color_table {
+        entries.push(color_map(color_table));
+    }
     entries.push(scalar(TAG_TILE_WIDTH, KIND_LONG, u64::from(SIDE)));
     entries.push(scalar(TAG_TILE_LENGTH, KIND_LONG, u64::from(SIDE)));
     entries.push(blob(TAG_TILE_OFFSETS, KIND_LONG8, tiles * 8));
@@ -138,9 +157,27 @@ fn entries(
     entries.push(scalar(
         TAG_SAMPLE_FORMAT,
         KIND_SHORT,
-        u64::from(sample_format(sample)),
+        u64::from(sample_format(format)),
     ));
     entries
+}
+
+fn color_map(color_table: &ColorTable) -> Entry {
+    let colors = color_table.colors();
+    let mut bytes = Vec::with_capacity(COLOR_MAP_ENTRIES * 3 * 2);
+    for component in 0..3 {
+        for index in 0..COLOR_MAP_ENTRIES {
+            let color = colors[index.min(colors.len() - 1)];
+            let value = (color[component].clamp(0.0, 1.0) * 65535.0).round() as u16;
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    Entry {
+        tag: TAG_COLOR_MAP,
+        kind: KIND_SHORT,
+        count: (COLOR_MAP_ENTRIES * 3) as u64,
+        field: Field::Blob(bytes),
+    }
 }
 
 fn bits(sample: VoxelFormat) -> u16 {

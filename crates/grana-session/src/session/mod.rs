@@ -67,6 +67,7 @@ use crate::task::Poll;
 use crate::view::{
     BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSignificance, BatchView,
     Held, HistoryView, ImportNote, IoView, Message, PlateView, SeriesView, StoreView, Transfer,
+    Unreadable,
 };
 use crate::{Action, Analysis, Command, Inquiry, Series, Source};
 use edit::{Edits, Follow, Rollback};
@@ -93,6 +94,8 @@ const RETRY_CEILING: Duration = Duration::from_secs(60);
 
 const RETRY_STEPS: u32 = 8;
 
+const RETRY_ATTEMPTS: u32 = 8;
+
 const DECODE_REPORT: Duration = Duration::from_secs(1);
 
 struct Failure {
@@ -104,12 +107,12 @@ struct Failure {
 impl Failure {
     fn backoff(attempts: u32) -> Duration {
         RETRY_FLOOR
-            .saturating_mul(1 << attempts.min(RETRY_STEPS))
+            .saturating_mul(1 << attempts.saturating_sub(1).min(RETRY_STEPS))
             .min(RETRY_CEILING)
     }
 
     fn waiting(&self) -> bool {
-        !self.asked
+        !self.asked && self.attempts < RETRY_ATTEMPTS
     }
 }
 
@@ -158,6 +161,7 @@ pub struct Session {
     plan: u64,
     abandoned: Vec<BrickRequest>,
     retries: Vec<BrickRequest>,
+    retry_view: bool,
     reads_started: u64,
     reads_delivered: u64,
     decode_reported: Option<Instant>,
@@ -261,6 +265,7 @@ impl Session {
             plan: 0,
             abandoned: Vec::new(),
             retries: Vec::new(),
+            retry_view: false,
             reads_started: 0,
             reads_delivered: 0,
             decode_reported: None,
@@ -572,6 +577,7 @@ impl Session {
         exporting: Option<(u32, u32)>,
         export_message: Option<String>,
         failure: Option<&'a str>,
+        unreadable: Unreadable,
     ) -> IoView<'a> {
         let frames = self.scene.as_ref().map_or(0, |scene| scene.frame_count());
         let interval = self
@@ -581,6 +587,10 @@ impl Session {
         let stats = self.store.stats();
         let document = self.tasks.document();
         IoView {
+            unreadable: Unreadable {
+                retrying: self.retrying(),
+                ..unreadable
+            },
             loading: self.loading.as_deref(),
             document,
             message: self.message.as_ref(),
@@ -714,6 +724,21 @@ impl Session {
     }
     pub fn take_retries(&mut self) -> Vec<BrickRequest> {
         std::mem::take(&mut self.retries)
+    }
+    pub fn retry_unreadable(&mut self) {
+        let now = Instant::now();
+        let mut due = Vec::new();
+        for (request, failure) in &mut self.failed {
+            failure.attempts = 0;
+            failure.asked = false;
+            failure.retry_at = now;
+            due.push(*request);
+        }
+        self.retries.extend(due);
+        self.retry_view = true;
+    }
+    pub fn take_retry_view(&mut self) -> bool {
+        std::mem::take(&mut self.retry_view)
     }
     fn advance_retries(&mut self) {
         let now = Instant::now();

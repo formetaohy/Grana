@@ -882,6 +882,7 @@ impl Session {
             Command::SetExport(export) => self.export = export,
             Command::ExportSequence => effects.sequence = true,
             Command::CancelExport => effects.cancel_export = true,
+            Command::RetryUnavailable => self.retry_unreadable(),
             Command::Undo | Command::Redo => {
                 unreachable!("undo and redo run before the document commands")
             }

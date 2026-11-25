@@ -1,6 +1,7 @@
 use crate::{
-    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Extent, Intensity, Level, NoData,
-    Pyramid, Spacing, Statistics, VoxelData, VoxelFormat, brick::pad_brick,
+    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, ColorTable, Extent, Intensity,
+    Level, NoData, Pyramid, Spacing, Statistics, VoxelData, VoxelFormat, VoxelSemantics,
+    brick::pad_brick,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -10,6 +11,7 @@ pub struct Channel {
     statistics: Statistics,
     data: VoxelData,
     no_data: Option<NoData>,
+    color_table: Option<ColorTable>,
 }
 
 impl Channel {
@@ -25,7 +27,23 @@ impl Channel {
             statistics,
             data,
             no_data: None,
+            color_table: None,
         }
+    }
+
+    pub fn with_color_table(mut self, color_table: ColorTable) -> Self {
+        assert_eq!(
+            self.data.format(),
+            VoxelFormat::U8,
+            "an indexed channel stores byte indices"
+        );
+        self.statistics = Statistics::declared(color_table.indices(), VoxelSemantics::Label);
+        self.color_table = Some(color_table);
+        self
+    }
+
+    pub fn color_table(&self) -> Option<&ColorTable> {
+        self.color_table.as_ref()
     }
 
     pub fn with_no_data(mut self, no_data: NoData) -> Self {
@@ -120,12 +138,21 @@ impl Volume {
             .channels
             .iter()
             .map(|channel| {
-                let info = ChannelInfo::new(
-                    channel.name(),
-                    channel.tint(),
-                    channel.statistics(),
-                    channel.format(),
-                );
+                let info = match channel.color_table() {
+                    Some(color_table) => ChannelInfo::declared(
+                        channel.name(),
+                        channel.tint(),
+                        color_table.indices(),
+                        channel.format(),
+                    )
+                    .with_color_table(color_table.clone()),
+                    None => ChannelInfo::new(
+                        channel.name(),
+                        channel.tint(),
+                        channel.statistics(),
+                        channel.format(),
+                    ),
+                };
                 match channel.no_data() {
                     Some(no_data) => info.with_no_data(no_data),
                     None => info,

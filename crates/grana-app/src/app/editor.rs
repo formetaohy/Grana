@@ -11,6 +11,7 @@ pub(super) fn session_view<'a>(
     export: Option<(u32, u32)>,
     export_message: Option<&str>,
     failure: Option<&'a str>,
+    unreadable: grana_session::Unreadable,
 ) -> SessionView<'a> {
     SessionView {
         access: session.access(),
@@ -21,7 +22,12 @@ pub(super) fn session_view<'a>(
         timeline: session.timeline(),
         jobs: session.progress(),
         localizations: session.localizations(),
-        io: session.io(export, export_message.map(str::to_owned), failure),
+        io: session.io(
+            export,
+            export_message.map(str::to_owned),
+            failure,
+            unreadable,
+        ),
         batch: session.batch(),
         stitch: session.stitch().map(|stitch| stitch.view()),
         history: session.history(),
@@ -61,7 +67,24 @@ impl App {
             .ui
             .update(points, size.scale(), self.start.elapsed().as_secs_f64());
         let failure = engine.as_ref().and_then(grana_engine::Engine::failure);
-        let view = session_view(session, export.progress(), output.as_deref(), failure);
+        let unreadable =
+            engine
+                .as_ref()
+                .map_or_else(grana_session::Unreadable::default, |engine| {
+                    let view = engine.info().view;
+                    grana_session::Unreadable {
+                        blocks: view.unavailable,
+                        demand: view.demand,
+                        retrying: false,
+                    }
+                });
+        let view = session_view(
+            session,
+            export.progress(),
+            output.as_deref(),
+            failure,
+            unreadable,
+        );
         stage.set_surface(size);
         let frame = grana_editor::build(&mut surface.ui, actions, &view, camera, stage, workspace);
         let wait = surface.ui.finish();
@@ -86,7 +109,24 @@ impl App {
             };
             let size = surface.size();
             let failure = engine.as_ref().and_then(grana_engine::Engine::failure);
-            let view = session_view(session, export.progress(), output.as_deref(), failure);
+            let unreadable =
+                engine
+                    .as_ref()
+                    .map_or_else(grana_session::Unreadable::default, |engine| {
+                        let view = engine.info().view;
+                        grana_session::Unreadable {
+                            blocks: view.unavailable,
+                            demand: view.demand,
+                            retrying: false,
+                        }
+                    });
+            let view = session_view(
+                session,
+                export.progress(),
+                output.as_deref(),
+                failure,
+                unreadable,
+            );
             stage.set_surface(size);
             let mut frame = Frame::default();
             grana_editor::apply(

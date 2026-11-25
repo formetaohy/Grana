@@ -394,7 +394,21 @@ impl Encode for ChannelState {
 
 impl Encode for TransferFunction {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        self.stops().encode(writer);
+        match self {
+            Self::Ramp { stops } => {
+                writer.u8(0);
+                stops.encode(writer);
+            }
+            Self::Table { colors } => {
+                writer.u8(1);
+                writer.count(colors.len());
+                for color in colors {
+                    for value in color {
+                        writer.f32(*value);
+                    }
+                }
+            }
+        }
     }
 }
 

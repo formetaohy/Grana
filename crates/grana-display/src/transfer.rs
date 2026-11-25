@@ -63,9 +63,12 @@ impl Stop {
     }
 }
 
+const TABLE_LIMIT: usize = 256;
+
 #[derive(Clone, Debug, PartialEq)]
-pub struct TransferFunction {
-    stops: Vec<Stop>,
+pub enum TransferFunction {
+    Ramp { stops: Vec<Stop> },
+    Table { colors: Vec<[f32; 3]> },
 }
 
 impl TransferFunction {
@@ -75,7 +78,7 @@ impl TransferFunction {
             "a transfer function needs at least one stop"
         );
         sort(&mut stops);
-        Self { stops }
+        Self::Ramp { stops }
     }
 
     pub fn tinted(tint: [f32; 3]) -> Self {
@@ -109,66 +112,107 @@ impl TransferFunction {
         ])
     }
 
-    pub fn stops(&self) -> &[Stop] {
-        &self.stops
+    pub fn indexed(colors: impl Into<Vec<[f32; 3]>>) -> Self {
+        let colors = colors.into();
+        assert!(
+            (2..=TABLE_LIMIT).contains(&colors.len()),
+            "an indexed transfer function holds two to {TABLE_LIMIT} colours"
+        );
+        assert!(
+            colors
+                .iter()
+                .flatten()
+                .all(|channel| (0.0..=1.0).contains(channel)),
+            "an indexed transfer function entry is an srgb triple"
+        );
+        Self::Table { colors }
     }
 
-    pub fn stop_mut(&mut self, index: usize) -> &mut Stop {
-        self.stops
-            .get_mut(index)
-            .expect("the transfer stop lies inside the function")
+    pub fn stops(&self) -> Option<&[Stop]> {
+        match self {
+            Self::Ramp { stops } => Some(stops),
+            Self::Table { .. } => None,
+        }
+    }
+
+    pub fn colors(&self) -> &[[f32; 3]] {
+        match self {
+            Self::Ramp { .. } => &[],
+            Self::Table { colors } => colors,
+        }
+    }
+
+    pub fn ramp_mut(&mut self) -> &mut Vec<Stop> {
+        match self {
+            Self::Ramp { stops } => stops,
+            Self::Table { .. } => {
+                panic!("an indexed transfer function stops are fixed by its colour table")
+            }
+        }
     }
 
     pub fn add_stop(&mut self, stop: Stop) {
-        self.stops.push(stop);
-        sort(&mut self.stops);
+        let stops = self.ramp_mut();
+        stops.push(stop);
+        sort(stops);
     }
 
     pub fn remove_stop(&mut self, index: usize) {
+        let stops = self.ramp_mut();
         assert!(
-            self.stops.len() > 1,
+            stops.len() > 1,
             "a transfer function keeps at least one stop"
         );
         assert!(
-            index < self.stops.len(),
+            index < stops.len(),
             "the removed stop lies inside the function"
         );
-        self.stops.remove(index);
+        stops.remove(index);
     }
 
     pub fn lut(&self, size: usize) -> Vec<[f32; 4]> {
         assert!(size >= 2, "a lookup table needs at least two entries");
-        let last = (size - 1) as f32;
-        (0..size)
-            .map(|index| self.sample(index as f32 / last))
-            .collect()
+        match self {
+            Self::Ramp { stops } => {
+                let last = (size - 1) as f32;
+                (0..size)
+                    .map(|index| ramp_entry(stops, index as f32 / last))
+                    .collect()
+            }
+            Self::Table { colors } => (0..size)
+                .map(|index| {
+                    let entry = index * colors.len() / size;
+                    let [red, green, blue] = srgb_to_linear(colors[entry]);
+                    [red, green, blue, f32::from(u8::from(entry > 0))]
+                })
+                .collect(),
+        }
     }
+}
 
-    fn sample(&self, position: f32) -> [f32; 4] {
-        let stops = &self.stops;
-        let right = stops.partition_point(|stop| stop.position < position);
-        let (left, right) = match right {
-            0 => (&stops[0], &stops[0]),
-            index if index >= stops.len() => (
-                stops.last().expect("a transfer function is never empty"),
-                stops.last().expect("a transfer function is never empty"),
-            ),
-            index => (&stops[index - 1], &stops[index]),
-        };
-        let span = right.position - left.position;
-        let t = if span > 0.0 {
-            ((position - left.position) / span).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let color = [
-            lerp(left.color[0], right.color[0], t),
-            lerp(left.color[1], right.color[1], t),
-            lerp(left.color[2], right.color[2], t),
-        ];
-        let [red, green, blue] = srgb_to_linear(color);
-        [red, green, blue, lerp(left.opacity, right.opacity, t)]
-    }
+fn ramp_entry(stops: &[Stop], position: f32) -> [f32; 4] {
+    let right = stops.partition_point(|stop| stop.position < position);
+    let (left, right) = match right {
+        0 => (&stops[0], &stops[0]),
+        index if index >= stops.len() => (
+            stops.last().expect("a transfer function is never empty"),
+            stops.last().expect("a transfer function is never empty"),
+        ),
+        index => (&stops[index - 1], &stops[index]),
+    };
+    let span = right.position - left.position;
+    let t = if span > 0.0 {
+        ((position - left.position) / span).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let color = [
+        lerp(left.color[0], right.color[0], t),
+        lerp(left.color[1], right.color[1], t),
+        lerp(left.color[2], right.color[2], t),
+    ];
+    let [red, green, blue] = srgb_to_linear(color);
+    [red, green, blue, lerp(left.opacity, right.opacity, t)]
 }
 
 fn sort(stops: &mut [Stop]) {

@@ -180,6 +180,7 @@ pub(super) fn display<'a>(
     let index = scene.selected;
     let channel_name = scene.channel(index).name().to_string();
     let tint = scene.channel(index).tint();
+    let indexed = scene.channel(index).color_table().is_some();
     let data = scene.channel(index).intensity();
     let current = scene.channels[index].window;
     let start = current.min();
@@ -199,38 +200,42 @@ pub(super) fn display<'a>(
         grana_i18n::inspector::display(language),
         Some(&channel_name),
     ));
-    children.push(
-        grana_ui::widget::range_slider(start, end, available, &gradient)
-            .key(Key::new("display.window"))
-            .on_range(move |low, high| {
-                Message::Command(Command::SetWindow {
-                    channel: index,
-                    window: Intensity::new(low.min(high), low.max(high)),
-                })
-            }),
-    );
-    let mono = theme.font(Level::Monospace);
-    let minimum = grana_i18n::inspector::minimum_readout(language, start);
-    let maximum = grana_i18n::inspector::maximum_readout(language, end);
-    children.push(grana_ui::canvas(Length::Fill, 15.0).view(
-        (minimum.clone(), maximum.clone()),
-        move |_, painter, info| {
-            let rect = info.rect;
-            let style = TextStyle::new(mono, palette.on_surface_variant);
-            painter.text_in(
-                Rect::from_min_size(rect.min, Vec2::new(rect.width() * 0.5, rect.height())),
-                &minimum,
-                style,
-                Align::Center,
-            );
-            painter.text_in(
-                rect,
-                &maximum,
-                TextStyle::new(mono, palette.on_surface_variant).aligned(Align::End),
-                Align::Center,
-            );
-        },
-    ));
+    if !indexed {
+        children.push(
+            grana_ui::widget::range_slider(start, end, available, &gradient)
+                .key(Key::new("display.window"))
+                .on_range(move |low, high| {
+                    Message::Command(Command::SetWindow {
+                        channel: index,
+                        window: Intensity::new(low.min(high), low.max(high)),
+                    })
+                }),
+        );
+        let mono = theme.font(Level::Monospace);
+        let minimum = grana_i18n::inspector::minimum_readout(language, start);
+        let maximum = grana_i18n::inspector::maximum_readout(language, end);
+        children.push(grana_ui::canvas(Length::Fill, 15.0).view(
+            (minimum.clone(), maximum.clone()),
+            move |_, painter, info| {
+                let rect = info.rect;
+                let style = TextStyle::new(mono, palette.on_surface_variant);
+                painter.text_in(
+                    Rect::from_min_size(rect.min, Vec2::new(rect.width() * 0.5, rect.height())),
+                    &minimum,
+                    style,
+                    Align::Center,
+                );
+                painter.text_in(
+                    rect,
+                    &maximum,
+                    TextStyle::new(mono, palette.on_surface_variant).aligned(Align::End),
+                    Align::Center,
+                );
+            },
+        ));
+    } else {
+        children.push(grana_ui::widget::gradient_bar(&gradient, 14.0));
+    }
     let opacity_readout = format!("{:.0}%", opacity * 100.0);
     children.push(view::slider_readout(
         ctx,
@@ -274,43 +279,45 @@ pub(super) fn display<'a>(
             },
         ));
     }
-    let preset = (width - group_gap * 2.0) / 3.0;
-    let auto = view::button_shaped(
-        ctx,
-        grana_i18n::inspector::auto(language),
-        Role::SurfaceHigh,
-        Length::Fixed(preset),
-        Corners::group_horizontal(0, 3, Corners::CAPSULE, inner_sm, false),
-    )
-    .press(Message::Command(Command::ResetWindow(index)));
-    let tinted = view::button_shaped(
-        ctx,
-        grana_i18n::inspector::tinted(language),
-        Role::SurfaceHigh,
-        Length::Fixed(preset),
-        Corners::group_horizontal(1, 3, Corners::CAPSULE, inner_sm, false),
-    )
-    .press(Message::Command(Command::SetTransfer {
-        channel: index,
-        transfer: TransferFunction::tinted(tint),
-    }));
-    let gray = view::button_shaped(
-        ctx,
-        grana_i18n::inspector::gray(language),
-        Role::SurfaceHigh,
-        Length::Fixed(preset),
-        Corners::group_horizontal(2, 3, Corners::CAPSULE, inner_sm, false),
-    )
-    .press(Message::Command(Command::SetTransfer {
-        channel: index,
-        transfer: TransferFunction::grayscale(),
-    }));
-    children.push(
-        grana_ui::row()
-            .gap(group_gap)
-            .align(Align::Center)
-            .children([auto, tinted, gray]),
-    );
+    if !indexed {
+        let preset = (width - group_gap * 2.0) / 3.0;
+        let auto = view::button_shaped(
+            ctx,
+            grana_i18n::inspector::auto(language),
+            Role::SurfaceHigh,
+            Length::Fixed(preset),
+            Corners::group_horizontal(0, 3, Corners::CAPSULE, inner_sm, false),
+        )
+        .press(Message::Command(Command::ResetWindow(index)));
+        let tinted = view::button_shaped(
+            ctx,
+            grana_i18n::inspector::tinted(language),
+            Role::SurfaceHigh,
+            Length::Fixed(preset),
+            Corners::group_horizontal(1, 3, Corners::CAPSULE, inner_sm, false),
+        )
+        .press(Message::Command(Command::SetTransfer {
+            channel: index,
+            transfer: TransferFunction::tinted(tint),
+        }));
+        let gray = view::button_shaped(
+            ctx,
+            grana_i18n::inspector::gray(language),
+            Role::SurfaceHigh,
+            Length::Fixed(preset),
+            Corners::group_horizontal(2, 3, Corners::CAPSULE, inner_sm, false),
+        )
+        .press(Message::Command(Command::SetTransfer {
+            channel: index,
+            transfer: TransferFunction::grayscale(),
+        }));
+        children.push(
+            grana_ui::row()
+                .gap(group_gap)
+                .align(Align::Center)
+                .children([auto, tinted, gray]),
+        );
+    }
     let derived = (index >= scene.base_channels())
         .then(|| scene.derived().get(index - scene.base_channels()))
         .flatten()
@@ -370,27 +377,29 @@ pub(super) fn display<'a>(
             grana_scene::Operation::Bleach => {}
         }
     }
-    let key = Key::new("display.transfer");
-    let open = state.workspace.disclosures.is_open(key);
-    let mut curve = Vec::new();
-    if open {
-        curve.extend(crate::transfer::edit(
+    if !indexed {
+        let key = Key::new("display.transfer");
+        let open = state.workspace.disclosures.is_open(key);
+        let mut curve = Vec::new();
+        if open {
+            curve.extend(crate::transfer::edit(
+                ctx,
+                "display.transfer",
+                index,
+                &transfer,
+                tint,
+                current,
+                width,
+            ));
+        }
+        children.push(disclosure(
             ctx,
             "display.transfer",
-            index,
-            &transfer,
-            tint,
-            current,
-            width,
+            grana_i18n::inspector::transfer_curve(language),
+            open,
+            curve,
         ));
     }
-    children.push(disclosure(
-        ctx,
-        "display.transfer",
-        grana_i18n::inspector::transfer_curve(language),
-        open,
-        curve,
-    ));
     if derived.is_some() && state.access.author() {
         children.push(
             view::button_with(
@@ -620,12 +629,18 @@ fn volume_mode_label(language: grana_i18n::Language, mode: VolumeMode) -> &'stat
 }
 
 pub(super) fn transfer_colors(transfer: &TransferFunction) -> Vec<Color> {
-    transfer
-        .stops()
-        .iter()
-        .map(|stop| {
-            let [red, green, blue] = stop.color();
-            Color::rgba(red, green, blue, 1.0)
-        })
-        .collect()
+    match transfer.stops() {
+        Some(stops) => stops
+            .iter()
+            .map(|stop| {
+                let [red, green, blue] = stop.color();
+                Color::rgba(red, green, blue, 1.0)
+            })
+            .collect(),
+        None => transfer
+            .colors()
+            .iter()
+            .map(|[red, green, blue]| Color::rgba(*red, *green, *blue, 1.0))
+            .collect(),
+    }
 }

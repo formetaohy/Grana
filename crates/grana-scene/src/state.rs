@@ -181,12 +181,21 @@ impl Scene {
             self.set_derived_layout(infos)
                 .expect("a scene state fits the channel limit of its dataset");
         }
-        for (channel, source) in self.channels.iter_mut().zip(state.channels) {
+        for (index, (channel, source)) in self.channels.iter_mut().zip(state.channels).enumerate() {
+            let info = &self.dataset.channels()[index];
             channel.enabled = source.enabled;
             channel.opacity = source.opacity;
-            channel.window = source.window;
-            channel.set_transfer(source.transfer);
             channel.set_volume(source.volume);
+            match info.color_table() {
+                Some(_) => {
+                    channel.window = info.display();
+                    channel.set_transfer(crate::scene::initial_transfer(info));
+                }
+                None => {
+                    channel.window = source.window;
+                    channel.set_transfer(source.transfer);
+                }
+            }
         }
         self.selected = state.selected;
         self.shading = state.shading;
@@ -288,10 +297,16 @@ impl Scene {
             hash = mix(hash, u64::from(channel.window.max().to_bits()));
             hash = mix(hash, channel.volume().mode().index() as u64);
             hash = mix(hash, u64::from(channel.volume().isovalue().to_bits()));
-            for stop in channel.transfer().stops() {
+            hash = mix(hash, u64::from(channel.transfer().stops().is_some()));
+            for stop in channel.transfer().stops().unwrap_or_default() {
                 hash = mix(hash, u64::from(stop.position().to_bits()));
                 hash = mix(hash, u64::from(stop.opacity().to_bits()));
                 for component in stop.color() {
+                    hash = mix(hash, u64::from(component.to_bits()));
+                }
+            }
+            for color in channel.transfer().colors() {
+                for component in color {
                     hash = mix(hash, u64::from(component.to_bits()));
                 }
             }

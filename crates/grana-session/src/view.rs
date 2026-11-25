@@ -122,6 +122,14 @@ pub struct IoView<'a> {
     pub label: Option<(&'a str, usize, usize)>,
     pub store: StoreView,
     pub network: Option<Network>,
+    pub unreadable: Unreadable,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Unreadable {
+    pub blocks: usize,
+    pub demand: usize,
+    pub retrying: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

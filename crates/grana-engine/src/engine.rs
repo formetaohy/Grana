@@ -186,6 +186,10 @@ impl Engine {
         self.renderer.retry(requests);
     }
 
+    pub fn retry_all(&mut self) {
+        self.renderer.retry_all();
+    }
+
     pub fn upload(&mut self, bricks: &[(BrickRequest, PackedBrick)]) {
         self.renderer.upload(bricks);
         self.generation = self.renderer.generation();

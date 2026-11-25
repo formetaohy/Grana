@@ -11,8 +11,8 @@ use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
-    Basis, Calibration, Channel, Extent, Intensity, Level, Region, Spacing, Volume, VolumeSeries,
-    VoxelData, VoxelSemantics,
+    Basis, Calibration, Channel, ColorTable, Extent, Intensity, Level, Region, Spacing, Volume,
+    VolumeSeries, VoxelData, VoxelFormat, VoxelSemantics,
 };
 use grana_zarr::write_image;
 
@@ -112,6 +112,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
         tint: [0.2, 0.7, 1.0],
         data: Intensity::new(0.0, 4096.0),
         window: Intensity::new(0.0, 4096.0),
+        color_table: None,
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let scale = 1u32 << block.level;
@@ -257,6 +258,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 tint: [1.0, 1.0, 1.0],
                 data: Intensity::new(0.0, 255.0),
                 window: Intensity::new(0.0, 255.0),
+                color_table: None,
             }],
             levels: image.pyramid().levels().to_vec(),
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],
@@ -306,6 +308,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 tint: [1.0, 1.0, 1.0],
                 data: Intensity::new(0.0, 255.0),
                 window: Intensity::new(0.0, 255.0),
+                color_table: None,
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -351,6 +354,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 tint: [1.0, 1.0, 1.0],
                 data: Intensity::new(0.0, 255.0),
                 window: Intensity::new(0.0, 255.0),
+                color_table: None,
             }],
             levels: vec![flipped],
             origins: vec![[0, 0, 0]],
@@ -387,6 +391,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                 tint: [1.0, 1.0, 1.0],
                 data: Intensity::new(0.0, 255.0),
                 window: Intensity::new(0.0, 255.0),
+                color_table: None,
             }],
             levels: shallow.to_vec(),
             origins: vec![[0, 0, 0]; 2],
@@ -435,6 +440,7 @@ fn exports_a_tiled_pyramid_ome_tiff() {
                     tint: [1.0, 1.0, 1.0],
                     data: Intensity::new(0.0, 20_000_000.0),
                     window: Intensity::new(0.0, 20_000_000.0),
+                    color_table: None,
                 }],
                 levels: wide_image.pyramid().levels().to_vec(),
                 origins: vec![[0, 0, 0]; wide_image.pyramid().level_count()],
@@ -493,6 +499,7 @@ fn writes_a_sixteen_bit_ome_tiff() {
         },
         data: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
+        color_table: None,
     });
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;
@@ -577,6 +584,7 @@ fn writes_a_sharded_ome_zarr_level() {
         tint: [1.0, 1.0, 1.0],
         data: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
+        color_table: None,
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         let origin = block.origin;
@@ -680,12 +688,14 @@ fn write_zarr(root: &std::path::Path) {
             tint: [0.0, 0.0, 1.0],
             data: Intensity::new(0.0, 4096.0),
             window: Intensity::new(0.0, 2048.0),
+            color_table: None,
         },
         WriteChannel {
             name: "GFP",
             tint: [0.0, 1.0, 0.0],
             data: Intensity::new(0.0, 1024.0),
             window: Intensity::new(64.0, 768.0),
+            color_table: None,
         },
     ];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
@@ -897,6 +907,7 @@ fn writes_and_reads_a_tiny_ome_zarr() {
         tint: [1.0, 1.0, 1.0],
         data: Intensity::new(0.0, 255.0),
         window: Intensity::new(0.0, 255.0),
+        color_table: None,
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![
@@ -967,6 +978,7 @@ fn round_trips_a_rotated_basis_through_ome_tiff() {
         tint: [1.0, 1.0, 1.0],
         data: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
+        color_table: None,
     }];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![block.level as f32; block.voxels()]))
@@ -1105,6 +1117,7 @@ fn write_derived_zarr(root: &std::path::Path, value: f32) {
         tint: [1.0, 1.0, 1.0],
         data: Intensity::new(0.0, 255.0),
         window: Intensity::new(0.0, 255.0),
+        color_table: None,
     }];
     let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
         let mut values = Vec::with_capacity(block.voxels());
@@ -1396,6 +1409,7 @@ fn write_collection_series(path: &std::path::Path, name: &str, extent: [u32; 3])
         tint: [1.0, 1.0, 1.0],
         data: Intensity::new(0.0, 255.0),
         window: Intensity::new(0.0, 255.0),
+        color_table: None,
     }];
     let value = extent[0] as u8;
     let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
@@ -1560,6 +1574,7 @@ fn exports_a_region_of_the_channels_and_labels() {
                 tint: [1.0, 1.0, 1.0],
                 data: Intensity::new(0.0, 1000.0),
                 window: Intensity::new(0.0, 1000.0),
+                color_table: None,
             }],
             levels: cropped.levels,
             origins: cropped.origins,
@@ -2040,15 +2055,97 @@ fn reads_a_tiff_stack_past_the_page_limit() {
     std::fs::write(&palette, &bytes).expect("the palette stack writes");
     let indexed = grana_tiff::Image::open(&palette, 0).expect("the palette stack opens");
     assert_eq!(
-        indexed.pyramid().channels()[0].semantics(),
+        indexed.pyramid().channels().len(),
+        1,
+        "a palette page carries one indexed channel rather than three colour samples"
+    );
+    let held = &indexed.pyramid().channels()[0];
+    assert_eq!(
+        held.semantics(),
         VoxelSemantics::Label,
         "a palette page carries labels even when its extent outruns the census budget"
     );
     assert_eq!(
-        indexed.pyramid().channels()[0].intensity(),
-        Intensity::new(0.0, 255.0),
-        "a palette stack reports the intensities its colour map expands to"
+        held.intensity(),
+        Intensity::new(-0.5, 255.5),
+        "an indexed channel spans the centres of its colour table entries"
     );
+    let color_table = held
+        .color_table()
+        .expect("a palette page hands its colour table to the channel");
+    assert_eq!(color_table.colors().len(), 256);
+    assert_eq!(color_table.colors()[1], [1.0, 1.0, 1.0]);
+    assert_eq!(color_table.colors()[0], [0.0, 0.0, 0.0]);
+    let plane = indexed
+        .read_region(0, 0, 0, 0..5, 2..3, 0..1)
+        .expect("the palette plane reads as indices");
+    assert_eq!(plane, VoxelData::U8(vec![1, 1, 1, 0, 0]));
+}
+
+#[test]
+fn round_trips_an_indexed_channel_through_the_archive() {
+    let temp = Temp::new("suite-ome-tiff-indexed");
+    let levels = [Level::new(
+        Extent::new(48, 40, 2),
+        Spacing::new(0.2, 0.2, 0.5),
+    )];
+    let color_table = ColorTable::new(vec![[0.0, 0.0, 0.0], [1.0, 0.1, 0.2], [0.2, 0.9, 0.3]]);
+    let channels = [WriteChannel {
+        name: "labels",
+        tint: [0.8, 0.8, 0.8],
+        data: color_table.indices(),
+        window: color_table.indices(),
+        color_table: Some(&color_table),
+    }];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let mut values = vec![0u8; block.voxels()];
+        for (position, value) in values.iter_mut().enumerate() {
+            *value = (position % 3) as u8;
+        }
+        Ok(VoxelData::U8(values))
+    };
+    let mut progress = |_, _| {};
+    let path = temp.path().join("labels.ome.tif");
+    grana_tiff::write_archive(
+        &path,
+        &mut ImageSpec {
+            name: "labels",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 1,
+            interval: None,
+            sample: VoxelFormat::U8,
+            calibration: Calibration::Recorded,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the indexed archive writes");
+    let image = grana_tiff::Image::open(&path, 0).expect("the indexed archive opens");
+    assert_eq!(
+        image.pyramid().channels().len(),
+        1,
+        "an indexed channel keeps its single sample through the archive"
+    );
+    let held = &image.pyramid().channels()[0];
+    assert_eq!(held.semantics(), VoxelSemantics::Label);
+    let read = held
+        .color_table()
+        .expect("the archive writes the colour map of its indexed channel");
+    for (held, expected) in read.colors()[..3].iter().zip(&color_table.colors()[..3]) {
+        for channel in 0..3 {
+            assert!(
+                (held[channel] - expected[channel]).abs() < 1.0e-4,
+                "the archive keeps every colour map entry"
+            );
+        }
+    }
+    let plane = image
+        .read_region(0, 0, 0, 0..6, 0..1, 0..1)
+        .expect("the indexed plane reads");
+    assert_eq!(plane, VoxelData::U8(vec![0, 1, 2, 0, 1, 2]));
 }
 
 #[test]
@@ -2322,6 +2419,7 @@ fn write_scene_member(path: &std::path::Path, offset: f32, value: f32) {
         tint: [1.0, 1.0, 1.0],
         data: Intensity::new(0.0, 255.0),
         window: Intensity::new(0.0, 255.0),
+        color_table: None,
     }];
     let fill = move |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![value; block.voxels()]))
@@ -2430,6 +2528,7 @@ fn writes_and_reads_a_label_image() {
         tint: [0.0, 0.0, 1.0],
         data: Intensity::new(0.0, 1.0),
         window: Intensity::new(0.0, 1.0),
+        color_table: None,
     }];
     let image_fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
         Ok(VoxelData::F32(vec![0.0; block.voxels()]))
@@ -2842,6 +2941,7 @@ fn keeps_the_previous_dataset_when_an_export_fails() {
                 tint: [1.0, 1.0, 1.0],
                 data: Intensity::new(0.0, 10.0),
                 window: Intensity::new(0.0, 10.0),
+                color_table: None,
             }],
             levels,
             origins: vec![[0, 0, 0]; image.pyramid().level_count()],

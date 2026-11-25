@@ -78,13 +78,17 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                     sink.patch(held, &at.to_le_bytes())?;
                 }
                 let first = frame == 0 && channel == 0 && z == 0;
+                let sample = layout::Sample {
+                    format: spec.sample,
+                    color_table: spec.channels[channel].color_table,
+                };
                 let (block, spots) = layout::page(
                     at,
                     base.width(),
                     base.height(),
                     base.tiles(),
                     levels.len() - 1,
-                    spec.sample,
+                    sample,
                     first.then_some(description.as_str()),
                 );
                 sink.write(&block)?;
@@ -102,13 +106,8 @@ pub fn write_archive(path: &Path, spec: &mut ImageSpec<'_>) -> Result<Written, c
                 for (index, level) in levels.iter().enumerate().skip(1) {
                     let at = align(sink.cursor);
                     sink.pad(at)?;
-                    let (block, spots) = layout::sub_page(
-                        at,
-                        level.width(),
-                        level.height(),
-                        level.tiles(),
-                        spec.sample,
-                    );
+                    let (block, spots) =
+                        layout::sub_page(at, level.width(), level.height(), level.tiles(), sample);
                     sink.write(&block)?;
                     let request = Request {
                         level: index,

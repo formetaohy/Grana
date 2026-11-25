@@ -32,12 +32,14 @@ labels! {
     read_only => "Read-only" / "只读";
     read_only_detail => "This viewer shows a recorded analysis. Open the project in grana to edit it." / "查看器仅展示已记录的分析，请在 Grana 中打开项目以编辑。";
     viewer => "Viewer" / "查看器";
+    unreadable_detail => "Read these regions again" / "重新读取这些区域";
 }
 
 use crate::messages;
 
 messages! {
     saved(path: &str) => "saved {path}" / "已保存 {path}";
+    unreadable(blocks: usize) => "{blocks} regions unreadable" / "{blocks} 块区域读不出";
     unsaved_field(name: &str) => "The analysis of {name} has unsaved changes. Save it in a project before continuing?" / "{name} 的分析有未保存的更改。是否在继续前保存为项目？";
     unsaved_unsavable(name: &str) => "The analysis of {name} has unsaved changes, and the dataset carries no file source to record them in a project. Discard it?" / "{name} 的分析有未保存的更改，且数据集没有可写入项目的文件来源。是否放弃该分析？";
 }

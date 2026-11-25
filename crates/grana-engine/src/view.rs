@@ -216,11 +216,17 @@ pub fn key(scene: &Scene) -> Key {
         display.real(channel.window.max());
         display.mix(channel.volume().mode().index() as u64);
         display.real(channel.volume().isovalue());
-        for stop in channel.transfer().stops() {
+        display.flag(channel.transfer().stops().is_some());
+        for stop in channel.transfer().stops().unwrap_or_default() {
             display.real(stop.position());
             display.real(stop.opacity());
             for component in stop.color() {
                 display.real(component);
+            }
+        }
+        for color in channel.transfer().colors() {
+            for component in color {
+                display.real(*component);
             }
         }
     }

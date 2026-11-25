@@ -1,4 +1,4 @@
-use grana_volume::{VoxelData, VoxelFormat};
+use grana_volume::{ColorTable, VoxelData, VoxelFormat};
 
 use crate::sample::SampleType;
 
@@ -116,12 +116,8 @@ impl ColorModel {
 
     pub(crate) fn channels(&self) -> u32 {
         match self {
-            Self::Gray { .. } | Self::Mask => 1,
-            Self::Rgb
-            | Self::Palette { .. }
-            | Self::Cmyk
-            | Self::YCbCr { .. }
-            | Self::Lab { .. } => 3,
+            Self::Gray { .. } | Self::Palette { .. } | Self::Mask => 1,
+            Self::Rgb | Self::Cmyk | Self::YCbCr { .. } | Self::Lab { .. } => 3,
         }
     }
 
@@ -129,15 +125,15 @@ impl ColorModel {
         matches!(self, Self::Gray { inverted: true })
     }
 
-    pub(crate) fn indexed(&self) -> bool {
-        matches!(self, Self::Palette { .. })
+    pub(crate) fn color_table(&self) -> Option<ColorTable> {
+        match self {
+            Self::Palette { color_map } => Some(color_map.color_table()),
+            _ => None,
+        }
     }
 
     pub(crate) fn converts(&self) -> bool {
-        matches!(
-            self,
-            Self::Palette { .. } | Self::Cmyk | Self::YCbCr { .. } | Self::Lab { .. }
-        )
+        matches!(self, Self::Cmyk | Self::YCbCr { .. } | Self::Lab { .. })
     }
 
     pub(crate) fn convert(
@@ -147,12 +143,6 @@ impl ColorModel {
         samples: usize,
         data: &VoxelData,
     ) -> VoxelData {
-        if let Self::Palette { color_map } = self
-            && let VoxelData::U8(indices) = data
-            && format == VoxelFormat::U8
-        {
-            return color_map.expand(indices);
-        }
         let pixels = data.voxel_count() / samples;
         let count = pixels * 3;
         let scale = f64::from(maximum);
@@ -163,10 +153,6 @@ impl ColorModel {
             index += 1;
             let base = pixel * samples;
             let color = match self {
-                Self::Palette { color_map } => {
-                    let index = data.value(base) as usize;
-                    f64::from(color_map.at(index)[channel])
-                }
                 Self::Cmyk => {
                     let [cyan, magenta, yellow, black] =
                         [0, 1, 2, 3].map(|slot| f64::from(data.value(base + slot)) / scale);
@@ -229,21 +215,8 @@ impl ColorMap {
         Ok(Self { entries })
     }
 
-    fn at(&self, index: usize) -> [f32; 3] {
-        self.entries[index.min(self.entries.len() - 1)]
-    }
-
-    fn expand(&self, indices: &[u8]) -> VoxelData {
-        let scale = f64::from(u8::MAX);
-        let table = std::array::from_fn::<[u8; 3], 256, _>(|index| {
-            self.at(index)
-                .map(|component| (f64::from(component).clamp(0.0, 1.0) * scale).round() as u8)
-        });
-        let mut values = vec![0u8; indices.len() * 3];
-        for (index, color) in indices.iter().zip(values.as_chunks_mut::<3>().0) {
-            *color = table[*index as usize];
-        }
-        VoxelData::U8(values)
+    fn color_table(&self) -> ColorTable {
+        ColorTable::new(self.entries.clone())
     }
 }
 

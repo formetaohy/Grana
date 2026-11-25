@@ -199,6 +199,10 @@ impl Frames {
         self.frames.clear();
     }
 
+    fn clear_time(&mut self, time: u32) {
+        self.frames.retain(|(held, _), _| *held != time);
+    }
+
     fn drop_frame(&mut self, time: u32) {
         self.frames.retain(|(held, _), _| *held != time);
     }
@@ -570,6 +574,10 @@ impl Atlas {
 
     pub fn retry(&mut self, time: u32, level: usize, index: usize) {
         self.unavailable.clear(time, level, index);
+    }
+
+    pub fn retry_time(&mut self, time: u32) {
+        self.unavailable.clear_time(time);
     }
 
     pub fn retire(&mut self, time: u32) {

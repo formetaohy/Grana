@@ -355,7 +355,6 @@ impl Renderer {
     ) -> Result<(), String> {
         let allocation = reserve::Allocation::Export {
             slots: detail.bricks + 1,
-            ceiling,
         };
         let reservation = reserve::Reservation::of(
             pyramid,
@@ -369,6 +368,13 @@ impl Renderer {
             .bytes()
             .saturating_add(frames.bytes())
             .saturating_add(splats);
+        if held > ceiling {
+            return Err(format!(
+                "an export at this size needs {:.1} GiB of graphics memory at full detail, above the {:.1} GiB export ceiling",
+                held as f64 / (1u64 << 30) as f64,
+                ceiling as f64 / (1u64 << 30) as f64
+            ));
+        }
         if !self.claim.resize(held) {
             return Err(format!(
                 "the graphics device cannot hold both the export and the running analyses, so the export cannot reserve its {:.1} MiB of textures",
@@ -426,7 +432,6 @@ impl Renderer {
         self.present_region = None;
         self.pick_readback = None;
         self.pick_pending = false;
-        self.exporting = false;
         self.fade = None;
         self.motion = None;
         self.info = FrameInfo::default();
@@ -580,6 +585,7 @@ impl Renderer {
             reserve::Allocation::Display(split.residency),
             Reset::Dataset,
         )?;
+        self.exporting = false;
         self.frames = split.frames;
         self.settle()?;
         Ok(())
@@ -670,6 +676,15 @@ impl Renderer {
             return;
         };
         resources.forget_unavailable(requests);
+        self.residence.revalidate();
+    }
+
+    pub fn retry_all(&mut self) {
+        let time = self.time;
+        let Some(resources) = self.resources.as_mut() else {
+            return;
+        };
+        resources.forget_unavailable_time(time);
         self.residence.revalidate();
     }
 

@@ -59,6 +59,7 @@ impl Sink {
                         tint: *tint,
                         data: grana_volume::Intensity::new(0.0, 1.0),
                         window: grana_volume::Intensity::new(0.0, 1.0),
+                        color_table: None,
                     })
                     .collect::<Vec<_>>();
                 let levels = [Level::new(

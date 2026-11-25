@@ -68,6 +68,40 @@ impl ChannelSet {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ColorTable {
+    colors: Vec<[f32; 3]>,
+}
+
+impl ColorTable {
+    pub const LIMIT: usize = 256;
+
+    pub fn new(colors: Vec<[f32; 3]>) -> Self {
+        assert!(
+            (2..=Self::LIMIT).contains(&colors.len()),
+            "a colour table holds two to {} colours",
+            Self::LIMIT
+        );
+        assert!(
+            colors
+                .iter()
+                .flatten()
+                .all(|component| (0.0..=1.0).contains(component)),
+            "a colour table entry is an srgb triple"
+        );
+        Self { colors }
+    }
+
+    pub fn colors(&self) -> &[[f32; 3]] {
+        &self.colors
+    }
+
+    pub fn indices(&self) -> Intensity {
+        let last = (self.colors.len() - 1) as f32;
+        Intensity::new(-0.5, last + 0.5)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
     name: String,
     tint: [f32; 3],
@@ -75,6 +109,7 @@ pub struct ChannelInfo {
     format: VoxelFormat,
     window: Option<Intensity>,
     no_data: Option<NoData>,
+    color_table: Option<ColorTable>,
 }
 
 impl ChannelInfo {
@@ -95,6 +130,7 @@ impl ChannelInfo {
             format,
             window: None,
             no_data: None,
+            color_table: None,
         }
     }
 
@@ -103,8 +139,26 @@ impl ChannelInfo {
             window.span() > 0.0,
             "a channel display window spans a positive intensity"
         );
+        assert!(
+            self.color_table.is_none(),
+            "an indexed channel shows its whole index domain"
+        );
         self.window = Some(window);
         self
+    }
+
+    pub fn with_color_table(mut self, color_table: ColorTable) -> Self {
+        assert!(
+            self.window.is_none(),
+            "an indexed channel shows its whole index domain"
+        );
+        self.statistics = Statistics::declared(color_table.indices(), VoxelSemantics::Label);
+        self.color_table = Some(color_table);
+        self
+    }
+
+    pub fn color_table(&self) -> Option<&ColorTable> {
+        self.color_table.as_ref()
     }
 
     pub fn with_no_data(mut self, no_data: NoData) -> Self {
@@ -130,7 +184,10 @@ impl ChannelInfo {
     }
 
     pub fn display(&self) -> Intensity {
-        self.window.unwrap_or(self.statistics.intensity())
+        match &self.color_table {
+            Some(color_table) => color_table.indices(),
+            None => self.window.unwrap_or(self.statistics.intensity()),
+        }
     }
 
     pub fn declared(

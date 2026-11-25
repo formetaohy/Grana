@@ -572,6 +572,10 @@ impl Resources {
     pub(super) fn unavailable(&self, time: u32) -> u64 {
         self.atlas.unavailable_marks(time) as u64
     }
+
+    pub(super) fn forget_unavailable_time(&mut self, time: u32) {
+        self.atlas.retry_time(time);
+    }
 }
 
 struct Pending {

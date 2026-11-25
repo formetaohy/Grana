@@ -1,13 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use grana_volume::{Calibration, Intensity, Level, VoxelData, VoxelFormat};
+use grana_volume::{Calibration, ColorTable, Intensity, Level, VoxelData, VoxelFormat};
 
 pub struct Channel<'a> {
     pub name: &'a str,
     pub tint: [f32; 3],
     pub data: Intensity,
     pub window: Intensity,
+    pub color_table: Option<&'a ColorTable>,
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +104,12 @@ impl ImageSpec<'_> {
                 .iter()
                 .all(|channel| channel.window.span() > 0.0),
             "an exported channel carries a display window with a positive span"
+        );
+        assert!(
+            self.channels
+                .iter()
+                .all(|channel| channel.color_table.is_none() || self.sample == VoxelFormat::U8),
+            "an indexed channel stores byte indices"
         );
         assert!(
             !self.levels.is_empty(),

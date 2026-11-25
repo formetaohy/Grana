@@ -31,7 +31,10 @@ pub fn edit<'a>(
             )
         })
         .collect::<Vec<_>>();
-    let stops = transfer.stops().to_vec();
+    let stops = transfer.stops().unwrap_or_default().to_vec();
+    if stops.is_empty() {
+        return vec![grana_ui::widget::gradient_bar(&colors, 14.0)];
+    }
     let set = move |next: Vec<Stop>| {
         Message::Command(Command::SetTransfer {
             channel,

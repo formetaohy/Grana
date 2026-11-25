@@ -2399,6 +2399,7 @@ fn rewrite_field(path: &std::path::Path, extent: Extent) {
         tint: [0.0, 0.0, 1.0],
         data: grana_volume::Intensity::new(0.0, 255.0),
         window: grana_volume::Intensity::new(0.0, 255.0),
+        color_table: None,
     }];
     let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
     let fill = |block: grana_archive::Block| -> Result<grana_volume::VoxelData, String> {

@@ -191,7 +191,10 @@ impl Page {
         )
         .map_err(|detail| Error::unsupported(path, detail))?;
         if sample_type.components() > 1
-            && (color.converts() || samples != 1 || color.channels() != 1)
+            && (color.converts()
+                || color.color_table().is_some()
+                || samples != 1
+                || color.channels() != 1)
         {
             return Err(Error::unsupported(
                 path,

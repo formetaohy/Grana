@@ -109,14 +109,27 @@ impl VolumeSeries {
         let first = &frames[0];
         let channels = (0..first.channel_count())
             .map(|index| {
-                let statistics = frames
-                    .iter()
-                    .fold(first.channels()[index].statistics(), |held, frame| {
-                        held.folded(frame.channels()[index].statistics())
-                    });
                 let channel = &first.channels()[index];
-                let info =
-                    ChannelInfo::new(channel.name(), channel.tint(), statistics, channel.format());
+                let info = match channel.color_table() {
+                    Some(color_table) => ChannelInfo::declared(
+                        channel.name(),
+                        channel.tint(),
+                        color_table.indices(),
+                        channel.format(),
+                    )
+                    .with_color_table(color_table.clone()),
+                    None => {
+                        let statistics = frames.iter().fold(channel.statistics(), |held, frame| {
+                            held.folded(frame.channels()[index].statistics())
+                        });
+                        ChannelInfo::new(
+                            channel.name(),
+                            channel.tint(),
+                            statistics,
+                            channel.format(),
+                        )
+                    }
+                };
                 match channel.no_data() {
                     Some(no_data) => info.with_no_data(no_data),
                     None => info,

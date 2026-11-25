@@ -80,9 +80,7 @@ impl Scene {
         let channels = dataset
             .channels()
             .iter()
-            .map(|channel| {
-                Channel::new(channel.display(), TransferFunction::tinted(channel.tint()))
-            })
+            .map(|channel| Channel::new(channel.display(), initial_transfer(channel)))
             .collect::<Vec<Channel>>();
         let half = 0.5 * dataset.world_size();
         let channel_count = channels.len();
@@ -158,9 +156,7 @@ impl Scene {
             .enumerate()
             .map(|(index, info)| match previous.next() {
                 Some(channel) if index < base => channel,
-                Some(_) | None => {
-                    Channel::new(info.display(), TransferFunction::tinted(info.tint()))
-                }
+                Some(_) | None => Channel::new(info.display(), initial_transfer(info)),
             })
             .collect();
         self.derived.clear();
@@ -323,10 +319,8 @@ impl Scene {
         let mut channels = self.dataset.channels().to_vec();
         channels.push(info.clone());
         self.dataset = self.dataset.with_channels(channels);
-        self.channels.push(Channel::new(
-            info.display(),
-            TransferFunction::tinted(info.tint()),
-        ));
+        self.channels
+            .push(Channel::new(info.display(), initial_transfer(&info)));
         self.coloc.grow_channel(self.channels.len());
         self.derived.push(entry);
         Ok(self.channels.len() - 1)
@@ -617,6 +611,10 @@ impl Scene {
     }
 
     pub fn set_window(&mut self, index: usize, start: f32, end: f32) {
+        if self.channel(index).color_table().is_some() {
+            self.channels[index].window = self.channel(index).display();
+            return;
+        }
         let data = self.dataset.channels()[index].intensity();
         let low = start.min(end).clamp(data.min(), data.max());
         let high = start.max(end).clamp(data.min(), data.max());
@@ -2101,4 +2099,11 @@ fn filter_stamp(filter: Option<MaskFilter>) -> u64 {
     stamp = mix(stamp, u64::from(filter.field().index()));
     stamp = mix(stamp, u64::from(filter.range()[0].to_bits()));
     mix(stamp, u64::from(filter.range()[1].to_bits()))
+}
+
+pub(crate) fn initial_transfer(info: &ChannelInfo) -> TransferFunction {
+    match info.color_table() {
+        Some(color_table) => TransferFunction::indexed(color_table.colors()),
+        None => TransferFunction::tinted(info.tint()),
+    }
 }

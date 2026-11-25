@@ -839,6 +839,7 @@ fn field(path: &Path, extent: Extent) {
         tint: [0.0, 0.0, 1.0],
         data: grana_volume::Intensity::new(0.0, 255.0),
         window: grana_volume::Intensity::new(0.0, 255.0),
+        color_table: None,
     }];
     let levels = [grana_volume::Level::new(
         extent,

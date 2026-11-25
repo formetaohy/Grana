@@ -57,6 +57,9 @@ impl App {
         if !retries.is_empty() {
             engine.retry(&retries);
         }
+        if session.take_retry_view() {
+            engine.retry_all();
+        }
         let time = session.scene().map_or(0, |scene| scene.time());
         if let Some(requests) =
             engine.poll_requests(surface.device(), time, session.pending_requests())?

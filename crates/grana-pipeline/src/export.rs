@@ -48,6 +48,7 @@ pub struct ChannelLayer {
     pub tint: [f32; 3],
     pub data: Intensity,
     pub window: Intensity,
+    pub color_table: Option<grana_volume::ColorTable>,
 }
 
 pub struct LabelLayer {
@@ -236,6 +237,7 @@ pub fn write_dataset(
             (levels, origins)
         }
     };
+    let sample = sample_of(channels, &layers)?;
     let write_channels = layers
         .iter()
         .map(|layer| WriteChannel {
@@ -243,6 +245,10 @@ pub fn write_dataset(
             tint: layer.tint,
             data: layer.data,
             window: layer.window,
+            color_table: layer
+                .color_table
+                .as_ref()
+                .filter(|_| sample == VoxelFormat::U8),
         })
         .collect::<Vec<_>>();
     let fill = |block: Block| -> Result<VoxelData, String> {
@@ -278,7 +284,6 @@ pub fn write_dataset(
         image_total = total;
         progress(done, total);
     };
-    let sample = sample_of(channels, &layers)?;
     let mut image = ImageSpec {
         name: &name,
         channels: &write_channels,

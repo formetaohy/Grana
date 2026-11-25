@@ -156,7 +156,7 @@ impl Protocol {
                     low: channel.window.min(),
                     high: channel.window.max(),
                 },
-                transfer: Some(TransferSpec::of(channel.transfer())),
+                transfer: TransferSpec::of(channel.transfer()),
                 volume: Some(VolumeSpec::of(channel.volume())),
             })
             .collect::<Vec<_>>();

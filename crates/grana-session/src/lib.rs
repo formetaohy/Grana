@@ -41,5 +41,5 @@ pub use task::Poll;
 pub use view::{
     BatchComparison, BatchDataset, BatchInteraction, BatchMetric, BatchSample, BatchSignificance,
     BatchView, Held, HistoryView, ImportNote, IoView, Kind, Message, Network, PlateView,
-    RecoveryView, SeriesView, SessionView, StitchView, StoreView, Transfer,
+    RecoveryView, SeriesView, SessionView, StitchView, StoreView, Transfer, Unreadable,
 };

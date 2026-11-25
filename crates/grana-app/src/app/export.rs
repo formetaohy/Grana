@@ -366,7 +366,13 @@ impl App {
             output,
             ..
         } = self;
-        let view = session_view(session, export.progress(), output.as_deref(), None);
+        let view = session_view(
+            session,
+            export.progress(),
+            output.as_deref(),
+            None,
+            grana_session::Unreadable::default(),
+        );
         let Some(page) = build(&view, workspace) else {
             return false;
         };

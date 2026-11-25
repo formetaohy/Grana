@@ -227,12 +227,18 @@ pub(super) fn channel_style(channels: &[crate::ChannelRow]) -> u64 {
         row = row.rotate_left(17) ^ (channel.intensity.max().to_bits() as u64);
         row = row.rotate_left(17) ^ ((channel.volume.mode().index() as u64) << 3);
         row = row.rotate_left(17) ^ (channel.volume.isovalue().to_bits() as u64);
-        for stop in channel.transfer.stops() {
+        row = row.rotate_left(17) ^ u64::from(channel.transfer.stops().is_some());
+        for stop in channel.transfer.stops().unwrap_or_default() {
             row = row.rotate_left(11) ^ (stop.position().to_bits() as u64);
             row = row.rotate_left(11) ^ (stop.opacity().to_bits() as u64);
             row = row.rotate_left(11) ^ (stop.color()[0].to_bits() as u64);
             row = row.rotate_left(11) ^ (stop.color()[1].to_bits() as u64);
             row = row.rotate_left(11) ^ (stop.color()[2].to_bits() as u64);
+        }
+        for color in channel.transfer.colors() {
+            for component in color {
+                row = row.rotate_left(11) ^ (component.to_bits() as u64);
+            }
         }
         key = key.rotate_left(13) ^ row;
     }
