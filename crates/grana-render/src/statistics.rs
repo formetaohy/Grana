@@ -10,6 +10,8 @@ pub struct Statistics {
     pub prefetched: u64,
     pub prefetch_hits: u64,
     pub frames: u64,
+    pub splats: u64,
+    pub splat_instances: u64,
     pub residency: u64,
     pub atlas: u64,
     pub records: u64,

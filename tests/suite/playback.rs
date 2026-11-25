@@ -116,20 +116,7 @@ fn playback_advances_through_the_time_series() {
 
 #[test]
 fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
-    let level = Level::new(Extent::new(160, 160, 8), Spacing::new(1.0, 1.0, 1.0));
-    let intensity = Intensity::new(0.0, 1.0);
-    let channels = vec![ChannelInfo::new(
-        "signal",
-        [1.0, 1.0, 1.0],
-        Statistics::declared(intensity, VoxelSemantics::Scalar),
-        VoxelFormat::F32,
-    )];
-    let pyramid = Pyramid::new(vec![level], 1, channels, 2, 1.0, Calibration::Recorded);
-    let mut scene = Scene::new(Dataset::synthetic("proxy", pyramid));
-    let set = scene.add_object(ObjectKind::Spots, 0);
-    for time in 0..2 {
-        scene.install(set, time, ObjectFrame::from_spots(crowd(time)));
-    }
+    let mut scene = proxy_scene(2);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::new(400.0, 400.0, 8.0), 1.0);
     let mut cache = Cache::new();
@@ -143,8 +130,8 @@ fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
             }),
             &mut cache,
         );
-        let rendered =
-            grana_engine::frame(&scene, &targets, &mut cache).expect("the proxy scene renders");
+        let rendered = grana_engine::frame(&scene, &targets, &mut cache, 8 << 20)
+            .expect("the proxy scene renders");
         assert_eq!(
             rendered.splats.len(),
             1,
@@ -157,6 +144,56 @@ fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
         );
         assert!(!rendered.splats[0].is_empty(), "the proxy holds cells");
     }
+}
+
+#[test]
+fn a_tight_splat_residency_coarsens_the_drawn_tier() {
+    let scene = proxy_scene(1);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::new(400.0, 400.0, 8.0), 1.0);
+    let lens = Lens {
+        camera: &camera,
+        height: 320,
+    };
+    let mut cache = Cache::new();
+    let targets = grana_engine::plan_with(&scene, Some(lens), &mut cache);
+    let whole = grana_engine::frame(&scene, &targets, &mut cache, u64::MAX)
+        .expect("the unconstrained proxy renders");
+    let wanted = whole.splats[0].level();
+    let bytes = whole.splats[0].bytes();
+    let mut cache = Cache::new();
+    let targets = grana_engine::plan_with(&scene, Some(lens), &mut cache);
+    let fitted = grana_engine::frame(&scene, &targets, &mut cache, bytes / 2)
+        .expect("the constrained proxy renders");
+    assert!(
+        fitted.splats[0].level() > wanted,
+        "a residency of {} bytes keeps the wanted level {wanted}",
+        bytes / 2
+    );
+    assert!(
+        fitted.splats[0].bytes() <= bytes / 2,
+        "the clamped level holds {} bytes over the {} it may",
+        fitted.splats[0].bytes(),
+        bytes / 2
+    );
+}
+
+fn proxy_scene(frames: u32) -> Scene {
+    let level = Level::new(Extent::new(160, 160, 8), Spacing::new(1.0, 1.0, 1.0));
+    let intensity = Intensity::new(0.0, 1.0);
+    let channels = vec![ChannelInfo::new(
+        "signal",
+        [1.0, 1.0, 1.0],
+        Statistics::declared(intensity, VoxelSemantics::Scalar),
+        VoxelFormat::F32,
+    )];
+    let pyramid = Pyramid::new(vec![level], 1, channels, frames, 1.0, Calibration::Recorded);
+    let mut scene = Scene::new(Dataset::synthetic("proxy", pyramid));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    for time in 0..frames {
+        scene.install(set, time, ObjectFrame::from_spots(crowd(time)));
+    }
+    scene
 }
 
 fn crowd(time: u32) -> SpotSet {

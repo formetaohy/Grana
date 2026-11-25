@@ -278,12 +278,18 @@ pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, cache: &mut Cache) -> Ta
     }
 }
 
-pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<RenderedScene, String> {
+pub fn frame(
+    scene: &Scene,
+    targets: &Targets,
+    cache: &mut Cache,
+    budget: u64,
+) -> Result<RenderedScene, String> {
     assert_eq!(
         targets.detail.len(),
         targets.splats.len(),
         "a target names one detail level and one splat level per shown set"
     );
+    let mut available = budget;
     let mut layers = Vec::new();
     let mut picks = Vec::new();
     let mut splats = Vec::new();
@@ -332,7 +338,9 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
             let count = seeded.len();
             topology.mix(key);
             topology.mix(stamp);
-            splats.push(SplatChunk::single(key, stamp, seeded));
+            let chunk = SplatChunk::single(key, stamp, seeded);
+            spend(&mut available, chunk.bytes(), "seed");
+            splats.push(chunk);
             members.push(SplatMembers::standalone(key, set.id(), count));
         }
         let Some(frame) = set.frame_shared(time) else {
@@ -351,7 +359,9 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                 set,
                 splat_key(set.id().raw(), DETECTION_PART),
                 choice,
+                available,
             );
+            spend(&mut available, prepared.used, "detection");
             for chunk in &prepared.chunks {
                 topology.mix(chunk.key());
                 topology.mix(u64::from(chunk.level()));
@@ -379,7 +389,7 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                 let stamp = highlight_stamp(scene, set);
                 topology.mix(key);
                 appearance.mix(stamp);
-                splats.push(SplatChunk::new(
+                let chunk = SplatChunk::new(
                     key,
                     0,
                     true,
@@ -389,7 +399,9 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
                         Arc::new(highlight.geometry),
                         Arc::new(highlight.style),
                     ),
-                ));
+                );
+                spend(&mut available, chunk.bytes(), "highlight");
+                splats.push(chunk);
                 members.push(SplatMembers::new(key, set.id(), highlight.members));
             }
         }
@@ -581,4 +593,10 @@ fn splat_key(set: u64, part: u64) -> u64 {
     key.mix(set);
     key.mix(part);
     key.finish()
+}
+
+fn spend(available: &mut u64, bytes: u64, part: &str) {
+    *available = available.checked_sub(bytes).unwrap_or_else(|| {
+        panic!("the {part} splats hold {bytes} bytes but the splat residency keeps {available}")
+    });
 }

@@ -99,6 +99,7 @@ pub(crate) struct Node {
     pub(crate) high: [u32; 3],
     pub(crate) contact: u32,
     pub(crate) seed: u32,
+    pub(crate) truncated: bool,
 }
 
 impl Node {
@@ -112,6 +113,7 @@ impl Node {
             high: [0; 3],
             contact: EMPTY,
             seed: EMPTY,
+            truncated: false,
         }
     }
 }

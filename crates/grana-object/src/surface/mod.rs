@@ -10,7 +10,7 @@ use grana_store::SpillStore;
 use crate::{IntensityTable, ObjectId, ObjectIds};
 
 pub use edit::{SurfaceEdit, SurfaceEditKind};
-pub use topology::{Basin, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
+pub use topology::{Basin, BasinParts, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
 
 use detail::Details;
 

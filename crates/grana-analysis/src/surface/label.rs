@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use super::{EMPTY, Measure, Tile, find, strides_of};
+use crate::label::NEIGHBOURS;
 
 impl Tile<'_> {
     pub(super) fn watershed(&mut self) {
@@ -285,9 +286,11 @@ impl Tile<'_> {
                         core[2].start + (z - origin[2]) as u32,
                     ];
                     let reach = self.chamfer.get(index).copied().unwrap_or(0);
+                    let cut = !self.nodes[node].truncated && self.cut(voxel, reach);
                     let stats = &mut self.nodes[node];
                     stats.voxels += 1;
                     stats.reach = stats.reach.max(reach);
+                    stats.truncated |= cut;
                     for (axis, coordinate) in voxel.iter().enumerate() {
                         stats.sum[axis] += f64::from(*coordinate);
                         stats.low[axis] = stats.low[axis].min(*coordinate);
@@ -297,6 +300,37 @@ impl Tile<'_> {
             }
         }
         Ok(())
+    }
+
+    fn cut(&self, voxel: [u32; 3], reach: u32) -> bool {
+        let plan = self.pass.plan;
+        for axis in 0..3 {
+            if voxel[axis] <= plan.region[axis].start || voxel[axis] + 1 >= plan.region[axis].end {
+                return true;
+            }
+        }
+        if reach > plan.widest() {
+            return false;
+        }
+        let voxel = voxel.map(i64::from);
+        NEIGHBOURS.iter().any(|offset| {
+            let neighbour = [
+                voxel[0] + offset[0],
+                voxel[1] + offset[1],
+                voxel[2] + offset[2],
+            ];
+            let Some(slot) = self.mask_index(neighbour) else {
+                return false;
+            };
+            if self.mask[slot] {
+                return false;
+            }
+            !self.gate.admits(neighbour)
+                || self
+                    .detection
+                    .value(neighbour)
+                    .is_none_or(|value| !value.is_finite())
+        })
     }
 }
 

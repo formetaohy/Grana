@@ -24,6 +24,8 @@ const SURFACE_BYTES: u64 = 16;
 
 const VOLUME_BYTES: u64 = 24;
 
+const SPLAT_SHARE: u64 = 8;
+
 pub fn texture_budget(memory: Option<&Memory>) -> u64 {
     let Some(memory) = memory else {
         return FALLBACK;
@@ -38,6 +40,10 @@ pub fn texture_budget(memory: Option<&Memory>) -> u64 {
         (pool.local(), DISCRETE_SHARE)
     };
     (pool / share).clamp(FLOOR, CEILING)
+}
+
+pub fn splat_budget(total: u64) -> u64 {
+    (total / SPLAT_SHARE).max(1)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -102,17 +108,18 @@ pub(crate) fn split(total: u64, ceiling: u64, frames: Frames) -> Split {
     assert!(total > 0, "a renderer needs a positive texture budget");
     assert!(ceiling > 0, "a renderer keeps a positive residency ceiling");
     let single = frames.bytes();
+    let splats = splat_budget(total);
     let held = total.saturating_sub(single).min(ceiling);
-    if held > 0 {
+    if held > splats {
         return Split {
-            residency: held,
+            residency: held - splats,
             frames: single,
         };
     }
     let residency = (total / 4).max(1).min(ceiling);
     Split {
         residency,
-        frames: total - residency,
+        frames: total.saturating_sub(residency).saturating_sub(splats),
     }
 }
 

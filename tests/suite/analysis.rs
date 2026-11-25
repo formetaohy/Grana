@@ -155,6 +155,10 @@ fn extracts_measured_surfaces_from_two_balls() {
     );
     assert_eq!(set.object_count(), 2, "each ball is one object");
     assert!(
+        set.objects().iter().all(|object| !object.truncated()),
+        "a ball the domain does not cut measures as a complete surface"
+    );
+    assert!(
         set.geometry().is_ok_and(|mesh| mesh.triangle_count() > 0),
         "the surface carries triangles"
     );
@@ -248,6 +252,74 @@ fn extracts_measured_surfaces_from_two_balls() {
         );
     }
 
+    let mut sliced = match volume.channels()[0].data() {
+        VoxelData::U16(values) => values.clone(),
+        other => panic!("a ball volume is sixteen bit, found {:?}", other.format()),
+    };
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 24..40 {
+                sliced[extent.index(x, y, z) as usize] = fill;
+            }
+        }
+    }
+    let gapped = Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new(
+            "signal",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(sliced),
+        )],
+    );
+    let severed = extract_surfaces_at(
+        &gapped,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        None,
+        Some(NoData::U16(fill)),
+    );
+    assert_eq!(
+        severed.object_count(),
+        2,
+        "a missing body that severs a ball leaves the surviving half and the other ball"
+    );
+    assert_eq!(
+        severed
+            .objects()
+            .iter()
+            .filter(|object| object.truncated())
+            .count(),
+        1,
+        "the half a missing body cuts reports its truncation and the whole ball does not"
+    );
+
+    let region = Region::new(
+        glam::Vec3::from(level.voxel_center([12.0, 32.0, 24.0])),
+        [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z],
+        glam::Vec3::new(12.0, 32.0, 24.0) * 0.2,
+    );
+    let boxed = extract_surfaces_in(
+        &volume,
+        level,
+        SurfaceParams::new(0.5, 0.0, 0.0, 0.0, SurfaceFilter::new(0.0, 0.0, 0.0, 0.0)),
+        region,
+        None,
+        None,
+    );
+    assert_eq!(
+        boxed.object_count(),
+        1,
+        "an analysis box that covers half of one ball keeps that half only"
+    );
+    assert!(
+        boxed
+            .object(0)
+            .expect("the boxed surface exists")
+            .truncated(),
+        "a surface the analysis box cuts reports its truncation"
+    );
+
     let level = Level::new(extent, spacing);
     let centre = level.voxel_center([24.0, 32.0, 24.0]);
     let roi = grana_object::Mask::boxed(
@@ -292,6 +364,10 @@ fn extracts_measured_surfaces_from_two_balls() {
         "a region too small to estimate local background still detects its bright voxels"
     );
     let clipped = small.object(0).expect("the clipped surface exists");
+    assert!(
+        clipped.truncated(),
+        "a surface the analysis mask cuts reports its truncation"
+    );
     assert!(
         clipped.sphericity() < 0.99,
         "a clipped fragment of a ball reads its own sphericity {}, not a saturated 1",
@@ -456,6 +532,17 @@ fn extract_surfaces_at(
     roi: Option<&grana_object::Mask>,
     no_data: Option<NoData>,
 ) -> SurfaceSet {
+    extract_surfaces_in(volume, level, params, Region::none(), roi, no_data)
+}
+
+fn extract_surfaces_in(
+    volume: &grana_volume::Volume,
+    level: Level,
+    params: SurfaceParams,
+    region: Region,
+    roi: Option<&grana_object::Mask>,
+    no_data: Option<NoData>,
+) -> SurfaceSet {
     let intensity = Intensity::new(0.0, f32::from(HIGH));
     let channels = volume.channel_count();
     let missing = vec![no_data; channels];
@@ -464,7 +551,7 @@ fn extract_surfaces_at(
         level,
         params,
         ChannelSet::new(0, &missing),
-        Region::none(),
+        region,
         intensity,
     );
     let cancel = AtomicBool::new(false);

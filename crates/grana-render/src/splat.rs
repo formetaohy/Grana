@@ -40,6 +40,11 @@ const VERTEX_COUNT: u32 = 6;
 
 pub const SPLAT_LEVELS: u8 = 5;
 
+pub const SPLAT_INSTANCE_BYTES: u64 =
+    size_of::<SplatGeometry>() as u64 + size_of::<SplatStyle>() as u64 + size_of::<u32>() as u64;
+
+pub const SPLAT_SLOT_BYTES: u64 = 2 * size_of::<[u32; 4]>() as u64;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct SplatGeometry {
@@ -166,6 +171,10 @@ impl SplatLevel {
     pub fn is_empty(&self) -> bool {
         self.geometry.is_empty()
     }
+
+    pub fn bytes(&self) -> u64 {
+        SPLAT_SLOT_BYTES + self.geometry.len() as u64 * SPLAT_INSTANCE_BYTES
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -227,6 +236,10 @@ impl SplatChunk {
 
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.data.bytes()
     }
 }
 
@@ -383,6 +396,10 @@ impl SplatSlot {
         slot
     }
 
+    fn bytes(&self) -> u64 {
+        SPLAT_SLOT_BYTES + self.capacity as u64 * SPLAT_INSTANCE_BYTES
+    }
+
     fn write(&mut self, queue: &Queue, data: &SplatLevel, scratch: &mut Vec<SplatGeometry>) {
         assert!(
             data.len() <= self.capacity,
@@ -428,6 +445,8 @@ pub(crate) struct SplatPasses {
     ranges: Vec<Range>,
     seen: HashSet<(u64, u8)>,
     count: u32,
+    bytes: u64,
+    instances: u64,
     scratch: Vec<SplatGeometry>,
     cull: ComputePipeline,
     slice: RenderPipeline,
@@ -569,6 +588,8 @@ impl SplatPasses {
             ranges: Vec::new(),
             seen: HashSet::new(),
             count: 0,
+            bytes: 0,
+            instances: 0,
             scratch: Vec::new(),
             cull,
             slice,
@@ -585,9 +606,28 @@ impl SplatPasses {
         self.ranges.clear();
         self.seen.clear();
         self.count = 0;
+        self.bytes = 0;
+        self.instances = 0;
     }
 
-    pub fn set(&mut self, device: &Device, queue: &Queue, layouts: &Layouts, splats: Splats<'_>) {
+    pub fn set(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        layouts: &Layouts,
+        splats: Splats<'_>,
+        budget: u64,
+    ) {
+        let requested = splats
+            .chunks()
+            .iter()
+            .filter(|chunk| !chunk.is_empty())
+            .map(SplatChunk::bytes)
+            .sum::<u64>();
+        assert!(
+            requested <= budget,
+            "the splat chunks of a frame hold {requested} bytes but the splat residency keeps {budget}"
+        );
         self.seen.clear();
         self.active.clear();
         self.pickable.clear();
@@ -638,6 +678,12 @@ impl SplatPasses {
         let Self { slots, seen, .. } = self;
         slots.retain(|entry, _| seen.contains(entry));
         self.count = count as u32;
+        self.bytes = self.slots.values().map(SplatSlot::bytes).sum();
+        self.instances = self
+            .active
+            .iter()
+            .map(|entry| self.slots[entry].len as u64)
+            .sum();
         self.ranges.clear();
         for (entry, slot) in &self.slots {
             self.ranges
@@ -666,6 +712,14 @@ impl SplatPasses {
 
     pub fn count(&self) -> u32 {
         self.count
+    }
+
+    pub(crate) fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    pub(crate) fn instances(&self) -> u64 {
+        self.instances
     }
 
     pub fn cull_volume(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {

@@ -35,7 +35,7 @@ mod temporal;
 mod upload;
 mod volume;
 
-pub use budget::{target_bytes, texture_budget};
+pub use budget::{splat_budget, target_bytes, texture_budget};
 pub use detail::{Detail, EXPORT_CEILING, Residency, residency};
 pub use fragment::{Fragment, fit as fragment_fit};
 pub use image::{Pixels, stride as picture_stride, target as picture_target};
@@ -44,5 +44,8 @@ pub use renderer::{Delivery, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{
     ChannelRow, Digest, Layer, LayerKey, Overlay, SceneFrame, Style, Versions, overlay_digest,
 };
-pub use splat::{SPLAT_LEVELS, Splat, SplatChunk, SplatGeometry, SplatLevel, SplatStyle, Splats};
+pub use splat::{
+    SPLAT_INSTANCE_BYTES, SPLAT_LEVELS, SPLAT_SLOT_BYTES, Splat, SplatChunk, SplatGeometry,
+    SplatLevel, SplatStyle, Splats,
+};
 pub use statistics::Statistics;

@@ -8,6 +8,18 @@ use grana_volume::{Basis, Extent, Level};
 use crate::intensity::{AccumulatorParts, SampleAccumulator};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BasinParts {
+    pub reach: u32,
+    pub voxels: u64,
+    pub sum: [f64; 3],
+    pub low: [u32; 3],
+    pub high: [u32; 3],
+    pub contact: Option<u32>,
+    pub seed: Option<u32>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Basin {
     reach: u32,
     voxels: u64,
@@ -16,18 +28,21 @@ pub struct Basin {
     high: [u32; 3],
     contact: Option<u32>,
     seed: Option<u32>,
+    truncated: bool,
 }
 
 impl Basin {
-    pub fn new(
-        reach: u32,
-        voxels: u64,
-        sum: [f64; 3],
-        low: [u32; 3],
-        high: [u32; 3],
-        contact: Option<u32>,
-        seed: Option<u32>,
-    ) -> Self {
+    pub fn new(parts: BasinParts) -> Self {
+        let BasinParts {
+            reach,
+            voxels,
+            sum,
+            low,
+            high,
+            contact,
+            seed,
+            truncated,
+        } = parts;
         Self {
             reach,
             voxels,
@@ -36,6 +51,7 @@ impl Basin {
             high,
             contact,
             seed,
+            truncated,
         }
     }
 
@@ -67,6 +83,10 @@ impl Basin {
         self.seed
     }
 
+    pub fn truncated(self) -> bool {
+        self.truncated
+    }
+
     pub fn absorb(&mut self, other: Self) {
         self.reach = self.reach.max(other.reach);
         self.voxels += other.voxels;
@@ -81,6 +101,7 @@ impl Basin {
         if let Some(seed) = other.seed {
             self.seed = Some(self.seed.map_or(seed, |current| current.min(seed)));
         }
+        self.truncated |= other.truncated;
     }
 }
 
@@ -350,15 +371,16 @@ impl SurfaceTopology {
         let base_seed = self.info.seeds() as u32;
         let mut basins = self.basins.clone();
         basins.extend(other.basins.iter().map(|basin| {
-            Basin::new(
-                basin.reach,
-                basin.voxels,
-                basin.sum,
-                basin.low,
-                basin.high,
-                basin.contact.map(|contact| contact + base_basin),
-                basin.seed.map(|seed| seed + base_seed),
-            )
+            Basin::new(BasinParts {
+                reach: basin.reach,
+                voxels: basin.voxels,
+                sum: basin.sum,
+                low: basin.low,
+                high: basin.high,
+                contact: basin.contact.map(|contact| contact + base_basin),
+                seed: basin.seed.map(|seed| seed + base_seed),
+                truncated: basin.truncated,
+            })
         }));
         let mut accumulators = self.accumulators.clone();
         accumulators.extend(other.accumulators.iter().copied());
@@ -416,6 +438,7 @@ impl SurfaceTopology {
             }
             writer.u32(basin.contact().unwrap_or(u32::MAX));
             writer.u32(basin.seed().unwrap_or(u32::MAX));
+            writer.u8(u8::from(basin.truncated()));
         }
         writer.count(self.accumulators.len());
         for accumulator in &self.accumulators {
@@ -525,15 +548,17 @@ impl SurfaceTopology {
             }
             let contact = reader.u32()?;
             let seed = reader.u32()?;
-            basins.push(Basin::new(
+            let truncated = reader.bool()?;
+            basins.push(Basin::new(BasinParts {
                 reach,
                 voxels,
                 sum,
                 low,
                 high,
-                (contact != u32::MAX).then_some(contact),
-                (seed != u32::MAX).then_some(seed),
-            ));
+                contact: (contact != u32::MAX).then_some(contact),
+                seed: (seed != u32::MAX).then_some(seed),
+                truncated,
+            }));
         }
         let accumulator_count = reader.count(ACCUMULATOR_BYTES)?;
         if accumulator_count != basin_count.checked_mul(channels).ok_or(FAULT_VALUE)? {
@@ -642,7 +667,8 @@ const BASIN_BYTES: usize = size_of::<u32>()
     + size_of::<u64>()
     + 3 * size_of::<f64>()
     + 6 * size_of::<u32>()
-    + 2 * size_of::<u32>();
+    + 2 * size_of::<u32>()
+    + size_of::<u8>();
 const ACCUMULATOR_BYTES: usize =
     size_of::<u64>() + 2 * size_of::<f64>() + 2 * size_of::<f32>() + size_of::<f64>();
 const SEAM_BYTES: usize = 3 * size_of::<u32>();

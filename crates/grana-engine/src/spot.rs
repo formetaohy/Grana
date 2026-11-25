@@ -74,12 +74,6 @@ pub(crate) struct Geometry {
     pub(crate) members: Option<Vec<u32>>,
 }
 
-impl Geometry {
-    pub(crate) fn len(&self) -> usize {
-        self.cells.len()
-    }
-}
-
 #[derive(Clone)]
 pub(crate) enum Paint {
     Spots { time: u32, spots: Arc<SpotSet> },

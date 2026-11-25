@@ -180,6 +180,7 @@ impl Renderer {
         self.motion = Some(view.motion);
         let stride = self.convergence.stride(target.age);
         let fragments = self.fragment_allowance(frame.size);
+        let splat_budget = self.splat_budget();
         let Self {
             layouts,
             present,
@@ -377,7 +378,7 @@ impl Renderer {
             if shot.splats {
                 splats
                     .get_or_insert_with(|| SplatPasses::new(device, layouts, pipelines))
-                    .set(device, queue, layouts, scene.splats);
+                    .set(device, queue, layouts, scene.splats, splat_budget);
             } else if let Some(passes) = splats.as_mut() {
                 passes.clear();
             }

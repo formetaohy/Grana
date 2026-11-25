@@ -13,7 +13,7 @@ use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 const RELAX_ITERATIONS: usize = 8;
 const RELAX_TRIANGLE_FLOOR: usize = 12;
 
-const NEIGHBOURS: [[i64; 3]; 6] = [
+pub(crate) const NEIGHBOURS: [[i64; 3]; 6] = [
     [-1, 0, 0],
     [1, 0, 0],
     [0, -1, 0],

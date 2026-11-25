@@ -162,7 +162,8 @@ impl Offline {
                 .as_ref()
                 .is_none_or(|(time, cached, _)| *time != pose.time || *cached != targets);
             if stale {
-                match grana_engine::frame(&scene, &targets, &mut cache) {
+                let budget = self.renderer.splat_budget();
+                match grana_engine::frame(&scene, &targets, &mut cache, budget) {
                     Ok(rendered) => prepared = Some((pose.time, targets, rendered)),
                     Err(detail) => {
                         export.discard();

@@ -1,4 +1,6 @@
-use grana_object::{Basin, SampleAccumulator, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
+use grana_object::{
+    Basin, BasinParts, SampleAccumulator, Seam, SurfacePatches, SurfaceTopology, TopologyInfo,
+};
 
 use crate::hash::Map;
 
@@ -202,15 +204,16 @@ impl<'a> Assembler<'a> {
         let basins = nodes
             .iter()
             .map(|node| {
-                Basin::new(
-                    node.reach,
-                    node.voxels,
-                    node.sum,
-                    node.low,
-                    node.high,
-                    (node.contact != EMPTY).then_some(node.contact),
-                    (node.seed != EMPTY).then_some(node.seed),
-                )
+                Basin::new(BasinParts {
+                    reach: node.reach,
+                    voxels: node.voxels,
+                    sum: node.sum,
+                    low: node.low,
+                    high: node.high,
+                    contact: (node.contact != EMPTY).then_some(node.contact),
+                    seed: (node.seed != EMPTY).then_some(node.seed),
+                    truncated: node.truncated,
+                })
             })
             .collect();
         let patches = SurfacePatches::new(positions, normals, triangles, basin_of_triangle);

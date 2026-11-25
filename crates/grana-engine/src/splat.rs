@@ -83,6 +83,7 @@ impl SplatCache {
         set: &ObjectSet,
         key: u64,
         choice: Choice,
+        available: u64,
     ) -> Prepared {
         let range = range(set, scene.time(), scene.frame_count());
         let projected = range[0] != range[1];
@@ -98,6 +99,7 @@ impl SplatCache {
                     set: set.id(),
                     levels: std::array::from_fn(|_| None),
                 },
+                used: 0,
             };
         }
         let stamp = set.revision().raw();
@@ -176,65 +178,78 @@ impl SplatCache {
         };
         let shape = set.shape().raw();
         let opacity = u64::from(set.opacity().to_bits());
-        let slot = choice.level();
-        let level = &mut entry.levels[slot as usize];
-        let rung_choice = if slot == 0 {
-            Choice::Full
-        } else {
-            Choice::Level(slot)
-        };
-        let kind = spot::kind(&object_frames, rung_choice);
-        let data = data_stamp(set, slot, range);
         let appearance = appearance_stamp(set, range);
-        let geometry = match kind {
-            spot::Kind::Cells => stamp_of(&[data, shape, colored, appearance]),
-            spot::Kind::Spots => stamp_of(&[data]),
-        };
-        let style = match kind {
-            spot::Kind::Cells => stamp_of(&[geometry, opacity]),
-            spot::Kind::Spots => stamp_of(&[data, shape, colored, appearance, opacity]),
-        };
-        if level
-            .geometry
-            .as_ref()
-            .is_none_or(|held| held.stamp != geometry)
-        {
-            let pickable = match kind {
-                spot::Kind::Spots => true,
-                spot::Kind::Cells => object_frames.len() == 1,
+        let mut chosen = None;
+        for tier in choice.level()..LEVEL_COUNT {
+            let level = &mut entry.levels[tier as usize];
+            let rung = match tier {
+                0 => Choice::Full,
+                tier => Choice::Level(tier),
             };
-            let mut rung = match kind {
-                spot::Kind::Spots => 0,
-                spot::Kind::Cells => slot.max(1),
+            let kind = spot::kind(&object_frames, rung);
+            let data = data_stamp(set, tier, range);
+            let geometry = match kind {
+                spot::Kind::Cells => stamp_of(&[data, shape, colored, appearance]),
+                spot::Kind::Spots => stamp_of(&[data]),
             };
-            let built = loop {
-                let built = spot::geometry(&object_frames, kind, rung, look, pickable);
-                if built.len() <= spot::SPLAT_LIMIT || rung >= LEVEL_COUNT - 1 {
-                    break built;
-                }
-                rung += 1;
+            let style = match kind {
+                spot::Kind::Cells => stamp_of(&[geometry, opacity]),
+                spot::Kind::Spots => stamp_of(&[data, shape, colored, appearance, opacity]),
             };
-            level.geometry = Some(CachedGeometry {
-                stamp: geometry,
-                members: built
-                    .members
+            if level
+                .geometry
+                .as_ref()
+                .is_none_or(|held| held.stamp != geometry)
+            {
+                let pickable = match kind {
+                    spot::Kind::Spots => true,
+                    spot::Kind::Cells => object_frames.len() == 1,
+                };
+                let built = spot::geometry(&object_frames, kind, tier, look, pickable);
+                level.geometry = Some(CachedGeometry {
+                    stamp: geometry,
+                    members: built
+                        .members
+                        .as_ref()
+                        .map(|members| Arc::new(members.clone())),
+                    cells: Arc::clone(&built.cells),
+                    paint: built.paint,
+                });
+            }
+            if level.style.as_ref().is_none_or(|held| held.stamp != style) {
+                let held = level
+                    .geometry
                     .as_ref()
-                    .map(|members| Arc::new(members.clone())),
-                cells: Arc::clone(&built.cells),
-                paint: built.paint,
-            });
-        }
-        if level.style.as_ref().is_none_or(|held| held.stamp != style) {
+                    .expect("the level geometry is cached before its styles");
+                let styles = spot::styles(&held.paint, set.opacity(), look);
+                level.style = Some(CachedStyle {
+                    stamp: style,
+                    styles: Arc::new(styles),
+                });
+            }
             let held = level
                 .geometry
                 .as_ref()
-                .expect("the level geometry is cached before its styles");
-            let styles = spot::styles(&held.paint, set.opacity(), look);
-            level.style = Some(CachedStyle {
-                stamp: style,
-                styles: Arc::new(styles),
-            });
+                .expect("the active level holds its geometry");
+            let bytes = grana_render::SPLAT_SLOT_BYTES
+                + held.cells.len() as u64 * grana_render::SPLAT_INSTANCE_BYTES;
+            if held.cells.len() <= spot::SPLAT_LIMIT && bytes <= available {
+                chosen = Some((tier, bytes));
+                break;
+            }
         }
+        let Some((tier, used)) = chosen else {
+            return Prepared {
+                chunks: Vec::new(),
+                members: SplatMembers {
+                    key,
+                    set: set.id(),
+                    levels: std::array::from_fn(|_| None),
+                },
+                used: 0,
+            };
+        };
+        let level = &entry.levels[tier as usize];
         let held = level
             .geometry
             .as_ref()
@@ -244,12 +259,12 @@ impl SplatCache {
             .as_ref()
             .expect("the active level holds its styles");
         let mut members = std::array::from_fn(|_| None);
-        members[slot as usize] = held.members.as_ref().map(Arc::clone);
+        members[tier as usize] = held.members.as_ref().map(Arc::clone);
         Prepared {
             chunks: vec![
                 SplatChunk::new(
                     key,
-                    slot,
+                    tier,
                     true,
                     SplatLevel::new(
                         held.stamp,
@@ -265,6 +280,7 @@ impl SplatCache {
                 set: set.id(),
                 levels: members,
             },
+            used,
         }
     }
 }
@@ -337,6 +353,7 @@ fn sample_frames(start: u32, end: u32) -> Vec<u32> {
 pub(crate) struct Prepared {
     pub(crate) chunks: Vec<SplatChunk>,
     pub(crate) members: SplatMembers,
+    pub(crate) used: u64,
 }
 
 #[derive(Clone)]

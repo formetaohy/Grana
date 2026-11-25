@@ -314,6 +314,10 @@ impl Renderer {
         self.budget
     }
 
+    pub fn splat_budget(&self) -> u64 {
+        budget::splat_budget(self.total)
+    }
+
     pub fn frames(&self) -> u64 {
         self.frames
     }
@@ -416,7 +420,10 @@ impl Renderer {
     }
 
     fn settle(&mut self) {
-        let held = self.budget.saturating_add(self.frames);
+        let held = self
+            .budget
+            .saturating_add(self.frames)
+            .saturating_add(self.splat_budget());
         if held < self.claim.bytes() {
             self.claim.resize(held);
         }
@@ -660,6 +667,8 @@ impl Renderer {
             prefetched,
             prefetch_hits,
             frames: self.targets.bytes(),
+            splats: self.splats.as_ref().map_or(0, SplatPasses::bytes),
+            splat_instances: self.splats.as_ref().map_or(0, SplatPasses::instances),
             residency,
             atlas,
             records,

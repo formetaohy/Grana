@@ -292,7 +292,8 @@ impl Engine {
                 || prepared.classification != keys.classification()
                 || prepared.targets.as_ref() != detail.as_ref()
         }) {
-            let rendered = view::frame(view.scene, &detail, &mut self.cache)?;
+            let budget = self.renderer.splat_budget();
+            let rendered = view::frame(view.scene, &detail, &mut self.cache, budget)?;
             self.prepared = Some(Prepared {
                 topology: keys.topology(),
                 classification: keys.classification(),
@@ -306,7 +307,9 @@ impl Engine {
         {
             prepared.appearance = keys.appearance();
             prepared.display = keys.display();
-            prepared.rendered = view::frame(view.scene, &prepared.targets, &mut self.cache)?;
+            let budget = self.renderer.splat_budget();
+            prepared.rendered =
+                view::frame(view.scene, &prepared.targets, &mut self.cache, budget)?;
         }
         let info = {
             let Self {
