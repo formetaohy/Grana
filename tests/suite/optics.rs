@@ -21,6 +21,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         256 << 20,
         gpu.pipelines(),
     );

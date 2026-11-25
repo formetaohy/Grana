@@ -510,8 +510,10 @@ impl TrackMeasurement {
             Self::Duration => statistics.duration() as f32,
             Self::Length => statistics.length() as f32,
             Self::Displacement => statistics.displacement() as f32,
-            Self::Speed => statistics.speed() as f32,
-            Self::Straightness => statistics.straightness() as f32,
+            Self::Speed => statistics.speed().map_or(f32::NAN, |speed| speed as f32),
+            Self::Straightness => statistics
+                .straightness()
+                .map_or(f32::NAN, |straightness| straightness as f32),
         }
     }
 }

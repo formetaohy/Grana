@@ -56,14 +56,7 @@ impl Session {
                 return;
             }
         };
-        self.discard_analysis();
-        if let Some(scene) = self.scene.as_mut() {
-            *scene = draft;
-        }
-        self.history.clear();
-        self.install_channels();
-        self.mask_stamps.clear();
-        self.mask_extents.clear();
+        self.replace_document(draft);
         let sets = staged.sets().to_vec();
         let steps = staged.steps().to_vec();
         self.realign();
@@ -89,6 +82,22 @@ impl Session {
         self.drive_recipe();
     }
 
+    fn replace_document(&mut self, draft: Scene) {
+        self.discard_analysis();
+        self.tasks.clear();
+        self.edits.clear();
+        self.labels_queue.clear();
+        self.labels_failed.clear();
+        self.measure.reset();
+        self.history.clear();
+        if let Some(scene) = self.scene.as_mut() {
+            *scene = draft;
+        }
+        self.mask_stamps.clear();
+        self.mask_extents.clear();
+        self.install_channels();
+    }
+
     fn staged_protocol(&self, protocol: &Protocol) -> Result<(Scene, Staged), String> {
         let Some(live) = self.scene.as_ref() else {
             return Err("open a dataset before applying a protocol".to_string());
@@ -104,7 +113,7 @@ impl Session {
                 grana_volume::CHANNEL_LIMIT
             ));
         }
-        let mut draft = Scene::new(live.dataset.clone());
+        let mut draft = Scene::new(live.stored_dataset());
         draft.channels = live.channels.clone();
         draft.selected = live.selected;
         draft.shading = live.shading;

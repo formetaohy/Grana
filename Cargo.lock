@@ -3586,6 +3586,7 @@ version = "0.2.3"
 dependencies = [
  "glam",
  "grana-display",
+ "grana-geometry",
  "grana-gpu",
  "grana-object",
  "grana-render",
@@ -3824,6 +3825,7 @@ dependencies = [
  "grana-exec",
  "grana-file",
  "grana-geometry",
+ "grana-gpu",
  "grana-i18n",
  "grana-image",
  "grana-interop",

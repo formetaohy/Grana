@@ -21,6 +21,11 @@ const TILE: u32 = 512;
 const HALO: u32 = 128;
 const SLICE_TILE: u32 = 4;
 const SLICE_HALO: u32 = 2;
+const CONTEXT: [u32; 3] = [HALO, HALO, SLICE_HALO];
+const PREDICTION_BYTES_PER_VOXEL: u64 = (CHANNELS * size_of::<f32>()) as u64;
+const PLANE_BYTES_PER_VOXEL: u64 = size_of::<f32>() as u64;
+const LABEL_BYTES_PER_VOXEL: u64 = 24;
+const TILE_WORKSPACE: u64 = 4 << 30;
 const ENCODER_BATCH: usize = 4;
 const PREDICTION_BUDGET: u64 = 2 << 30;
 const CHANNELS: usize = 4;
@@ -30,18 +35,38 @@ const STANDARD_DEVIATION: [f32; 3] = [0.229, 0.224, 0.225];
 pub struct Segmenter {
     model: Arc<Model>,
     settings: Settings,
+    weights: u64,
 }
 
 impl Segmenter {
     pub fn open(path: &Path, settings: Settings) -> Result<Self> {
+        let weights = std::fs::metadata(path)
+            .map_err(|error| Error::model(format!("the checkpoint cannot be weighed: {error}")))?
+            .len();
         Ok(Self {
             model: cache::acquire(path)?,
             settings,
+            weights,
         })
     }
 
     pub fn settings(&self) -> Settings {
         self.settings
+    }
+
+    pub fn context(&self) -> [u32; 3] {
+        CONTEXT
+    }
+
+    pub fn voxel_budget(&self) -> u64 {
+        PREDICTION_BUDGET / PREDICTION_BYTES_PER_VOXEL
+    }
+
+    pub fn peak(&self, shape: [u32; 3]) -> u64 {
+        let voxels = shape.iter().map(|value| u64::from(*value)).product::<u64>();
+        self.weights
+            + TILE_WORKSPACE
+            + voxels * (PREDICTION_BYTES_PER_VOXEL + PLANE_BYTES_PER_VOXEL + LABEL_BYTES_PER_VOXEL)
     }
 
     pub fn segment(

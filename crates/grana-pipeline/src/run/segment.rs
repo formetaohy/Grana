@@ -1,6 +1,8 @@
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use grana_gpu::{Consumer, Ledger};
 use grana_object::{Mask, ObjectIdSource, Roi, SurfaceSet};
 use grana_scene::{Drifts, ObjectFrame, SegmentParams};
 use grana_segment::{Segmenter, Settings, Volume};
@@ -89,10 +91,13 @@ pub fn segment(
     let Some((segmenter, _)) = segmenter(&request.params, cancel, sink)? else {
         return Ok(());
     };
+    let graphics = grana_gpu::Headless::shared()?;
+    let ledger = Arc::clone(graphics.graphics().ledger());
     let slicer = Slicer {
         reader,
         request: &request,
         segmenter: &segmenter,
+        ledger,
         info,
         domain: Domain::new(request.region, info),
         bounds,
@@ -157,6 +162,7 @@ pub(super) struct Slicer<'a> {
     pub(super) reader: &'a Channels,
     pub(super) request: &'a SegmentRequest,
     segmenter: &'a Segmenter,
+    ledger: Arc<Ledger>,
     pub(super) info: Level,
     domain: Domain,
     bounds: [Range<u32>; 3],
@@ -179,9 +185,34 @@ impl Slicer<'_> {
         progress: &mut dyn FnMut(usize),
     ) -> Result<Option<Assembly>, String> {
         let mask = self.domain.mask(self.request.roi.as_ref(), time)?;
-        let Some(ranges) = clip(&self.bounds, mask.as_ref(), self.info) else {
+        let Some(core) = clip(&self.bounds, mask.as_ref(), self.info) else {
             return Ok(None);
         };
+        let margin = margin(
+            &core,
+            self.segmenter.context(),
+            self.segmenter.voxel_budget(),
+        );
+        let ranges = expand(&core, margin, self.info);
+        let shape = [0, 1, 2].map(|axis| ranges[axis].end - ranges[axis].start);
+        let peak = self.segmenter.peak(shape);
+        let Some(_lease) = self.ledger.claim(Consumer::Inference, peak) else {
+            return Err(format!(
+                "segmentation needs {:.1} GiB of graphics memory for a {} x {} x {} voxel block, above the {:.1} GiB the renderer leaves free",
+                peak as f64 / (1u64 << 30) as f64,
+                shape[0],
+                shape[1],
+                shape[2],
+                self.ledger.spare() as f64 / (1u64 << 30) as f64,
+            ));
+        };
+        grana_log::info!(
+            target: "grana::segment",
+            peak,
+            measured = self.ledger.measured(),
+            allowance = self.ledger.total(),
+            "the segmentation reserves the graphics memory its block needs"
+        );
         let warp = self.request.drifts.warp(self.request.channel, time);
         let no_data = self.reader.pyramid().channels()[self.request.channel].no_data();
         let width = ranges[0].end - ranges[0].start;
@@ -220,19 +251,29 @@ impl Slicer<'_> {
             .segment(&planes, width, height, progress)
             .map_err(|error| format!("the segmentation model failed: {error}"))?;
         volume.filter(|[x, y, z]| {
+            let position = [
+                ranges[0].start + x,
+                ranges[1].start + y,
+                ranges[2].start + z,
+            ];
             let present = absents[z as usize]
                 .as_ref()
                 .is_none_or(|absent| !absent[y as usize * width as usize + x as usize]);
-            let inside = mask.as_ref().is_none_or(|mask| {
-                mask.contains_cell([
-                    ranges[0].start + x,
-                    ranges[1].start + y,
-                    ranges[2].start + z,
-                ])
-            });
-            present && inside
+            let kept = core
+                .iter()
+                .zip(position)
+                .all(|(range, value)| range.contains(&value));
+            let inside = mask
+                .as_ref()
+                .is_none_or(|mask| mask.contains_cell(position));
+            present && kept && inside
         });
-        Ok(Some(Assembly { volume, ranges }))
+        let origin = [0, 1, 2].map(|axis| core[axis].start - ranges[axis].start);
+        let extent = [0, 1, 2].map(|axis| core[axis].end - core[axis].start);
+        Ok(Some(Assembly {
+            volume: volume.cropped(origin, extent),
+            ranges: core,
+        }))
     }
 
     pub(super) fn surfaces(
@@ -268,4 +309,30 @@ fn clip(region: &[Range<u32>; 3], mask: Option<&Mask>, level: Level) -> Option<[
         .iter()
         .all(|range| range.start < range.end)
         .then_some(ranges)
+}
+
+fn margin(core: &[Range<u32>; 3], context: [u32; 3], budget: u64) -> [u32; 3] {
+    let padded = |margin: [u32; 3]| {
+        core.iter()
+            .zip(margin)
+            .map(|(range, margin)| u64::from(range.end - range.start + 2 * margin))
+            .product::<u64>()
+    };
+    let mut margin = context;
+    while margin != [0; 3] && padded(margin) > budget {
+        margin = margin.map(|value| value / 2);
+    }
+    margin
+}
+
+fn expand(core: &[Range<u32>; 3], margin: [u32; 3], level: Level) -> [Range<u32>; 3] {
+    let extent = level.extent();
+    let extent = [extent.x(), extent.y(), extent.z()];
+    std::array::from_fn(|axis| {
+        core[axis].start.saturating_sub(margin[axis])
+            ..core[axis]
+                .end
+                .saturating_add(margin[axis])
+                .min(extent[axis])
+    })
 }

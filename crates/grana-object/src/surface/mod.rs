@@ -4,7 +4,7 @@ mod topology;
 
 use std::sync::Arc;
 
-use grana_geometry::{Bounds, Geometry, Mesh, PackedMesh, SurfaceShape};
+use grana_geometry::{Bounds, Geometry, Mesh, PackedMesh, SurfaceShape, TriangleBudget};
 use grana_store::SpillStore;
 
 use crate::{IntensityTable, ObjectId, ObjectIds};
@@ -262,11 +262,15 @@ impl SurfaceSet {
         self.triangles
     }
 
-    pub fn select_detail(&self, target: usize) -> usize {
-        self.details.select(self.triangles, target)
+    pub fn detail_level(&self, budget: TriangleBudget) -> usize {
+        detail::select(self.triangles, budget)
     }
 
-    pub fn detail(&self, level: usize) -> Result<(Arc<PackedMesh>, usize), grana_geometry::Error> {
+    pub fn detail(
+        &self,
+        budget: TriangleBudget,
+    ) -> Result<(Arc<PackedMesh>, usize), grana_geometry::Error> {
+        let level = self.detail_level(budget);
         let (mesh, available, start) = self.details.level(level, &self.geometry)?;
         if start {
             let details = Arc::clone(&self.details);

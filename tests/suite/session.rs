@@ -1969,6 +1969,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         256 << 20,
         gpu.pipelines(),
     );
@@ -2086,6 +2087,7 @@ fn reads_each_streamed_brick_once() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         256 << 20,
         gpu.pipelines(),
     );

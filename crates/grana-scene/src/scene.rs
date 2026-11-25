@@ -120,6 +120,11 @@ impl Scene {
         self.base_channels
     }
 
+    pub fn stored_dataset(&self) -> Dataset {
+        self.dataset
+            .with_channels(self.dataset.channels()[..self.base_channels].to_vec())
+    }
+
     pub fn derived(&self) -> &[Derived] {
         &self.derived
     }

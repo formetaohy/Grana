@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use grana_display::{Camera, Shading, srgb_to_linear};
+use grana_geometry::TriangleBudget;
 use grana_render::{
     ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, SplatLevel, Splats, Style,
     Versions,
@@ -28,7 +29,7 @@ pub struct Lens<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Targets {
-    detail: Vec<usize>,
+    detail: Vec<Option<TriangleBudget>>,
     splats: Vec<Choice>,
 }
 
@@ -252,14 +253,14 @@ pub fn plan_with(scene: &Scene, lens: Option<Lens<'_>>, cache: &mut Cache) -> Ta
         detail.push(match (frame, lens) {
             (Some(frame), Some(lens)) => match frame.as_ref() {
                 ObjectFrame::Surfaces(surfaces) => {
-                    cache.geometry.target(scene, set, surfaces, lens)
+                    Some(cache.geometry.target(scene, set, surfaces, lens))
                 }
                 ObjectFrame::Cells(cells) => {
-                    cache.geometry.target(scene, set, cells.bodies(), lens)
+                    Some(cache.geometry.target(scene, set, cells.bodies(), lens))
                 }
-                ObjectFrame::Spots(_) | ObjectFrame::Filaments(_) => 0,
+                ObjectFrame::Spots(_) | ObjectFrame::Filaments(_) => None,
             },
-            _ => 0,
+            _ => None,
         });
         choices.push(match lens {
             Some(lens) => {
@@ -317,7 +318,7 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
         };
         let choice = targets.splats[ordinal];
         ordinal += 1;
-        topology.mix(detail as u64);
+        topology.mix(detail.map_or(0, TriangleBudget::raw));
         topology.mix(choice.digest());
         let mut seeded = Vec::new();
         let seed_sigma = seed_radius / grana_object::RADIUS_PER_SIGMA;
@@ -394,12 +395,14 @@ pub fn frame(scene: &Scene, targets: &Targets, cache: &mut Cache) -> Result<Rend
         }
         let (geometry, level) = match frame.as_ref() {
             ObjectFrame::Surfaces(surfaces) => {
+                let budget = detail.expect("a surface frame carries a triangle budget");
                 let (mesh, available) =
-                    surfaces.detail(detail).map_err(|error| error.to_string())?;
+                    surfaces.detail(budget).map_err(|error| error.to_string())?;
                 (Some(mesh), available)
             }
             ObjectFrame::Cells(cells) => {
-                let (mesh, available) = cells.detail(detail).map_err(|error| error.to_string())?;
+                let budget = detail.expect("a cell frame carries a triangle budget");
+                let (mesh, available) = cells.detail(budget).map_err(|error| error.to_string())?;
                 (Some(mesh), available)
             }
             ObjectFrame::Spots(_) | ObjectFrame::Filaments(_) => {

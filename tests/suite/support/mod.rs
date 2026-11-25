@@ -113,6 +113,10 @@ pub fn budget(residency: u64, size: [u32; 2]) -> u64 {
     residency + grana_render::target_bytes(size)
 }
 
+pub fn ledger() -> std::sync::Arc<grana_gpu::Ledger> {
+    grana_gpu::Ledger::new(u64::MAX)
+}
+
 pub fn id(raw: u32) -> grana_object::ObjectId {
     grana_object::ObjectId::new(raw + 1)
 }

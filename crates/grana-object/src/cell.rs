@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use grana_geometry::PackedMesh;
+use grana_geometry::{PackedMesh, TriangleBudget};
 
 use crate::intensity::IntensityTable;
 use crate::surface::{SurfaceSet, SurfaceStatistics};
@@ -76,12 +76,15 @@ impl CellSet {
         Self::new(self.bodies.reidentified(ids), self.nuclei.clone())
     }
 
-    pub fn detail(&self, level: usize) -> Result<(Arc<PackedMesh>, usize), grana_geometry::Error> {
-        self.bodies.detail(level)
+    pub fn detail_level(&self, budget: TriangleBudget) -> usize {
+        self.bodies.detail_level(budget)
     }
 
-    pub fn select_detail(&self, target: usize) -> usize {
-        self.bodies.select_detail(target)
+    pub fn detail(
+        &self,
+        budget: TriangleBudget,
+    ) -> Result<(Arc<PackedMesh>, usize), grana_geometry::Error> {
+        self.bodies.detail(budget)
     }
 
     pub fn intensities(&self) -> &IntensityTable {

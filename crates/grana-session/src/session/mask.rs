@@ -385,6 +385,19 @@ impl Session {
         }
     }
 
+    pub(super) fn sync_channels(&mut self) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        if self
+            .channels
+            .as_ref()
+            .is_none_or(|channels| !channels.matches(scene))
+        {
+            self.install_channels();
+        }
+    }
+
     pub(super) fn relayout_channels(&mut self) {
         self.mask_stamps.clear();
         self.mask_extents.clear();

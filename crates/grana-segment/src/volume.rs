@@ -64,6 +64,35 @@ impl Volume {
         self.renumber();
     }
 
+    pub fn cropped(&self, origin: [u32; 3], extent: [u32; 3]) -> Self {
+        let zero = extent.iter().all(|value| *value > 0);
+        let inside = (0..3)
+            .all(|axis| origin[axis] + extent[axis] <= [self.width, self.height, self.depth][axis]);
+        assert!(
+            zero && inside,
+            "a crop covers a non empty block inside the volume"
+        );
+        let width = extent[0] as usize;
+        let height = extent[1] as usize;
+        let depth = extent[2] as usize;
+        let mut labels = Vec::with_capacity(width * height * depth);
+        for z in 0..depth {
+            for y in 0..height {
+                let start = origin[0] as usize
+                    + self.width as usize * (origin[1] as usize + y)
+                    + self.width as usize * self.height as usize * (origin[2] as usize + z);
+                labels.extend_from_slice(&self.labels[start..start + width]);
+            }
+        }
+        Self {
+            width: extent[0],
+            height: extent[1],
+            depth: extent[2],
+            labels,
+            count: self.count,
+        }
+    }
+
     fn renumber(&mut self) {
         let mut maximum = 0u32;
         for label in &self.labels {

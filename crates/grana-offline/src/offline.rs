@@ -37,10 +37,11 @@ impl Offline {
         device: Device,
         queue: Queue,
         format: TextureFormat,
+        ledger: &Arc<grana_gpu::Ledger>,
         budget: u64,
         pipelines: &Pipelines,
     ) -> Self {
-        let renderer = Renderer::new(&device, &queue, format, budget, pipelines);
+        let renderer = Renderer::new(&device, &queue, format, ledger, budget, pipelines);
         let composer = Composer::new(&device, pipelines);
         Self {
             device,
@@ -57,10 +58,12 @@ impl Offline {
         let headless = Headless::shared()?;
         let budget = grana_render::texture_budget(headless.memory());
         let pipelines = headless.pipelines().clone();
+        let ledger = Arc::clone(headless.graphics().ledger());
         Ok(Self::new(
             headless.device,
             headless.queue,
             grana_gpu::HEADLESS_FORMAT,
+            &ledger,
             budget,
             &pipelines,
         ))

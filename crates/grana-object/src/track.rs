@@ -119,8 +119,8 @@ pub struct TrackStatistics {
     duration: f64,
     length: f64,
     displacement: f64,
-    speed: f64,
-    straightness: f64,
+    speed: Option<f64>,
+    straightness: Option<f64>,
 }
 
 impl TrackStatistics {
@@ -140,11 +140,11 @@ impl TrackStatistics {
         self.displacement
     }
 
-    pub fn speed(self) -> f64 {
+    pub fn speed(self) -> Option<f64> {
         self.speed
     }
 
-    pub fn straightness(self) -> f64 {
+    pub fn straightness(self) -> Option<f64> {
         self.straightness
     }
 }
@@ -198,16 +198,8 @@ impl Track {
             .map(|pair| distance(pair[0].centroid, pair[1].centroid))
             .sum::<f64>();
         let displacement = distance(first.centroid, last.centroid);
-        let speed = if duration > 0.0 {
-            length / duration
-        } else {
-            0.0
-        };
-        let straightness = if length > 0.0 {
-            (displacement / length).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
+        let speed = (duration > 0.0).then(|| length / duration);
+        let straightness = (length > 0.0).then(|| (displacement / length).clamp(0.0, 1.0));
         TrackStatistics {
             frames,
             duration,

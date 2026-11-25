@@ -14,9 +14,7 @@ pub struct Snapshot {
 impl Scene {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
-            dataset: self
-                .dataset
-                .with_channels(self.dataset.channels()[..self.base_channels()].to_vec()),
+            dataset: self.stored_dataset(),
             state: self.state(),
             overlays: self.overlays.snapshot(),
         }

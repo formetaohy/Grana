@@ -221,15 +221,18 @@ impl Aggregate {
             AggregateKind::Sum => sample.mean() * sample.len() as f64,
             AggregateKind::Minimum => sample.minimum(),
             AggregateKind::Maximum => sample.maximum(),
-            AggregateKind::Deviation => sample.deviation().unwrap_or(0.0),
+            AggregateKind::Deviation => match sample.deviation() {
+                Some(deviation) => deviation,
+                None => return Measured::Absent,
+            },
             AggregateKind::Mad => sample.mad(),
             AggregateKind::Quantile => sample.quantile(self.percent as f64),
         };
         Measured::new(value as f32, support)
     }
 
-    pub(crate) fn of_sample(self, sample: &Sample) -> (f64, Option<(f64, f64)>) {
-        match self.kind {
+    pub(crate) fn of_sample(self, sample: &Sample) -> Option<(f64, Option<(f64, f64)>)> {
+        Some(match self.kind {
             AggregateKind::Mean => (sample.mean(), sample.mean_interval(0.95)),
             AggregateKind::Sum => (
                 sample.mean() * sample.len() as f64,
@@ -243,9 +246,9 @@ impl Aggregate {
             ),
             AggregateKind::Minimum => (sample.minimum(), None),
             AggregateKind::Maximum => (sample.maximum(), None),
-            AggregateKind::Deviation => (sample.deviation().unwrap_or(0.0), None),
+            AggregateKind::Deviation => (sample.deviation()?, None),
             AggregateKind::Mad => (sample.mad(), None),
-        }
+        })
     }
 }
 

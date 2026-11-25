@@ -1,4 +1,5 @@
 mod bounds;
+mod budget;
 mod bvh;
 mod ellipsoid;
 mod geometry;
@@ -17,6 +18,7 @@ mod union;
 mod volume;
 
 pub use bounds::Bounds;
+pub use budget::TriangleBudget;
 pub use bvh::{Bvh, Primitive};
 pub use ellipsoid::Ellipsoid;
 pub use geometry::Geometry;

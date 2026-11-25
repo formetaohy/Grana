@@ -1975,7 +1975,6 @@ impl Session {
             return;
         };
         if scene.set_registration(grana_scene::Registration::default()) {
-            self.install_channels();
             self.realign();
         }
     }
@@ -2004,7 +2003,6 @@ impl Session {
         if let Some(scene) = self.scene.as_mut() {
             scene.set_registration(registration);
         }
-        self.install_channels();
         self.realign();
         self.commit_edit(recording);
     }
@@ -2017,11 +2015,8 @@ impl Session {
         let Some(source) = self.source.as_ref() else {
             return;
         };
-        let rebuilt = source.drifts().digest() != drifts.digest();
         source.set_drifts(drifts);
-        if rebuilt {
-            self.install_channels();
-        }
+        self.sync_channels();
         self.reload_streamed();
     }
 }

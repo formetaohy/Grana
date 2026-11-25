@@ -281,6 +281,7 @@ impl App {
             gpu.device.clone(),
             gpu.queue.clone(),
             gpu.format(),
+            gpu.ledger().clone(),
             budget,
             gpu.pipelines().clone(),
         ));
@@ -706,12 +707,15 @@ fn spawn_engine(
     device: wgpu::Device,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
+    ledger: std::sync::Arc<grana_gpu::Ledger>,
     budget: u64,
     pipelines: grana_gpu::Pipelines,
 ) -> Receiver<Engine> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(Engine::new(&device, &queue, format, budget, &pipelines));
+        let _ = sender.send(Engine::new(
+            &device, &queue, format, &ledger, budget, &pipelines,
+        ));
     });
     receiver
 }

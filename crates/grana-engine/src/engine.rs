@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use grana_display::CameraState;
-use grana_gpu::Pipelines;
+use grana_gpu::{Ledger, Pipelines};
 use grana_object::ObjectId;
 use grana_render::{Delivery, FrameInfo, PickId, Renderer, Requests};
 use grana_scene::{Item, Selection};
@@ -105,11 +105,12 @@ impl Engine {
         device: &Device,
         queue: &Queue,
         format: TextureFormat,
+        ledger: &Arc<Ledger>,
         budget: u64,
         pipelines: &Pipelines,
     ) -> Self {
         Self {
-            renderer: Renderer::new(device, queue, format, budget, pipelines),
+            renderer: Renderer::new(device, queue, format, ledger, budget, pipelines),
             budget,
             pending_pick: None,
             prepared: None,

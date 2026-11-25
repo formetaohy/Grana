@@ -126,12 +126,11 @@ impl Layout {
     }
 }
 
-fn spec_digest(nodes: &[Node]) -> u64 {
+fn spec_digest<'a>(specs: impl IntoIterator<Item = &'a DerivedSpec>) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    for node in nodes {
-        let spec = &node.spec;
+    for spec in specs {
         spec.source().hash(&mut hasher);
         spec.name().hash(&mut hasher);
         spec.tint().map(f32::to_bits).hash(&mut hasher);
@@ -229,9 +228,17 @@ impl Channels {
         Layout {
             stored: self.stored_channels(),
             derived: self.derived.len(),
-            specs: spec_digest(&self.derived),
+            specs: spec_digest(self.derived.iter().map(|node| &node.spec)),
             registration: self.registration.digest(),
         }
+    }
+
+    pub fn matches(&self, scene: &Scene) -> bool {
+        let derived = scene.derived_shared();
+        self.derived.len() == derived.len()
+            && spec_digest(self.derived.iter().map(|node| &node.spec))
+                == spec_digest(derived.iter().map(|spec| spec.as_ref()))
+            && self.registration.digest() == scene.registration().digest()
     }
 
     pub fn name(&self) -> &str {

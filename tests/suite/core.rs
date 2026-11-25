@@ -1,9 +1,39 @@
+use grana_gpu::{Consumer, Ledger};
 use grana_image::{Image, Source};
 use grana_volume::{
     BrickCoord, BrickGrid, Channel, Extent, Intensity, NoData, PADDED_SIDE, Spacing, Volume,
     VolumeSeries, VoxelData,
 };
 use grana_warp::Warp;
+
+#[test]
+fn a_ledger_never_lets_the_renderer_and_inference_oversubscribe_the_device() {
+    let ledger = Ledger::new(100);
+    let render = ledger
+        .claim(Consumer::Render, 60)
+        .expect("the renderer takes the first share");
+    assert!(
+        ledger.claim(Consumer::Inference, 50).is_none(),
+        "inference above the spare allowance is refused"
+    );
+    let inference = ledger
+        .claim(Consumer::Inference, 40)
+        .expect("inference takes the rest");
+    assert_eq!(ledger.spare(), 0, "both shares fill the allowance");
+    let mut render = render;
+    assert!(
+        !render.resize(61),
+        "the renderer cannot grow past the allowance"
+    );
+    assert_eq!(render.bytes(), 60, "a refused resize keeps the claim");
+    drop(inference);
+    assert_eq!(ledger.spare(), 40, "the released share returns");
+    assert!(
+        render.resize(100),
+        "the renderer grows into the released share"
+    );
+    assert_eq!(ledger.claimed(Consumer::Render), 100);
+}
 
 #[test]
 fn builds_padded_bricks_from_a_volume() {

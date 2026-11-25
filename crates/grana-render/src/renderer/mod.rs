@@ -16,11 +16,12 @@ use signature::Signature;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use bytemuck::cast_slice;
 use glam::Vec3;
 use grana_display::Camera;
-use grana_gpu::{Pipelines, Readback};
+use grana_gpu::{Claim, Consumer, Ledger, Pipelines, Readback};
 use grana_volume::{BrickGrid, BrickRequest, Clip, Damage, Level, PackedBrick, Pyramid, Region};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, CommandEncoder, Device, Extent3d, LoadOp,
@@ -210,6 +211,7 @@ pub struct Renderer {
     plans: u64,
     waits: u64,
     uploads: u64,
+    claim: Claim,
     pipelines: Pipelines,
 }
 
@@ -218,10 +220,17 @@ impl Renderer {
         device: &Device,
         queue: &Queue,
         format: TextureFormat,
+        ledger: &Arc<Ledger>,
         budget: u64,
         pipelines: &Pipelines,
     ) -> Self {
-        assert!(budget > 0, "a renderer needs a residency budget");
+        let claim = ledger.claim(Consumer::Render, budget).unwrap_or_else(|| {
+            panic!(
+                "the renderer needs {:.1} MiB but the device allowance holds {:.1} MiB",
+                budget as f64 / (1u64 << 20) as f64,
+                ledger.total() as f64 / (1u64 << 20) as f64
+            )
+        });
         let layouts = Layouts::new(device);
         let dummy = dummy_texture(device, queue);
         let dummy_normal = dummy_normal(device);
@@ -293,6 +302,7 @@ impl Renderer {
             plans: 0,
             waits: 0,
             uploads: 0,
+            claim,
             pipelines: pipelines.clone(),
         }
     }
@@ -331,6 +341,12 @@ impl Renderer {
         slots: usize,
         ceiling: u64,
     ) -> Result<(), String> {
+        if !self.claim.resize(ceiling) {
+            return Err(format!(
+                "the graphics device cannot hold both the export and the running analyses, so the export cannot reserve its {:.1} MiB of brick residency",
+                ceiling as f64 / (1u64 << 20) as f64
+            ));
+        }
         if self.slots() < slots {
             self.install(
                 device,
@@ -371,6 +387,7 @@ impl Renderer {
         }
         self.requested = proven;
         self.budget = resources.reserved();
+        self.settle();
         let surface = resources.surface_bytes();
         if let Some(meshes) = self.meshes.as_mut() {
             meshes.set_budget(surface);
@@ -398,6 +415,13 @@ impl Renderer {
         Ok(())
     }
 
+    fn settle(&mut self) {
+        let held = self.budget.saturating_add(self.frames);
+        if held < self.claim.bytes() {
+            self.claim.resize(held);
+        }
+    }
+
     fn fit(
         &mut self,
         device: &Device,
@@ -410,6 +434,7 @@ impl Renderer {
         self.demand = demand;
         let split = budget::split(self.total, self.ceiling, budget::Frames::of(size, demand));
         self.frames = split.frames;
+        self.settle();
         if split.residency.abs_diff(self.requested).saturating_mul(4) > self.total {
             let pyramid = self.resources.as_ref().map(|held| held.pyramid.clone());
             if let Some(pyramid) = pyramid {
@@ -495,6 +520,12 @@ impl Renderer {
         size: [u32; 2],
     ) -> Result<(), String> {
         assert!(budget > 0, "a renderer needs a texture budget");
+        if !self.claim.resize(budget) {
+            return Err(format!(
+                "the graphics device cannot hold both the renderer and the running analyses, so the dataset cannot reserve its {:.1} MiB render budget",
+                budget as f64 / (1u64 << 20) as f64
+            ));
+        }
         self.ceiling = if budget > self.total {
             budget
         } else {
@@ -513,6 +544,7 @@ impl Renderer {
             Reset::Dataset,
         )?;
         self.frames = split.frames;
+        self.settle();
         Ok(())
     }
 

@@ -1,15 +1,25 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use grana_geometry::{Geometry, PackedMesh, simplify};
+use grana_geometry::{Geometry, PackedMesh, TriangleBudget, simplify};
 
 pub(super) const LIMIT: usize = 5;
+
+pub(super) fn select(base: usize, target: TriangleBudget) -> usize {
+    let target = target.triangles();
+    let mut level = 0;
+    let mut triangles = base;
+    while triangles > target.saturating_mul(2) && level < LIMIT {
+        triangles /= 2;
+        level += 1;
+    }
+    level
+}
 
 #[derive(Debug)]
 pub(super) struct Details {
     levels: Mutex<Vec<Option<Geometry<PackedMesh>>>>,
     requested: AtomicUsize,
-    hint: AtomicUsize,
     ceiling: AtomicUsize,
     building: AtomicBool,
 }
@@ -19,7 +29,6 @@ impl Details {
         Self {
             levels: Mutex::new(vec![None; LIMIT + 1]),
             requested: AtomicUsize::new(0),
-            hint: AtomicUsize::new(0),
             ceiling: AtomicUsize::new(LIMIT),
             building: AtomicBool::new(false),
         }
@@ -52,30 +61,6 @@ impl Details {
         };
         let start = available < level && self.request(level);
         Ok((mesh, available, start))
-    }
-
-    pub(super) fn select(&self, base: usize, target: usize) -> usize {
-        let target = target.max(1);
-        let ceiling = self.ceiling.load(Ordering::Relaxed);
-        if base <= target.saturating_mul(2) {
-            self.hint.store(0, Ordering::Relaxed);
-            return 0;
-        }
-        let current = self.hint.load(Ordering::Relaxed).min(ceiling);
-        if current > 0 {
-            let estimate = (base >> current).max(1);
-            if estimate <= target.saturating_mul(4) && estimate.saturating_mul(4) >= target {
-                return current;
-            }
-        }
-        let mut level = 0;
-        let mut triangles = base;
-        while triangles > target.saturating_mul(2) && level < ceiling {
-            triangles /= 2;
-            level += 1;
-        }
-        self.hint.store(level, Ordering::Relaxed);
-        level
     }
 
     pub(super) fn bytes(&self) -> u64 {

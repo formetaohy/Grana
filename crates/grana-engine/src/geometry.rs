@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
+use grana_geometry::TriangleBudget;
 use grana_object::SurfaceSet;
 use grana_render::Digest;
 use grana_scene::{ObjectSet, ObjectSetId, Scene};
@@ -41,7 +42,7 @@ impl GeometryCache {
         set: &ObjectSet,
         surfaces: &SurfaceSet,
         lens: Lens<'_>,
-    ) -> usize {
+    ) -> TriangleBudget {
         let stamp = stamp(scene, set);
         let index = match self.entries.iter().position(|entry| entry.set == set.id()) {
             Some(index) => index,
@@ -86,7 +87,7 @@ fn stamp(scene: &Scene, set: &ObjectSet) -> u64 {
     stamp.finish()
 }
 
-fn triangle_area(points: &[[f32; 4]], lens: Lens<'_>) -> usize {
+fn triangle_area(points: &[[f32; 4]], lens: Lens<'_>) -> TriangleBudget {
     let focal = lens.camera.pixels_per_world(lens.height);
     let eye = lens.camera.eye();
     let standoff = lens.camera.distance();
@@ -104,5 +105,5 @@ fn triangle_area(points: &[[f32; 4]], lens: Lens<'_>) -> usize {
         let pixels = f64::from(radius * focal / distance);
         area += std::f64::consts::PI * pixels * pixels / f64::from(PIXEL_TRIANGLE_AREA);
     }
-    area.max(f64::from(MINIMUM_TARGET)) as usize
+    TriangleBudget::new(area.max(f64::from(MINIMUM_TARGET)) as usize)
 }

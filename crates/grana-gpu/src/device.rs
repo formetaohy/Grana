@@ -9,6 +9,7 @@ use wgpu::{
 
 use crate::Pipelines;
 use crate::REQUIRED_FEATURES;
+use crate::ledger::Ledger;
 use crate::memory::Memory;
 
 pub const HEADLESS_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
@@ -21,6 +22,7 @@ pub struct Graphics {
     device: Device,
     queue: Queue,
     memory: Option<Memory>,
+    ledger: Arc<Ledger>,
     lost: Lost,
     pipelines: Pipelines,
 }
@@ -122,6 +124,10 @@ impl Graphics {
         self.memory.as_ref()
     }
 
+    pub fn ledger(&self) -> &Arc<Ledger> {
+        &self.ledger
+    }
+
     pub fn lost(&self) -> Option<String> {
         self.lost.reason()
     }
@@ -160,6 +166,10 @@ impl Headless {
 
     pub fn memory(&self) -> Option<&Memory> {
         self.graphics.memory()
+    }
+
+    pub fn ledger(&self) -> &Arc<Ledger> {
+        self.graphics.ledger()
     }
 
     pub fn lost(&self) -> Option<String> {
@@ -236,6 +246,10 @@ impl Gpu {
 
     pub fn memory(&self) -> Option<&Memory> {
         self.graphics.memory()
+    }
+
+    pub fn ledger(&self) -> &Arc<Ledger> {
+        self.graphics.ledger()
     }
 
     pub fn lost(&self) -> Option<String> {
@@ -363,6 +377,7 @@ fn request(
         "graphics device ready"
     );
     let lost = Lost::watch(&device);
+    let ledger = Ledger::of(memory.as_ref());
     let pipelines = Pipelines::new(&device);
     Ok(Graphics {
         instance: instance.clone(),
@@ -370,6 +385,7 @@ fn request(
         device,
         queue,
         memory,
+        ledger,
         lost,
         pipelines,
     })

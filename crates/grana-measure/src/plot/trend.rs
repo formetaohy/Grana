@@ -93,7 +93,9 @@ impl Table {
             let Some(sample) = Sample::new(values) else {
                 continue;
             };
-            let (value, interval) = aggregate.of_sample(&sample);
+            let Some((value, interval)) = aggregate.of_sample(&sample) else {
+                continue;
+            };
             let (lower, upper) = interval.unwrap_or((value, value));
             low = low.min(lower as f32);
             high = high.max(upper as f32);

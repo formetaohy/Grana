@@ -35,6 +35,10 @@ impl Memory {
         })
     }
 
+    pub fn usage(self) -> Option<Pool> {
+        usage(self.vendor, self.device)
+    }
+
     pub(crate) fn of(info: &AdapterInfo) -> Option<Self> {
         let (local, shared) = inventory(info.vendor, info.device)?;
         Some(Self {
@@ -111,13 +115,13 @@ fn inventory(vendor: u32, device: u32) -> Option<(u64, u64)> {
 }
 
 #[cfg(windows)]
-fn budget(vendor: u32, device: u32) -> Option<Pool> {
+fn video(vendor: u32, device: u32) -> Option<[Pool; 2]> {
     use windows::Win32::Graphics::Dxgi::{
         DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL,
         DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIAdapter3,
     };
     use windows::core::Interface;
-    let mut chosen: Option<Pool> = None;
+    let mut chosen: Option<[Pool; 2]> = None;
     for adapter in &adapters(vendor, device)? {
         let Ok(adapter) = adapter.cast::<IDXGIAdapter3>() else {
             continue;
@@ -133,18 +137,32 @@ fn budget(vendor: u32, device: u32) -> Option<Pool> {
             adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &mut non_local)
         }
         .is_ok();
-        let pool = Pool {
+        let budget = Pool {
             local: local.Budget,
             non_local: if shared { non_local.Budget } else { 0 },
         };
-        if pool.local == 0 {
+        let usage = Pool {
+            local: local.CurrentUsage,
+            non_local: if shared { non_local.CurrentUsage } else { 0 },
+        };
+        if budget.local == 0 {
             continue;
         }
-        if chosen.is_none_or(|held| pool.local > held.local) {
-            chosen = Some(pool);
+        if chosen.is_none_or(|held| budget.local > held[0].local) {
+            chosen = Some([budget, usage]);
         }
     }
     chosen
+}
+
+#[cfg(windows)]
+fn budget(vendor: u32, device: u32) -> Option<Pool> {
+    video(vendor, device).map(|held| held[0])
+}
+
+#[cfg(windows)]
+fn usage(vendor: u32, device: u32) -> Option<Pool> {
+    video(vendor, device).map(|held| held[1])
 }
 
 #[cfg(not(windows))]
@@ -154,5 +172,10 @@ fn inventory(_: u32, _: u32) -> Option<(u64, u64)> {
 
 #[cfg(not(windows))]
 fn budget(_: u32, _: u32) -> Option<Pool> {
+    None
+}
+
+#[cfg(not(windows))]
+fn usage(_: u32, _: u32) -> Option<Pool> {
     None
 }

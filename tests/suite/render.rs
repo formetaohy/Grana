@@ -83,6 +83,7 @@ fn build_renderer(gpu: &Gpu, pyramid: &Pyramid) -> Renderer {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         BUDGET,
         gpu.pipelines(),
     );
@@ -1263,6 +1264,7 @@ fn fits_the_volume_level_to_the_residency_budget() {
             gpu.device(),
             gpu.queue(),
             wgpu::TextureFormat::Rgba8Unorm,
+            &crate::support::ledger(),
             16 << 20,
             gpu.pipelines(),
         );
@@ -1292,6 +1294,7 @@ fn fits_the_volume_level_to_the_residency_budget() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         200 << 10,
         gpu.pipelines(),
     );
@@ -2504,6 +2507,7 @@ fn prefetches_the_carried_frame_into_vacant_slots() {
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         8 << 20,
         gpu.pipelines(),
     );

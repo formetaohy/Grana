@@ -1026,12 +1026,16 @@ fn summary<'a>(
         view::labelled(
             ctx,
             grana_i18n::track::speed(language),
-            &format!("{:.3} µm/s", statistics.speed()),
+            &statistics
+                .speed()
+                .map_or_else(|| "—".to_string(), |speed| format!("{speed:.3} µm/s")),
         ),
         view::labelled(
             ctx,
             grana_i18n::track::straightness(language),
-            &format!("{:.3}", statistics.straightness()),
+            &statistics
+                .straightness()
+                .map_or_else(|| "—".to_string(), |value| format!("{value:.3}")),
         ),
     ];
     if authoring {

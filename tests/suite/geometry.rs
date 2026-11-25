@@ -1,6 +1,6 @@
 use glam::Vec3;
-use grana_geometry::{Hull, Mesh, MeshVertex, simplify};
-use grana_object::Mask;
+use grana_geometry::{Bounds, Hull, Mesh, MeshVertex, TriangleBudget, simplify};
+use grana_object::{IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics};
 use grana_volume::{Extent, Level, Region, Spacing};
 
 fn torus(object: u32, major: u32, minor: u32, offset: f32) -> Mesh {
@@ -95,6 +95,62 @@ fn simplifies_a_dense_torus_without_losing_its_shape() {
         "the simplified mesh holds whole triangles"
     );
 }
+#[test]
+fn a_triangle_budget_names_the_detail_level_that_fits() {
+    let mesh = torus(0, 96, 48, 0.0);
+    let level = Level::new(Extent::new(32, 32, 8), Spacing::new(1.0, 1.0, 1.0));
+    let corners = mesh_bounds(&mesh);
+    let set = SurfaceSet::new(
+        0,
+        crate::support::ids(1),
+        mesh,
+        vec![SurfaceStatistics::new(
+            8,
+            level.voxel_volume() * 8.0,
+            0.24,
+            corners.center(),
+            corners,
+            None,
+        )],
+        IntensityTable::new(
+            1,
+            vec![Some(SampleStatistics::new(
+                5000.0, 0.0, 65_535.0, 1.0, 40_000.0,
+            ))],
+        ),
+    );
+    let triangles = set.triangles();
+    assert_eq!(triangles, 9216, "the torus carries its own triangles");
+    assert_eq!(
+        set.detail_level(TriangleBudget::new(triangles / 2)),
+        0,
+        "a budget of half the triangles keeps the full mesh"
+    );
+    assert_eq!(
+        set.detail_level(TriangleBudget::new(triangles / 4)),
+        1,
+        "a budget of a quarter keeps one halving"
+    );
+    assert_eq!(
+        set.detail_level(TriangleBudget::new(1)),
+        5,
+        "a tiny budget names the coarsest detail level"
+    );
+}
+
+fn mesh_bounds(mesh: &Mesh) -> Bounds {
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for vertex in mesh.vertices() {
+        let point = vertex.position();
+        for axis in 0..3 {
+            low[axis] = low[axis].min(point[axis]);
+            high[axis] = high[axis].max(point[axis]);
+        }
+    }
+    Bounds::new(low, high)
+}
+
 #[test]
 fn rasterises_an_oriented_region_exactly() {
     let extent = Extent::new(24, 20, 16);

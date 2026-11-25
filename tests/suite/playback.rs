@@ -36,6 +36,7 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
         gpu.device(),
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
         256 << 20,
         gpu.pipelines(),
     );
