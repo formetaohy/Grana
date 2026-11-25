@@ -214,11 +214,24 @@ pub fn grow(
                         .map_err(|error| error.to_string())?,
                 );
             }
+            let span = (band.labels().len() / (width as usize * height as usize)) as u32;
+            let truncated = grana_analysis::truncated_objects(
+                band.labels(),
+                [ranges[0].start, ranges[1].start, band.start()],
+                [width, height, band.core()],
+                [width, height, span],
+                |cell| {
+                    (0..3).any(|axis| {
+                        cell[axis] < ranges[axis].start || cell[axis] >= ranges[axis].end
+                    }) || mask.as_ref().is_some_and(|mask| !mask.contains_cell(cell))
+                },
+            );
             surfaces.push(
                 [ranges[0].start, ranges[1].start, band.start()],
                 [width, height, band.core()],
                 band.labels(),
                 &data,
+                &truncated,
             );
         }
         if halted {

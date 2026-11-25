@@ -967,6 +967,7 @@ impl Encode for Measurement {
             Self::NucleusSphericity => writer.u8(18),
             Self::CytoplasmVolume => writer.u8(19),
             Self::NuclearRatio => writer.u8(20),
+            Self::Truncated => writer.u8(22),
         }
     }
 }
@@ -1222,6 +1223,7 @@ impl Encode for SurfaceStatistics {
             }
             None => writer.u8(0),
         }
+        writer.u8(u8::from(self.truncation().truncated()));
     }
 }
 

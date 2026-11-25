@@ -82,6 +82,7 @@ pub enum Measurement {
     HullVolume,
     Ellipsoid(usize),
     Voxels,
+    Truncated,
     Length,
     Branches,
     Terminals,
@@ -125,6 +126,7 @@ impl Measurement {
                 Self::Ellipsoid(1),
                 Self::Ellipsoid(2),
                 Self::Voxels,
+                Self::Truncated,
             ],
         )
     }
@@ -157,6 +159,7 @@ impl Measurement {
                 Self::Ellipsoid(1),
                 Self::Ellipsoid(2),
                 Self::Voxels,
+                Self::Truncated,
                 Self::NucleusVolume,
                 Self::NucleusArea,
                 Self::NucleusSphericity,
@@ -179,6 +182,7 @@ impl Measurement {
             Self::HullVolume => "convex hull volume".to_string(),
             Self::Ellipsoid(axis) => format!("ellipsoid axis {}", axis + 1),
             Self::Voxels => "voxels".to_string(),
+            Self::Truncated => "truncated".to_string(),
             Self::Length => "length".to_string(),
             Self::Branches => "branches".to_string(),
             Self::Terminals => "terminals".to_string(),
@@ -208,6 +212,7 @@ impl Measurement {
             Self::HullVolume => volume_key("hull_volume"),
             Self::Ellipsoid(axis) => length_key(&format!("ellipsoid_axis_{}", axis + 1)),
             Self::Voxels => "voxels".to_string(),
+            Self::Truncated => "truncated".to_string(),
             Self::Length => length_key("length"),
             Self::Branches => "branches".to_string(),
             Self::Terminals => "terminals".to_string(),
@@ -241,6 +246,7 @@ impl Measurement {
             | Self::NucleusSphericity
             | Self::NuclearRatio
             | Self::Voxels
+            | Self::Truncated
             | Self::Branches
             | Self::Terminals
             | Self::Junctions
@@ -259,6 +265,7 @@ impl Measurement {
             Self::Volume | Self::Area | Self::NucleusVolume | Self::NucleusArea => 3,
             Self::CytoplasmVolume => 3,
             Self::Voxels | Self::Branches | Self::Terminals | Self::Junctions | Self::Nodes => 0,
+            Self::Truncated => 0,
             Self::Intensity { .. } => 2,
         }
     }
@@ -344,6 +351,7 @@ impl Measurement {
                 .shape()
                 .map_or(f32::NAN, |shape| shape.axes()[axis] as f32),
             Self::Voxels => statistics.voxel_count() as f32,
+            Self::Truncated => f32::from(u8::from(statistics.truncated())),
             Self::Intensity { channel, statistic } => {
                 statistic.value(intensities.object(object, channel))
             }

@@ -241,9 +241,9 @@ impl RowsRequest {
 fn mask_of(region: Region, table: &Table) -> Mask {
     let count = table.rows();
     let (Some(x), Some(y), Some(z)) = (
-        table.column(&grana_measure::length_key("`x")),
-        table.column(&grana_measure::length_key("`y")),
-        table.column(&grana_measure::length_key("`z")),
+        table.column(&grana_measure::length_key("x")),
+        table.column(&grana_measure::length_key("y")),
+        table.column(&grana_measure::length_key("z")),
     ) else {
         return Mask::all(count);
     };

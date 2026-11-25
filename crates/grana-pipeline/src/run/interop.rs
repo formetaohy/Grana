@@ -187,6 +187,7 @@ fn surfaces(
             detections[*slot].position(),
             bounds,
             SurfaceShape::of(mesh.positions(), mesh.indices().as_chunks::<3>().0),
+            grana_object::Truncation::Complete,
         ));
     }
     Ok((Mesh::new(vertices, indices), statistics))

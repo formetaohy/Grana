@@ -649,10 +649,7 @@ impl Session {
             )));
             return false;
         };
-        if self.protocol.is_none() {
-            self.capture_protocol();
-        }
-        let protocol = self.protocol.clone();
+        let protocol = self.captured_protocol();
         let Some(scene) = self.scene.as_ref() else {
             return false;
         };

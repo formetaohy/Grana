@@ -171,6 +171,7 @@ pub(super) struct Slicer<'a> {
 pub(super) struct Assembly {
     pub(super) volume: Volume,
     pub(super) ranges: [Range<u32>; 3],
+    pub(super) truncated: Vec<u32>,
 }
 
 impl Slicer<'_> {
@@ -270,9 +271,31 @@ impl Slicer<'_> {
         });
         let origin = [0, 1, 2].map(|axis| core[axis].start - ranges[axis].start);
         let extent = [0, 1, 2].map(|axis| core[axis].end - core[axis].start);
+        let volume = volume.cropped(origin, extent);
+        let truncated = grana_analysis::truncated_objects(
+            volume.labels(),
+            [core[0].start, core[1].start, core[2].start],
+            extent,
+            extent,
+            |cell| {
+                if (0..3).any(|axis| cell[axis] < core[axis].start || cell[axis] >= core[axis].end)
+                {
+                    return true;
+                }
+                if mask.as_ref().is_some_and(|mask| !mask.contains_cell(cell)) {
+                    return true;
+                }
+                let Some(absent) = absents[(cell[2] - ranges[2].start) as usize].as_ref() else {
+                    return false;
+                };
+                absent[(cell[1] - ranges[1].start) as usize * width as usize
+                    + (cell[0] - ranges[0].start) as usize]
+            },
+        );
         Ok(Some(Assembly {
-            volume: volume.cropped(origin, extent),
+            volume,
             ranges: core,
+            truncated,
         }))
     }
 
@@ -281,15 +304,16 @@ impl Slicer<'_> {
         time: u32,
         assembly: &Assembly,
     ) -> Result<Option<SurfaceSet>, String> {
-        labelled::surfaces(
-            self.reader,
+        labelled::surfaces(labelled::Labelled {
+            reader: self.reader,
             time,
-            0,
-            &assembly.ranges,
-            assembly.volume.labels(),
-            &self.request.drifts,
-            &self.request.ids,
-        )
+            level: 0,
+            ranges: &assembly.ranges,
+            labels: assembly.volume.labels(),
+            truncated: &assembly.truncated,
+            drifts: &self.request.drifts,
+            ids: &self.request.ids,
+        })
     }
 }
 

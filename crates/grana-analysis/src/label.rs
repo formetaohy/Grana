@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec3;
 use grana_geometry::{Bounds, Mesh, MeshVertex, SurfaceShape};
 use grana_object::{
-    IntensityTable, ObjectIdSource, SampleAccumulator, SurfaceSet, SurfaceStatistics,
+    IntensityTable, ObjectIdSource, SampleAccumulator, SurfaceSet, SurfaceStatistics, Truncation,
 };
 use grana_volume::{Level, NoData, VoxelData};
 use rayon::prelude::*;
@@ -12,6 +12,15 @@ use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 
 const RELAX_ITERATIONS: usize = 8;
 const RELAX_TRIANGLE_FLOOR: usize = 12;
+
+const NEIGHBOURS: [[i64; 3]; 6] = [
+    [-1, 0, 0],
+    [1, 0, 0],
+    [0, -1, 0],
+    [0, 1, 0],
+    [0, 0, -1],
+    [0, 0, 1],
+];
 
 struct Object {
     label: u32,
@@ -23,6 +32,7 @@ struct Object {
     low: [u32; 3],
     high: [u32; 3],
     accumulators: Vec<SampleAccumulator>,
+    truncated: bool,
 }
 
 pub struct LabelSlab<'a> {
@@ -31,6 +41,7 @@ pub struct LabelSlab<'a> {
     pub extent: [u32; 3],
     pub labels: &'a [u32],
     pub channels: &'a [VoxelData],
+    pub truncated: &'a [u32],
 }
 
 pub struct LabelBuilder {
@@ -40,6 +51,7 @@ pub struct LabelBuilder {
     no_data: Vec<Option<NoData>>,
     objects: Vec<Object>,
     index: HashMap<u32, usize>,
+    truncated: HashSet<u32>,
 }
 
 impl LabelBuilder {
@@ -55,6 +67,7 @@ impl LabelBuilder {
             no_data: no_data.to_vec(),
             objects: Vec::new(),
             index: HashMap::new(),
+            truncated: HashSet::new(),
         }
     }
 
@@ -65,6 +78,7 @@ impl LabelBuilder {
             extent,
             labels,
             channels,
+            truncated,
         } = slab;
         assert!(
             (0..3).all(|axis| core[axis] <= extent[axis]),
@@ -87,6 +101,12 @@ impl LabelBuilder {
                 volume,
                 "a channel slab covers the label slab"
             );
+        }
+        for label in truncated {
+            self.truncated.insert(*label);
+            if let Some(slot) = self.index.get(label) {
+                self.objects[*slot].truncated = true;
+            }
         }
         self.measure(origin, core, extent, labels, channels);
         self.geometry(origin, core, extent, labels);
@@ -150,6 +170,11 @@ impl LabelBuilder {
                 Bounds::new(low, high)
             };
             let shape = SurfaceShape::of(positions, object.indices.as_chunks::<3>().0);
+            let truncation = if object.truncated {
+                Truncation::Truncated
+            } else {
+                Truncation::Complete
+            };
             statistics.push(SurfaceStatistics::new(
                 object.voxels,
                 grana_geometry::enclosed_volume(positions, object.indices.as_chunks::<3>().0),
@@ -157,6 +182,7 @@ impl LabelBuilder {
                 centroid,
                 bounds,
                 shape,
+                truncation,
             ));
             for accumulator in &object.accumulators {
                 intensities.push(accumulator.statistics());
@@ -313,12 +339,65 @@ impl LabelBuilder {
                     low: [u32::MAX; 3],
                     high: [0; 3],
                     accumulators: vec![SampleAccumulator::new(); channels],
+                    truncated: self.truncated.contains(&label),
                 });
                 slot
             }
         };
         &mut self.objects[slot]
     }
+}
+
+pub fn truncated_objects(
+    labels: &[u32],
+    origin: [u32; 3],
+    core: [u32; 3],
+    extent: [u32; 3],
+    mut beyond: impl FnMut([u32; 3]) -> bool,
+) -> Vec<u32> {
+    assert!(
+        (0..3).all(|axis| core[axis] <= extent[axis]),
+        "a label slab holds its core"
+    );
+    assert_eq!(
+        labels.len(),
+        extent
+            .iter()
+            .map(|value| *value as usize)
+            .product::<usize>(),
+        "a label slab holds every voxel of its extent"
+    );
+    let width = extent[0] as usize;
+    let height = extent[1] as usize;
+    let mut objects = Vec::new();
+    for z in 0..core[2] {
+        for y in 0..core[1] {
+            for x in 0..core[0] {
+                let label = labels[x as usize + width * (y as usize + height * z as usize)];
+                if label == 0 {
+                    continue;
+                }
+                let cell = [origin[0] + x, origin[1] + y, origin[2] + z];
+                let open = NEIGHBOURS.iter().any(|offset| {
+                    let mut neighbour = [0u32; 3];
+                    for axis in 0..3 {
+                        let value = i64::from(cell[axis]) + offset[axis];
+                        match u32::try_from(value) {
+                            Ok(value) => neighbour[axis] = value,
+                            Err(_) => return true,
+                        }
+                    }
+                    beyond(neighbour)
+                });
+                if open {
+                    objects.push(label);
+                }
+            }
+        }
+    }
+    objects.sort_unstable();
+    objects.dedup();
+    objects
 }
 
 fn relaxed_surface(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {

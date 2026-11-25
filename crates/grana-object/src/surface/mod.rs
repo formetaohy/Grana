@@ -14,6 +14,18 @@ pub use topology::{Basin, Seam, SurfacePatches, SurfaceTopology, TopologyInfo};
 
 use detail::Details;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Truncation {
+    Complete,
+    Truncated,
+}
+
+impl Truncation {
+    pub fn truncated(self) -> bool {
+        self == Self::Truncated
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceStatistics {
     voxel_count: u64,
@@ -23,6 +35,7 @@ pub struct SurfaceStatistics {
     centroid: [f32; 3],
     bounds: Bounds,
     shape: Option<SurfaceShape>,
+    truncation: Truncation,
 }
 
 impl SurfaceStatistics {
@@ -33,6 +46,7 @@ impl SurfaceStatistics {
         centroid: [f32; 3],
         bounds: Bounds,
         shape: Option<SurfaceShape>,
+        truncation: Truncation,
     ) -> Self {
         assert!(voxel_count > 0, "a surface encloses at least one voxel");
         assert!(
@@ -57,6 +71,7 @@ impl SurfaceStatistics {
             centroid,
             bounds,
             shape,
+            truncation,
         }
     }
 
@@ -86,6 +101,14 @@ impl SurfaceStatistics {
 
     pub fn shape(self) -> Option<SurfaceShape> {
         self.shape
+    }
+
+    pub fn truncation(self) -> Truncation {
+        self.truncation
+    }
+
+    pub fn truncated(self) -> bool {
+        self.truncation.truncated()
     }
 }
 

@@ -43,8 +43,8 @@ use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, Counts, Ladder, Measured, Planner, Schedule, TargetView, bucket_scale, capacities,
-    fresh, ladder_count, volume_dispatch, volume_target,
+    self, BAND, Ladder, Measured, Planner, Schedule, TargetView, bucket_scale, capacities, fresh,
+    ladder_count, volume_demand, volume_dispatch, volume_target,
 };
 use crate::present::Present;
 use crate::reserve;

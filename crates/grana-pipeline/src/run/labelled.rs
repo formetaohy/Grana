@@ -26,6 +26,7 @@ impl Surfaces {
         core: [u32; 3],
         labels: &[u32],
         channels: &[VoxelData],
+        truncated: &[u32],
     ) {
         let plane = core[0] as usize * core[1] as usize;
         assert!(
@@ -43,6 +44,7 @@ impl Surfaces {
             extent: [core[0], core[1], span],
             labels,
             channels,
+            truncated,
         });
     }
 
@@ -51,15 +53,28 @@ impl Surfaces {
     }
 }
 
-pub(super) fn surfaces(
-    reader: &Channels,
-    time: u32,
-    level: usize,
-    ranges: &[Range<u32>; 3],
-    labels: &[u32],
-    drifts: &Drifts,
-    ids: &grana_object::ObjectIdSource,
-) -> Result<Option<SurfaceSet>, String> {
+pub(super) struct Labelled<'a> {
+    pub(super) reader: &'a Channels,
+    pub(super) time: u32,
+    pub(super) level: usize,
+    pub(super) ranges: &'a [Range<u32>; 3],
+    pub(super) labels: &'a [u32],
+    pub(super) truncated: &'a [u32],
+    pub(super) drifts: &'a Drifts,
+    pub(super) ids: &'a grana_object::ObjectIdSource,
+}
+
+pub(super) fn surfaces(labelled: Labelled<'_>) -> Result<Option<SurfaceSet>, String> {
+    let Labelled {
+        reader,
+        time,
+        level,
+        ranges,
+        labels,
+        truncated,
+        drifts,
+        ids,
+    } = labelled;
     let width = ranges[0].end - ranges[0].start;
     let height = ranges[1].end - ranges[1].start;
     let depth = ranges[2].end - ranges[2].start;
@@ -96,6 +111,7 @@ pub(super) fn surfaces(
             [width, height, core],
             slab,
             &data,
+            truncated,
         );
         z += core;
     }

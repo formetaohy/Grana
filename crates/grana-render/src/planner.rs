@@ -495,10 +495,6 @@ impl<'a> Counts<'a> {
         }
     }
 
-    pub(crate) fn level(&mut self, level: usize) -> usize {
-        self.ensure(level).band(0, 1)
-    }
-
     pub(crate) fn volume(&mut self, base: usize, count: usize) -> [usize; BAND] {
         for level in base..base + count {
             self.ensure(level);
@@ -537,6 +533,22 @@ pub(crate) fn ladder_count(projection: CameraProjection, levels: usize, base: us
         CameraProjection::Perspective => BAND.min(levels - base),
         CameraProjection::Orthographic => 1,
     }
+}
+
+pub(crate) fn volume_demand(
+    pyramid: &Pyramid,
+    camera: &Camera,
+    region: Region,
+    aspect: f32,
+    height: u32,
+    base: usize,
+    count: usize,
+) -> [usize; BAND] {
+    assert!(
+        count > 0 && base + count <= pyramid.level_count(),
+        "a ladder spans levels the pyramid holds"
+    );
+    Counts::new(pyramid, camera, region, aspect, height, base).volume(base, count)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

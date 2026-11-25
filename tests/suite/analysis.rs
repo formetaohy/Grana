@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use grana_analysis::localization::{LocalizationFilter, LocalizationSpec};
 use grana_analysis::{
-    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, ObjectShape, Reference, Sources,
-    SpotScanner, SurfaceBuilder, TrackLinker, coloc_sampling,
+    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, LabelBuilder, LabelSlab,
+    ObjectShape, Reference, Sources, SpotScanner, SurfaceBuilder, TrackLinker, coloc_sampling,
+    truncated_objects,
 };
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_geometry::{Bounds, Mesh, MeshVertex};
@@ -14,7 +15,7 @@ use grana_measure::{ColocPair, ColocSeries, ColocSettings, ColocThresholds};
 use grana_object::{
     FilamentParams, Link, MaskEdit, MaskMode, ObjectAnchor, Shape, Spot, SpotParams, SurfaceFilter,
     SurfaceParams, SurfaceSet, SurfaceStatistics, TrackDetection, TrackEvents, TrackParams,
-    TrackSet,
+    TrackSet, Truncation,
 };
 use grana_object::{IntensityTable, SampleStatistics};
 use grana_pipeline::Channels;
@@ -350,8 +351,15 @@ fn floods_a_wand_past_the_high_side_of_its_block() {
         level.corner(low.map(|value| value as f32)),
         level.corner(high.map(|value| value as f32)),
     );
-    let statistics =
-        SurfaceStatistics::new(8, 8.0 * level.voxel_volume(), 0.24, centroid, bounds, None);
+    let statistics = SurfaceStatistics::new(
+        8,
+        8.0 * level.voxel_volume(),
+        0.24,
+        centroid,
+        bounds,
+        None,
+        Truncation::Complete,
+    );
     scene.install(
         set,
         0,
@@ -1896,4 +1904,51 @@ fn clusters_localizations_into_molecules() {
     assert_eq!(clusters.molecules(), 1);
     assert_eq!(clusters.localizations(), 3);
     assert_eq!(clusters.groups()[3], vec![None]);
+}
+
+#[test]
+fn flags_the_objects_a_label_domain_cuts() {
+    let extent = Extent::new(12, 12, 12);
+    let level = Level::new(extent, Spacing::new(1.0, 1.0, 1.0));
+    let mut labels = vec![0u32; extent.voxel_count() as usize];
+    for z in 4..8 {
+        for y in 4..8 {
+            for x in 2..6 {
+                labels[extent.index(x, y, z) as usize] = 1;
+            }
+            for x in 8..11 {
+                labels[extent.index(x, y, z) as usize] = 2;
+            }
+        }
+    }
+    let truncated = truncated_objects(&labels, [0, 0, 0], [12, 12, 12], [12, 12, 12], |cell| {
+        cell[0] < 2
+    });
+    assert_eq!(
+        truncated,
+        vec![1],
+        "the object the domain boundary cuts is the only one flagged"
+    );
+    let values = VoxelData::F32(vec![1.0; extent.voxel_count() as usize]);
+    let mut builder = LabelBuilder::new(0, level, &[None]);
+    builder.push(LabelSlab {
+        origin: [0, 0, 0],
+        core: [12, 12, 12],
+        extent: [12, 12, 12],
+        labels: &labels,
+        channels: &[values],
+        truncated: &truncated,
+    });
+    let set = builder
+        .finish(&grana_object::ObjectIdSource::new())
+        .expect("both boxes close a surface");
+    assert_eq!(set.object_count(), 2);
+    assert!(
+        set.object(0).expect("the cut box exists").truncated(),
+        "a box the domain boundary cuts reports its truncation"
+    );
+    assert!(
+        !set.object(1).expect("the whole box exists").truncated(),
+        "a box inside the domain reports a complete object"
+    );
 }

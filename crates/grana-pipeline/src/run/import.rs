@@ -119,12 +119,17 @@ pub fn import(
                     .map_err(|error| error.to_string())?;
                 channels.push(values);
             }
+            let truncated =
+                grana_analysis::truncated_objects(&data, *origin, *core, span, |cell| {
+                    (0..3).any(|axis| cell[axis] >= limits[axis])
+                });
             builder.push(LabelSlab {
                 origin: *origin,
                 core: *core,
                 extent: span,
                 labels: &data,
                 channels: &channels,
+                truncated: &truncated,
             });
             done += 1;
             sink(Event::Progress { time, done, total });

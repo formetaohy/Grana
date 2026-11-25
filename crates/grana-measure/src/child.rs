@@ -42,6 +42,7 @@ impl ChildMetric {
             | Measurement::MaxDiameter
             | Measurement::HullVolume
             | Measurement::Ellipsoid(_)
+            | Measurement::Truncated
             | Measurement::NucleusVolume
             | Measurement::NucleusArea
             | Measurement::NucleusSphericity

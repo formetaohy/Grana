@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use glam::Vec3;
 use grana_measure::{Aggregate, Group, Kind, Table};
 use grana_object::{
     IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
 };
+use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene};
+use grana_volume::{Extent, Region, Spacing};
 
-use crate::support::{id, measure_source, node, spot_set, track};
+use crate::support::{id, measure_source, node, spheres, spot_set, track};
 
 const CHANNEL: &str = "EGFP 488";
 
@@ -576,4 +579,47 @@ fn edits_a_lineage_between_divisions_and_parents() {
     assert_ne!(remainder, track(1));
     assert_eq!(pruned.track_at(2, id(2)), Some(track(2)));
     assert_eq!(pruned.divisions(), 0);
+}
+
+#[test]
+fn restricts_the_measured_rows_to_the_analysis_box() {
+    let volume = spheres(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0), &[], 0);
+    let mut scene = Scene::new(Dataset::synthetic("box", volume.pyramid()));
+    let spots = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(
+        spots,
+        0,
+        ObjectFrame::from_spots(spot_set(
+            0,
+            vec![
+                Spot::new([0.0, 0.0, 0.0], 1.0, 0.5),
+                Spot::new([4.0, 0.0, 0.0], 1.0, 0.5),
+            ],
+            IntensityTable::new(
+                1,
+                vec![Some(SampleStatistics::new(500.0, 500.0, 500.0, 0.0, 500.0)); 2],
+            ),
+        )),
+    );
+    let mut measure = Measure::new();
+    measure.select(spots, &scene);
+    let request = measure
+        .request(&scene, false)
+        .expect("the table builds off the frame");
+    let key = request.key();
+    let table = Arc::new(request.build().expect("the spot table builds"));
+    measure.install(key, Some(table));
+    assert_eq!(measure.current_rows().expect("every row builds").total(), 2);
+    measure.set_roi(Some(Region::new(
+        Vec3::ZERO,
+        [Vec3::X, Vec3::Y, Vec3::Z],
+        Vec3::splat(1.0),
+    )));
+    let rows = measure.current_rows().expect("the boxed rows build");
+    assert_eq!(
+        rows.rows().len(),
+        1,
+        "the analysis box admits the one object inside it"
+    );
+    assert_eq!(rows.total(), 1);
 }

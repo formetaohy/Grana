@@ -1478,6 +1478,7 @@ fn highlighted(column: &grana_measure::Column) -> bool {
     }
     let key = column.key();
     key.starts_with("contrast")
+        || key == "truncated"
         || key.starts_with("branches")
         || key.starts_with("terminals")
         || key.starts_with("sphericity")

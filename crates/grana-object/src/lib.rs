@@ -40,7 +40,7 @@ pub use spot::{RADIUS_PER_SIGMA, Spot, SpotSet};
 pub use spot_page::SpotPage;
 pub use surface::{
     Basin, Seam, SurfaceEdit, SurfaceEditKind, SurfacePatches, SurfaceSet, SurfaceStatistics,
-    SurfaceTopology, TopologyInfo,
+    SurfaceTopology, TopologyInfo, Truncation,
 };
 pub use track::{
     Link, NodeRef, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics,

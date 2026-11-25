@@ -525,7 +525,6 @@ impl Residence {
             camera,
             region,
             view,
-            arena,
             target,
             measure: &self.measure,
             denial: &self.denial,

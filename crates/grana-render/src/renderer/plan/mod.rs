@@ -10,7 +10,6 @@ pub(super) struct Input<'a> {
     pub(super) camera: &'a Camera,
     pub(super) region: Region,
     pub(super) view: View,
-    pub(super) arena: &'a BrickArena,
     pub(super) target: usize,
     pub(super) measure: &'a [Option<Measured>],
     pub(super) denial: &'a [usize],
@@ -31,7 +30,6 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
         camera,
         region,
         view,
-        arena,
         target,
         measure,
         denial,
@@ -39,20 +37,26 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
         pose,
     } = input;
     let level_count = pyramid.level_count();
-    let first = arena.first();
     let budget = budget.max(1);
     let projection = camera.projection();
-    let mut counts = Counts::new(pyramid, camera, region, view.aspect, view.height, first);
     let mut fit = None;
     for base in target..level_count {
         let count = ladder_count(projection, level_count, base);
+        let estimate = volume_demand(
+            pyramid,
+            camera,
+            region,
+            view.aspect,
+            view.height,
+            base,
+            count,
+        );
         let mut wanted = [0usize; BAND];
         let mut needed = 0usize;
         for (band, slot) in wanted.iter_mut().enumerate().take(count) {
             let level = base + band;
             let denied = denial.get(level).copied().unwrap_or(0);
-            let visible = fresh(measure, level, pose)
-                .map_or_else(|| counts.level(level), |held| held.visible);
+            let visible = fresh(measure, level, pose).map_or(estimate[band], |held| held.visible);
             *slot = visible + denied;
             needed += visible + denied;
         }
@@ -64,12 +68,20 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
     let (base, count, wanted, truncated) = fit.unwrap_or_else(|| {
         let base = level_count - 1;
         let count = ladder_count(projection, level_count, base);
+        let estimate = volume_demand(
+            pyramid,
+            camera,
+            region,
+            view.aspect,
+            view.height,
+            base,
+            count,
+        );
         let mut wanted = [0usize; BAND];
         for (band, slot) in wanted.iter_mut().enumerate().take(count) {
             let level = base + band;
             let denied = denial.get(level).copied().unwrap_or(0);
-            let visible = fresh(measure, level, pose)
-                .map_or_else(|| counts.level(level), |held| held.visible);
+            let visible = fresh(measure, level, pose).map_or(estimate[band], |held| held.visible);
             *slot = visible + denied;
         }
         (base, count, wanted, true)

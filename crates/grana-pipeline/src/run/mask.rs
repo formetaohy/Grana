@@ -412,6 +412,7 @@ fn rebuild(
             extent: span,
             labels: &labels,
             channels: &data,
+            truncated: &[],
         });
         start += core;
     }

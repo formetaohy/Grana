@@ -1866,6 +1866,70 @@ fn exports_a_share_package_that_opens_read_only() {
     );
 }
 
+#[test]
+fn writes_the_protocol_the_package_holds_now() {
+    let temp = Temp::new("suite-captured-protocol");
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ome.tif");
+    let dataset = temp.path().join("sample.ome.tif");
+    std::fs::copy(&fixture, &dataset).expect("the fixture copies");
+    let mut session = Session::new();
+    load(&mut session, dataset);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.scene().is_none() {
+        assert!(Instant::now() < deadline, "the dataset never opens");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    session.execute(Command::AddObject(ObjectKind::Spots));
+    session.execute(Command::CaptureProtocol);
+    let captured = session.protocol().expect("the protocol captures");
+    assert_eq!(
+        captured.sets().len(),
+        1,
+        "the capture names the one object set"
+    );
+    session.execute(Command::AddObject(ObjectKind::Surfaces));
+    session.observe_view(view_state());
+    session.set_capture_factory(std::sync::Arc::new(|| std::sync::Arc::new(StillCapture)));
+    let shared = temp.path().join("shared");
+    std::fs::create_dir_all(&shared).expect("the shared folder is created");
+    assert!(
+        session.package_into(shared.clone()),
+        "the package starts: {:?}",
+        session.message().map(|message| message.text().to_string())
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let package = loop {
+        assert!(Instant::now() < deadline, "the package never appears");
+        session.poll();
+        let found = std::fs::read_dir(&shared)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| grana_project::is_package(path));
+        if let Some(package) = found {
+            break package;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while session.writing() {
+        assert!(Instant::now() < deadline, "the package never finishes");
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let written =
+        Protocol::read(&package.join("protocol.toml")).expect("the package writes a protocol");
+    assert_eq!(
+        written.sets().len(),
+        2,
+        "the package writes the protocol the document holds now, not the snapshot it captured"
+    );
+}
+
 struct StillCapture;
 
 impl grana_pipeline::Capture for StillCapture {

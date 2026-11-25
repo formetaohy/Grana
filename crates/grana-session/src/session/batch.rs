@@ -107,6 +107,10 @@ impl Session {
         self.batch_review = None;
         self.batch_review_pending = None;
         self.protocol_text = Some(read.protocol.summary());
+        self.captured = Some(replay::CapturedProtocol {
+            revision: self.revision,
+            protocol: read.protocol.clone(),
+        });
         self.protocol = Some(read.protocol);
         self.batch_message = None;
     }

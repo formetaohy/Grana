@@ -462,6 +462,7 @@ pub(super) fn mesh_piece(
         centroid,
         bounds,
         capped_shape(&positions, &mesh, &cut),
+        grana_object::Truncation::Complete,
     );
     if let Some(spec) = filter
         && statistics.sphericity() < f64::from(spec.min_sphericity())

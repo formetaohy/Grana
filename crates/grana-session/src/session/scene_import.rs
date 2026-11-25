@@ -2,7 +2,7 @@ use glam::Vec3;
 use grana_geometry::{Ball, Bounds, Mesh, MeshVertex, SurfaceShape, Union, ends};
 use grana_object::{
     FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, ObjectIdSource,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Truncation,
 };
 use grana_readout::{
     Imported, ImportedFilament, ImportedFrame, ImportedKind, ImportedObject, ImportedSample,
@@ -649,6 +649,7 @@ fn statistics_of(surface: &ImportedSurface, voxel: f32) -> Result<SurfaceStatist
         centroid.to_array(),
         Bounds::new(low, high),
         SurfaceShape::of(vertices, triangles),
+        Truncation::Complete,
     ))
 }
 

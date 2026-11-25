@@ -1,6 +1,8 @@
 use glam::Vec3;
 use grana_geometry::{Bounds, Hull, Mesh, MeshVertex, TriangleBudget, simplify};
-use grana_object::{IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics};
+use grana_object::{
+    IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics, Truncation,
+};
 use grana_volume::{Extent, Level, Region, Spacing};
 
 fn torus(object: u32, major: u32, minor: u32, offset: f32) -> Mesh {
@@ -111,6 +113,7 @@ fn a_triangle_budget_names_the_detail_level_that_fits() {
             corners.center(),
             corners,
             None,
+            Truncation::Complete,
         )],
         IntensityTable::new(
             1,

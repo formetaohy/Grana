@@ -1,8 +1,17 @@
 use super::*;
 
+pub(super) struct CapturedProtocol {
+    pub(super) revision: Revision,
+    pub(super) protocol: Protocol,
+}
+
 impl Session {
     pub fn set_protocol(&mut self, protocol: Protocol) {
         self.protocol_text = Some(protocol.summary());
+        self.captured = Some(CapturedProtocol {
+            revision: self.revision,
+            protocol: protocol.clone(),
+        });
         self.protocol = Some(protocol);
         self.reset_batch_rows();
         self.batch_message = None;
@@ -16,6 +25,28 @@ impl Session {
         match self.protocol_of() {
             Ok(protocol) => self.set_protocol(protocol),
             Err(detail) => self.batch_message = Some(detail),
+        }
+    }
+
+    pub(super) fn captured_protocol(&mut self) -> Option<Protocol> {
+        let revision = self.revision;
+        if let Some(captured) = self.captured.as_ref()
+            && captured.revision == revision
+        {
+            return Some(captured.protocol.clone());
+        }
+        match self.protocol_of() {
+            Ok(protocol) => {
+                self.captured = Some(CapturedProtocol {
+                    revision,
+                    protocol: protocol.clone(),
+                });
+                Some(protocol)
+            }
+            Err(detail) => {
+                self.batch_message = Some(detail);
+                None
+            }
         }
     }
 
@@ -452,10 +483,7 @@ impl Session {
     }
 
     pub(super) fn save_protocol(&mut self) {
-        if self.protocol.is_none() {
-            self.capture_protocol();
-        }
-        if self.protocol.is_none() {
+        if self.captured_protocol().is_none() {
             return;
         }
         let suggested = format!(
@@ -479,7 +507,7 @@ impl Session {
     }
 
     fn write_protocol(&mut self, path: PathBuf) {
-        let Some(protocol) = self.protocol.as_ref() else {
+        let Some(protocol) = self.captured_protocol() else {
             return;
         };
         match protocol.write(&path) {

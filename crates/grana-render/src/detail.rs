@@ -1,7 +1,7 @@
 use grana_display::Camera;
 use grana_volume::{Pyramid, Region};
 
-use crate::planner::{Counts, TargetView, ladder_count, volume_target};
+use crate::planner::{TargetView, ladder_count, volume_demand, volume_target};
 
 pub const EXPORT_CEILING: u64 = 4 << 30;
 
@@ -40,8 +40,7 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Reg
         pyramid.level_count(),
         target.min(pyramid.level_count() - 1),
     );
-    let mut counts = Counts::new(pyramid, camera, region, aspect, height, target);
-    let bands = counts.volume(target, count);
+    let bands = volume_demand(pyramid, camera, region, aspect, height, target, count);
     let bricks = bands[..count].iter().sum();
     Residency {
         detail: Detail {

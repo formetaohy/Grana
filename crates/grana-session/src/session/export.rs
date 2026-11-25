@@ -114,10 +114,7 @@ impl Session {
     }
 
     fn write_provenance(&mut self, root: PathBuf) {
-        if self.protocol.is_none() {
-            self.capture_protocol();
-        }
-        let Some(protocol) = self.protocol.clone() else {
+        let Some(protocol) = self.captured_protocol() else {
             self.message = Some(Message::error("the analysis carries no protocol"));
             return;
         };

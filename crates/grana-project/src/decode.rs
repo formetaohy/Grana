@@ -20,7 +20,7 @@ use grana_object::{
     CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit,
     MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair, RelationReading,
     SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
-    TrackId, TrackIds, TrackLink, TrackNode, TrackSet,
+    TrackId, TrackIds, TrackLink, TrackNode, TrackSet, Truncation,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
@@ -1451,6 +1451,7 @@ impl Decode for Measurement {
             19 => Self::CytoplasmVolume,
             20 => Self::NuclearRatio,
             21 => Self::Precision(reader.u8()? as usize),
+            22 => Self::Truncated,
             _ => return Err(FAULT_SHAPE),
         };
         if let Self::Position(axis) = measurement
@@ -1773,6 +1774,11 @@ impl Decode for SurfaceStatistics {
             }
             _ => return Err(FAULT_TAG),
         };
+        let truncation = match reader.u8()? {
+            0 => Truncation::Complete,
+            1 => Truncation::Truncated,
+            _ => return Err(FAULT_TAG),
+        };
         Ok(Self::new(
             voxel_count,
             volume,
@@ -1780,6 +1786,7 @@ impl Decode for SurfaceStatistics {
             centroid,
             bounds,
             shape,
+            truncation,
         ))
     }
 }
