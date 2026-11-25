@@ -23,4 +23,3 @@ mod support;
 mod tracking;
 mod ui;
 mod update;
-mod weights;

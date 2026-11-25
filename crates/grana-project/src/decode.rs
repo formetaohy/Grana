@@ -971,33 +971,21 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
             Ok(Provenance::Attached { file, intensities })
         }
         6 => {
-            let cellprob = reader.f32()?;
-            let flow = reader.f32()?;
+            let foreground = reader.f32()?;
+            let density = reader.f32()?;
             let minimum = reader.count(1)?;
-            let tile = reader.count(0)?;
-            let slice = reader.f32()?;
-            let model = reader.u8()?;
-            if !(cellprob.is_finite() && (-10.0..=10.0).contains(&cellprob))
-                || !(flow.is_finite() && (0.0..=1.0).contains(&flow))
+            if !(foreground.is_finite() && (0.0..=1.0).contains(&foreground))
+                || !(density.is_finite() && (0.0..=10_000.0).contains(&density))
                 || minimum > 10_000
-                || tile > 192
-                || !(slice.is_finite() && (0.0..=1.0).contains(&slice))
             {
-                return Err(FAULT_VALUE);
-            }
-            let model = grana_scene::SegmentModel::from_index(model).ok_or(FAULT_VALUE)?;
-            if !model.licensed() {
                 return Err(FAULT_VALUE);
             }
             Ok(Provenance::Segmented {
                 params: grana_scene::SegmentParams::with_settings(
-                    cellprob,
-                    flow,
+                    foreground,
+                    density,
                     minimum as u32,
-                    tile as u32,
-                    slice,
-                )
-                .with_model(model),
+                ),
             })
         }
         _ => Err(FAULT_TAG),

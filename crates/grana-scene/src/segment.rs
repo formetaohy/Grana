@@ -1,35 +1,30 @@
 use crate::object::{ParamField, ParamScale};
 
-pub use grana_model::{License, Model as SegmentModel};
-
-const CELLPROB_MINIMUM: f32 = -10.0;
-const CELLPROB_MAXIMUM: f32 = 10.0;
-const FLOW_MINIMUM: f32 = 0.0;
-const FLOW_MAXIMUM: f32 = 1.0;
+const FOREGROUND_MINIMUM: f32 = 0.0;
+const FOREGROUND_MAXIMUM: f32 = 1.0;
+const DENSITY_MINIMUM: f32 = 0.0;
+const DENSITY_MAXIMUM: f32 = 10_000.0;
 const SIZE_MINIMUM: f32 = 1.0;
 const SIZE_MAXIMUM: f32 = 10_000.0;
-const TILE_MAXIMUM: f32 = 192.0;
-const SLICE_MINIMUM: f32 = 0.0;
-const SLICE_MAXIMUM: f32 = 1.0;
-const CELLPROB_DEFAULT: f32 = 0.0;
-const FLOW_DEFAULT: f32 = 0.4;
-const SIZE_DEFAULT: f32 = 15.0;
-const TILE_DEFAULT: f32 = 32.0;
-const SLICE_DEFAULT: f32 = 0.5;
+const FOREGROUND_DEFAULT: f32 = 0.5;
+const DENSITY_2D_DEFAULT: f32 = 30.0;
+const DENSITY_3D_DEFAULT: f32 = 80.0;
+const SIZE_2D_DEFAULT: u32 = 50;
+const SIZE_3D_DEFAULT: u32 = 500;
 
-pub const SEGMENT_FIELDS: [ParamField; 5] = [
+pub const SEGMENT_FIELDS: [ParamField; 3] = [
     ParamField {
-        label: "cell probability",
+        label: "foreground",
         suffix: "",
-        minimum: ParamScale::Absolute(CELLPROB_MINIMUM),
-        maximum: ParamScale::Absolute(CELLPROB_MAXIMUM),
+        minimum: ParamScale::Absolute(FOREGROUND_MINIMUM),
+        maximum: ParamScale::Absolute(FOREGROUND_MAXIMUM),
         logarithmic: false,
     },
     ParamField {
-        label: "flow error",
+        label: "density",
         suffix: "",
-        minimum: ParamScale::Absolute(FLOW_MINIMUM),
-        maximum: ParamScale::Absolute(FLOW_MAXIMUM),
+        minimum: ParamScale::Absolute(DENSITY_MINIMUM),
+        maximum: ParamScale::Absolute(DENSITY_MAXIMUM),
         logarithmic: false,
     },
     ParamField {
@@ -39,134 +34,90 @@ pub const SEGMENT_FIELDS: [ParamField; 5] = [
         maximum: ParamScale::Absolute(SIZE_MAXIMUM),
         logarithmic: true,
     },
-    ParamField {
-        label: "tile overlap",
-        suffix: " px",
-        minimum: ParamScale::Absolute(0.0),
-        maximum: ParamScale::Absolute(TILE_MAXIMUM),
-        logarithmic: false,
-    },
-    ParamField {
-        label: "slice overlap",
-        suffix: "",
-        minimum: ParamScale::Absolute(SLICE_MINIMUM),
-        maximum: ParamScale::Absolute(SLICE_MAXIMUM),
-        logarithmic: false,
-    },
 ];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SegmentParams {
-    cellprob_threshold: f32,
-    flow_threshold: f32,
+    foreground_threshold: f32,
+    density_threshold: f32,
     minimum_size: u32,
-    tile_overlap: u32,
-    slice_overlap: f32,
-    model: SegmentModel,
-}
-
-impl Default for SegmentParams {
-    fn default() -> Self {
-        Self {
-            cellprob_threshold: CELLPROB_DEFAULT,
-            flow_threshold: FLOW_DEFAULT,
-            minimum_size: SIZE_DEFAULT as u32,
-            tile_overlap: TILE_DEFAULT as u32,
-            slice_overlap: SLICE_DEFAULT,
-            model: SegmentModel::preferred()
-                .expect("a build licenses at least one segmentation model"),
-        }
-    }
 }
 
 impl SegmentParams {
     pub const FIELD_COUNT: usize = SEGMENT_FIELDS.len();
 
+    pub fn new(depth: u32) -> Self {
+        if depth > 1 {
+            Self {
+                foreground_threshold: FOREGROUND_DEFAULT,
+                density_threshold: DENSITY_3D_DEFAULT,
+                minimum_size: SIZE_3D_DEFAULT,
+            }
+        } else {
+            Self {
+                foreground_threshold: FOREGROUND_DEFAULT,
+                density_threshold: DENSITY_2D_DEFAULT,
+                minimum_size: SIZE_2D_DEFAULT,
+            }
+        }
+    }
+
     pub fn with_settings(
-        cellprob_threshold: f32,
-        flow_threshold: f32,
+        foreground_threshold: f32,
+        density_threshold: f32,
         minimum_size: u32,
-        tile_overlap: u32,
-        slice_overlap: f32,
     ) -> Self {
-        let mut params = Self::default();
-        params.set_cellprob_threshold(cellprob_threshold);
-        params.set_flow_threshold(flow_threshold);
+        let mut params = Self::new(1);
+        params.set_foreground_threshold(foreground_threshold);
+        params.set_density_threshold(density_threshold);
         params.set_minimum_size(minimum_size);
-        params.set_tile_overlap(tile_overlap);
-        params.set_slice_overlap(slice_overlap);
         params
     }
 
-    pub fn cellprob_threshold(&self) -> f32 {
-        self.cellprob_threshold
+    pub fn foreground_threshold(&self) -> f32 {
+        self.foreground_threshold
     }
 
-    pub fn flow_threshold(&self) -> f32 {
-        self.flow_threshold
+    pub fn density_threshold(&self) -> f32 {
+        self.density_threshold
     }
 
     pub fn minimum_size(&self) -> u32 {
         self.minimum_size
     }
 
-    pub fn tile_overlap(&self) -> u32 {
-        self.tile_overlap
-    }
-
-    pub fn slice_overlap(&self) -> f32 {
-        self.slice_overlap
-    }
-
-    pub fn model(&self) -> SegmentModel {
-        self.model
-    }
-
-    pub fn with_model(mut self, model: SegmentModel) -> Self {
-        assert!(
-            model.licensed(),
-            "a segmentation runs a model this build licenses"
-        );
-        self.model = model;
-        self
-    }
-
     pub fn field(&self, index: usize) -> f32 {
         match index {
-            0 => self.cellprob_threshold,
-            1 => self.flow_threshold,
+            0 => self.foreground_threshold,
+            1 => self.density_threshold,
             2 => self.minimum_size as f32,
-            3 => self.tile_overlap as f32,
-            4 => self.slice_overlap,
-            _ => panic!("a segmentation carries five parameters"),
+            _ => panic!("a segmentation carries three parameters"),
         }
     }
 
     pub fn set_field(&mut self, index: usize, value: f32) {
         match index {
-            0 => self.set_cellprob_threshold(value),
-            1 => self.set_flow_threshold(value),
+            0 => self.set_foreground_threshold(value),
+            1 => self.set_density_threshold(value),
             2 => self.set_minimum_size(value.round() as u32),
-            3 => self.set_tile_overlap(value.round() as u32),
-            4 => self.set_slice_overlap(value),
-            _ => panic!("a segmentation carries five parameters"),
+            _ => panic!("a segmentation carries three parameters"),
         }
     }
 
-    pub fn set_cellprob_threshold(&mut self, threshold: f32) {
+    pub fn set_foreground_threshold(&mut self, threshold: f32) {
         assert!(
-            threshold.is_finite() && (CELLPROB_MINIMUM..=CELLPROB_MAXIMUM).contains(&threshold),
-            "a cell probability threshold lies within the model logits"
+            threshold.is_finite() && (FOREGROUND_MINIMUM..=FOREGROUND_MAXIMUM).contains(&threshold),
+            "a foreground threshold is a unit fraction"
         );
-        self.cellprob_threshold = threshold;
+        self.foreground_threshold = threshold;
     }
 
-    pub fn set_flow_threshold(&mut self, threshold: f32) {
+    pub fn set_density_threshold(&mut self, threshold: f32) {
         assert!(
-            threshold.is_finite() && (FLOW_MINIMUM..=FLOW_MAXIMUM).contains(&threshold),
-            "a flow error threshold is a unit fraction"
+            threshold.is_finite() && (DENSITY_MINIMUM..=DENSITY_MAXIMUM).contains(&threshold),
+            "a density threshold is a non-negative particle count"
         );
-        self.flow_threshold = threshold;
+        self.density_threshold = threshold;
     }
 
     pub fn set_minimum_size(&mut self, size: u32) {
@@ -175,21 +126,5 @@ impl SegmentParams {
             "a segmented object holds a bounded number of voxels"
         );
         self.minimum_size = size;
-    }
-
-    pub fn set_tile_overlap(&mut self, overlap: u32) {
-        assert!(
-            overlap <= TILE_MAXIMUM as u32,
-            "a segmentation tile overlap is smaller than the model side"
-        );
-        self.tile_overlap = overlap;
-    }
-
-    pub fn set_slice_overlap(&mut self, overlap: f32) {
-        assert!(
-            overlap.is_finite() && (SLICE_MINIMUM..=SLICE_MAXIMUM).contains(&overlap),
-            "a slice overlap is a unit fraction"
-        );
-        self.slice_overlap = overlap;
     }
 }

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_object::{Mask, ObjectIdSource, Roi, SurfaceSet};
 use grana_scene::{Drifts, ObjectFrame, SegmentParams};
-use grana_segment::{Segmenter, Settings, Volume, assemble};
+use grana_segment::{Segmenter, Settings, Volume};
 use grana_volume::{Level, Region};
 
 use crate::channels::Channels;
@@ -55,12 +55,12 @@ pub(super) fn segmenter(
     sink: &mut dyn FnMut(Event),
 ) -> Result<Option<(Segmenter, Settings)>, String> {
     let settings = Settings::new(
-        params.cellprob_threshold(),
-        params.flow_threshold(),
-        params.tile_overlap(),
-        params.slice_overlap(),
-    );
-    let path = match grana_weight::weights(params.model(), cancel, &mut |done, total| {
+        params.foreground_threshold(),
+        params.density_threshold(),
+        params.minimum_size(),
+    )
+    .map_err(|error| error.to_string())?;
+    let path = match grana_weight::weights(cancel, &mut |done, total| {
         sink(Event::Progress {
             time: 0,
             done: done as usize,
@@ -86,15 +86,6 @@ pub fn segment(
         .region
         .voxel_range(info)
         .ok_or_else(|| "the segmentation region overlaps no voxel".to_string())?;
-    let voxels = (bounds[0].end - bounds[0].start) as u64
-        * (bounds[1].end - bounds[1].start) as u64
-        * (bounds[2].end - bounds[2].start) as u64;
-    if voxels.saturating_mul(8) > 2 << 30 {
-        return Err(
-            "the segmentation region holds more than 2 GiB of slice labels; narrow the region"
-                .to_string(),
-        );
-    }
     let Some((segmenter, _)) = segmenter(&request.params, cancel, sink)? else {
         return Ok(());
     };
@@ -195,8 +186,9 @@ impl Slicer<'_> {
         let no_data = self.reader.pyramid().channels()[self.request.channel].no_data();
         let width = ranges[0].end - ranges[0].start;
         let height = ranges[1].end - ranges[1].start;
-        let mut slices = Vec::with_capacity((ranges[2].end - ranges[2].start) as usize);
-        for (offset, z) in ranges[2].clone().enumerate() {
+        let mut planes = Vec::with_capacity((ranges[2].end - ranges[2].start) as usize);
+        let mut absents = Vec::with_capacity(planes.capacity());
+        for z in ranges[2].clone() {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(None);
             }
@@ -209,47 +201,37 @@ impl Slicer<'_> {
             values.write_values_absent_as_nan(no_data, &mut plane);
             let mut absent = None;
             if no_data.is_some() {
-                absent = Some(
-                    plane
-                        .iter()
-                        .map(|value| !value.is_finite())
-                        .collect::<Vec<_>>(),
-                );
+                let mask = plane
+                    .iter()
+                    .map(|value| !value.is_finite())
+                    .collect::<Vec<_>>();
                 for value in &mut plane {
                     if !value.is_finite() {
                         *value = 0.0;
                     }
                 }
+                absent = Some(mask);
             }
-            let kept = mask.as_ref().is_none_or(|mask| covers(mask, &ranges, z));
-            let mut labels = if kept {
-                self.segmenter
-                    .segment(&plane, width, height)
-                    .map_err(|error| format!("the segmentation model failed: {error}"))?
-            } else {
-                vec![0u32; width as usize * height as usize]
-            };
-            if let Some(absent) = absent {
-                for (label, absent) in labels.iter_mut().zip(&absent) {
-                    if *absent {
-                        *label = 0;
-                    }
-                }
-            }
-            if let Some(mask) = mask.as_ref() {
-                keep_labels(&mut labels, mask, &ranges, z);
-            }
-            slices.push(labels);
-            progress(offset + 1);
+            planes.push(plane);
+            absents.push(absent);
         }
-        let volume = assemble(
-            &mut slices,
-            width,
-            height,
-            self.request.params.slice_overlap(),
-            self.request.params.minimum_size(),
-        )
-        .map_err(|error| format!("the segmentation slices do not assemble: {error}"))?;
+        let mut volume = self
+            .segmenter
+            .segment(&planes, width, height, progress)
+            .map_err(|error| format!("the segmentation model failed: {error}"))?;
+        volume.filter(|[x, y, z]| {
+            let present = absents[z as usize]
+                .as_ref()
+                .is_none_or(|absent| !absent[y as usize * width as usize + x as usize]);
+            let inside = mask.as_ref().is_none_or(|mask| {
+                mask.contains_cell([
+                    ranges[0].start + x,
+                    ranges[1].start + y,
+                    ranges[2].start + z,
+                ])
+            });
+            present && inside
+        });
         Ok(Some(Assembly { volume, ranges }))
     }
 
@@ -286,30 +268,4 @@ fn clip(region: &[Range<u32>; 3], mask: Option<&Mask>, level: Level) -> Option<[
         .iter()
         .all(|range| range.start < range.end)
         .then_some(ranges)
-}
-
-fn covers(mask: &Mask, ranges: &[Range<u32>; 3], z: u32) -> bool {
-    let width = (ranges[0].end - ranges[0].start) as usize;
-    let height = (ranges[1].end - ranges[1].start) as usize;
-    for y in 0..height {
-        for x in 0..width {
-            if mask.contains_cell([ranges[0].start + x as u32, ranges[1].start + y as u32, z]) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn keep_labels(labels: &mut [u32], mask: &Mask, ranges: &[Range<u32>; 3], z: u32) {
-    let width = (ranges[0].end - ranges[0].start) as usize;
-    let height = (ranges[1].end - ranges[1].start) as usize;
-    for y in 0..height {
-        let row = y * width;
-        for x in 0..width {
-            if !mask.contains_cell([ranges[0].start + x as u32, ranges[1].start + y as u32, z]) {
-                labels[row + x] = 0;
-            }
-        }
-    }
 }

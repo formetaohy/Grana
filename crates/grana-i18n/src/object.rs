@@ -15,7 +15,7 @@ labels! {
     objects_noun => "objects" / "对象";
     filaments_noun => "filaments" / "丝状结构";
     cells_noun => "cells" / "细胞";
-    segments_unlicensed => "Segments · unlicensed" / "分割 · 未授权";
+    segments => "Segments" / "分割";
     import_labels => "Import Labels" / "导入标签";
     import_tracks => "Import Tracks" / "导入轨迹";
     import_localizations => "Import Localizations" / "导入定位表";
@@ -63,7 +63,6 @@ labels! {
     object_set => "Object Set" / "对象集";
     origin => "Origin" / "来源";
     curated => "Curated" / "已整理";
-    model => "Model" / "模型";
     detect => "Detect" / "检测";
     manual_seeds => "Manual Seeds" / "手动种子点";
     seeds => "Seeds" / "种子点";
@@ -73,10 +72,8 @@ labels! {
     stop_placing => "Stop Placing" / "停止放置";
     manual => "Manual" / "手动";
     clear_seeds => "Clear seeds" / "清除种子点";
-    no_segmentation_weights => "No segmentation weights licensed" / "未授权分割权重";
-    no_model_weights => "Model weights unavailable" / "模型权重不可用";
-    number => "Number" / "编号";
     child => "Child" / "子对象";
+    number => "Number" / "编号";
     children => "Children" / "子对象";
     selected_object => "Selected Object" / "选中对象";
     delete_object => "Delete Object" / "删除对象";
@@ -96,7 +93,6 @@ labels! {
 messages! {
     unread(count: usize) => "{count}" / "{count}";
     more_notes(count: usize) => "{count} more" / "还有 {count} 条";
-    segments(license: &str) => "Segments · {license}" / "分割 · {license}";
     labels_written(path: &str, objects: u32, frames: u32) => "{path} · {objects} ({frames}f)" / "{path} · {objects}（{frames} 帧）";
     header_frames(channel: &str, count: usize, noun: &str, detected: usize) => "{channel} · {count} {noun} · {detected}f" / "{channel} · {count} 个{noun} · {detected} 帧";
     header_single(channel: &str, count: usize, noun: &str) => "{channel} · {count} {noun}" / "{channel} · {count} 个{noun}";
@@ -108,7 +104,6 @@ messages! {
     classifier_fit(measurements: usize, kept: usize, excluded: usize, percent: f32) => "{measurements}M · +{kept}/−{excluded} · {percent:.0}%" / "{measurements} 项 · +{kept}/−{excluded} · {percent:.0}%";
     measurements(count: usize) => "{count} Measurements" / "{count} 个测量项";
     gate_rows(kept: usize, total: usize) => "{kept} / {total} gated" / "已门控 {kept} / {total}";
-    segmented(model: &str, license: &str) => "{model} · {license}" / "{model} · {license}";
     imported_from(label: &str) => "{label}" / "{label}";
     attached_from(file: &str) => "{file}" / "{file}";
     filtered_from(name: &str) => "{name}" / "{name}";
@@ -123,7 +118,6 @@ messages! {
     track_edits(count: usize) => "{count} edits" / "{count} 编辑";
     pending(count: usize) => "{count} pending" / "{count} 待处理";
     dropped(count: usize) => "{count} dropped" / "{count} 丢弃";
-    model_weights(model: &str, license: &str) => "{model} · {license}" / "{model} · {license}";
     detect_root(root: &str) => "Detect {root}" / "检测 {root}";
     from_source(name: &str) => "From {name}" / "来自 {name}";
     active_seeds_detail(count: usize, name: &str) => "{count} · {name}" / "{count} · {name}";
@@ -179,11 +173,9 @@ pub fn parameter(language: Language, english: &str) -> String {
         "min mean intensity" => "最小平均强度",
         "min length" => "最小长度",
         "reach" => "延伸范围",
-        "cell probability" => "细胞概率",
-        "flow error" => "光流误差",
+        "foreground" => "前景",
+        "density" => "密度",
         "minimum size" => "最小尺寸",
-        "tile overlap" => "瓦片重叠",
-        "slice overlap" => "切片重叠",
         _ => english,
     };
     chinese.to_string()

@@ -43,8 +43,6 @@ grana-zarr = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
-[features]
-commercial = ["grana-pipeline/commercial", "grana-scene/commercial"]
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-﻿use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +16,7 @@ use crate::codec::{Decode, Encode, Reader};
 use crate::error::Error;
 
 const MAGIC: &[u8; 9] = b"granaproj";
-const VERSION: u32 = 85;
+const VERSION: u32 = 86;
 const VERSION_BYTES: usize = size_of::<u32>();
 const LENGTH: usize = size_of::<u64>();
 const STEPS: usize = size_of::<u32>();

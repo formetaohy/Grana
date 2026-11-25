@@ -1,14 +1,16 @@
 mod cache;
 mod device;
-mod dynamics;
 mod error;
+mod inference;
 mod model;
 mod normalize;
-mod slice;
-mod tile;
-mod weights;
+mod postprocess;
+mod settings;
+mod volume;
 
 pub use error::Error;
-pub use slice::{Component, Segmenter, Settings, Volume, assemble};
+pub use inference::Segmenter;
+pub use settings::Settings;
+pub use volume::{Component, Volume};
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -212,22 +212,11 @@ fn add_menu<'a>(
     } else {
         Message::Command(Command::AddSegment)
     };
-    let licensed = grana_scene::SegmentModel::preferred();
-    let (label, message) = match licensed {
-        Some(model) => (
-            grana_i18n::object::segments(language, model.license().name()),
-            message,
-        ),
-        None => (
-            grana_i18n::object::segments_unlicensed(language).to_string(),
-            Message::Noop,
-        ),
-    };
     rows.push(action_row(
         ctx,
         "add.segments",
         Icon::Sparkles,
-        &label,
+        grana_i18n::object::segments(language),
         message,
     ));
     if !state.labels.is_empty() {

@@ -49,9 +49,6 @@ toml = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 
-[features]
-commercial = ["grana-weight/commercial", "grana-scene/commercial"]
 
 [lints]
 workspace = true
-

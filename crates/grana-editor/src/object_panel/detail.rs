@@ -15,11 +15,7 @@ pub(super) fn origin<'a>(
     };
     let text = match set.provenance() {
         Provenance::Detection => return None,
-        Provenance::Segmented { params } => grana_i18n::object::segmented(
-            language,
-            params.model().label(),
-            params.model().license().name(),
-        ),
+        Provenance::Segmented { .. } => grana_i18n::object::segments(language).to_string(),
         Provenance::Imported { label } => grana_i18n::object::imported_from(language, label),
         Provenance::Interop { file } => grana_i18n::object::imported_from(language, file),
         Provenance::Attached { file, .. } => grana_i18n::object::attached_from(language, file),
@@ -128,50 +124,6 @@ pub(super) fn params<'a>(
     let language = ctx.language();
     let mut children = Vec::new();
     if let Some(segment) = set.provenance().segment() {
-        let models = grana_scene::SegmentModel::available()
-            .map(|model| {
-                (
-                    model,
-                    format!("{} · {}", model.label(), model.license().name()),
-                )
-            })
-            .collect::<Vec<_>>();
-        let selected = segment.clone();
-        if models.is_empty() {
-            children.push(crate::view::caption(
-                ctx,
-                grana_i18n::object::no_segmentation_weights(language),
-            ));
-        } else if models.iter().any(|(model, _)| *model == segment.model()) {
-            children.push(crate::inspector::form_combo(
-                ctx,
-                &format!("object.{}.segment.model", id.raw()),
-                grana_i18n::object::model(language),
-                &models,
-                Some(segment.model()),
-                220.0,
-                move |model| {
-                    Message::Command(Command::SetSegment {
-                        set: id,
-                        params: selected.clone().with_model(model),
-                    })
-                },
-            ));
-        } else {
-            children.push(crate::view::labelled(
-                ctx,
-                grana_i18n::object::model(language),
-                &grana_i18n::object::model_weights(
-                    language,
-                    segment.model().label(),
-                    segment.model().license().name(),
-                ),
-            ));
-            children.push(crate::view::caption(
-                ctx,
-                grana_i18n::object::no_model_weights(language),
-            ));
-        }
         for (index, field) in SEGMENT_FIELDS.iter().enumerate() {
             let (minimum, maximum) = bounds(field, voxel, world);
             let value = segment.field(index).clamp(minimum, maximum);

@@ -637,12 +637,9 @@ fn segments(
     let seed = seed_spec(scene, seeds)?;
     Ok(SourceSpec::Segments {
         channel: channel.to_string(),
-        cellprob: params.cellprob_threshold(),
-        flow: params.flow_threshold(),
+        foreground: params.foreground_threshold(),
+        density: params.density_threshold(),
         minimum_size: params.minimum_size(),
-        tile_overlap: params.tile_overlap(),
-        slice_overlap: params.slice_overlap(),
-        model: params.model().name().to_string(),
         seeds: seed.points,
         seed_source: seed.source,
     })

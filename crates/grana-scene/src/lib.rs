@@ -73,7 +73,7 @@ pub use revision::{GeometryId, Revision, Revisions};
 pub use row::{RowSpec, Rows, RowsRequest};
 pub use scene::{Item, MaskExtent, Scene, Selection};
 pub use seed::Seeds;
-pub use segment::{License, SEGMENT_FIELDS, SegmentModel, SegmentParams};
+pub use segment::{SEGMENT_FIELDS, SegmentParams};
 pub use slug::slug;
 pub use snapshot::Snapshot;
 pub use source::ObjectSource;

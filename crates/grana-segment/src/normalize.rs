@@ -1,15 +1,14 @@
-const LOWER: f64 = 1.0;
-const UPPER: f64 = 99.0;
-const FLOOR: f32 = 1.0e-3;
+const LOWER: f64 = 2.0;
+const UPPER: f64 = 98.0;
+const EPSILON: f32 = 1.0e-7;
 
-pub fn plane(values: &[f32]) -> Vec<f32> {
+pub(crate) fn plane(values: &[f32]) -> Vec<f32> {
     let (low, high) = percentiles(values);
-    let span = high - low;
-    if span > FLOOR {
-        values.iter().map(|value| (value - low) / span).collect()
-    } else {
-        vec![0.0; values.len()]
-    }
+    let span = high - low + EPSILON;
+    values
+        .iter()
+        .map(|value| ((value - low) / span).clamp(0.0, 1.0))
+        .collect()
 }
 
 fn percentiles(values: &[f32]) -> (f32, f32) {

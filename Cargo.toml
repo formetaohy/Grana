@@ -63,6 +63,7 @@ windows = "0.62"
 windows-sys = "0.61"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.13"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 grana-animation = { version = "0.2.3", path = "crates/grana-animation" }
 grana-archive = { version = "0.2.3", path = "crates/grana-archive" }
 grana-brand = { version = "0.2.3", path = "crates/grana-brand" }
@@ -109,7 +110,6 @@ grana-interop = { version = "0.2.3", path = "crates/grana-interop" }
 grana-net = { version = "0.2.3", path = "crates/grana-net" }
 grana-measure = { version = "0.2.3", path = "crates/grana-measure" }
 grana-mesh = { version = "0.2.3", path = "crates/grana-mesh" }
-grana-model = { version = "0.2.3", path = "crates/grana-model" }
 grana-optics = { version = "0.2.3", path = "crates/grana-optics" }
 grana-restore = { version = "0.2.3", path = "crates/grana-restore" }
 grana-segment = { version = "0.2.3", path = "crates/grana-segment" }
@@ -176,7 +176,6 @@ grana-image = { workspace = true }
 grana-interop = { workspace = true }
 grana-measure = { workspace = true }
 grana-mesh = { workspace = true }
-grana-model = { workspace = true }
 grana-net = { workspace = true }
 grana-object = { workspace = true }
 grana-offline = { workspace = true }
@@ -207,8 +206,6 @@ grana-zarr = { workspace = true }
 wgpu = { workspace = true }
 zarrs = { workspace = true }
 
-[features]
-commercial = ["grana-app/commercial"]
 
 [lints]
 workspace = true
@@ -218,4 +215,3 @@ opt-level = 2
 
 [profile.dev]
 opt-level = 1
-

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use sha2::{Digest, Sha256};
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::Error;
 use crate::model::Asset;
@@ -18,7 +18,7 @@ fn verified() -> &'static Mutex<HashMap<PathBuf, (u64, String)>> {
 }
 
 fn sidecar(path: &Path) -> PathBuf {
-    path.with_extension("sha256")
+    path.with_extension("xxh128")
 }
 
 pub(crate) fn checked(asset: &Asset, path: &Path, cancel: &AtomicBool) -> Result<bool, Error> {
@@ -26,30 +26,25 @@ pub(crate) fn checked(asset: &Asset, path: &Path, cancel: &AtomicBool) -> Result
         return Ok(false);
     };
     let length = metadata.len();
-    if length != asset.length && length != asset.stored_length {
+    if length != asset.length {
         return Ok(false);
     }
     let recorded = recorded(path)?;
-    if let Some((held, digest)) = verified()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get(path)
-        && *held == length
-        && recorded.as_deref() == Some(digest.as_str())
+    if recorded.as_deref() == Some(asset.checksum)
+        && verified()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(path)
+            .is_some_and(|(held, digest)| *held == length && digest == asset.checksum)
     {
         return Ok(true);
     }
     let digest = digest(path, cancel)?;
-    if digest == asset.checksum {
-        crate::archive::normalize(path)?;
-        record(path)?;
-        return Ok(true);
+    if digest != asset.checksum {
+        return Ok(false);
     }
-    if length == asset.stored_length && recorded.as_deref() == Some(digest.as_str()) {
-        remember(path, &digest);
-        return Ok(true);
-    }
-    Ok(false)
+    record(path)?;
+    Ok(true)
 }
 
 pub(crate) fn record(path: &Path) -> Result<(), Error> {
@@ -85,7 +80,7 @@ fn recorded(path: &Path) -> Result<Option<String>, Error> {
 fn digest(path: &Path, cancel: &AtomicBool) -> Result<String, Error> {
     let mut file = File::open(path)
         .map_err(|error| Error::storage(format!("`{}`: {error}", path.display())))?;
-    let mut hasher = Sha256::new();
+    let mut hasher = Xxh3::new();
     let mut buffer = vec![0u8; BUFFER];
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -99,13 +94,5 @@ fn digest(path: &Path, cancel: &AtomicBool) -> Result<String, Error> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(hex(&hasher.finalize()))
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push_str(&format!("{byte:02x}"));
-    }
-    text
+    Ok(format!("{:032x}", hasher.digest128()))
 }

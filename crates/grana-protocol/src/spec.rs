@@ -104,13 +104,6 @@ fn default_azimuth() -> f32 {
     grana_display::DEFAULT_AZIMUTH
 }
 
-fn default_segment_model() -> String {
-    grana_scene::SegmentModel::preferred()
-        .expect("a build licenses at least one segmentation model")
-        .name()
-        .to_string()
-}
-
 fn default_elevation() -> f32 {
     grana_display::DEFAULT_ELEVATION
 }
@@ -1338,13 +1331,9 @@ pub enum SourceSpec {
     },
     Segments {
         channel: String,
-        cellprob: f32,
-        flow: f32,
+        foreground: f32,
+        density: f32,
         minimum_size: u32,
-        tile_overlap: u32,
-        slice_overlap: f32,
-        #[serde(default = "default_segment_model")]
-        model: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         seeds: Vec<Vec<[f32; 3]>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3222,23 +3211,15 @@ impl SourceSpec {
     pub fn segment(&self) -> Option<SegmentParams> {
         match self {
             Self::Segments {
-                cellprob,
-                flow,
+                foreground,
+                density,
                 minimum_size,
-                tile_overlap,
-                slice_overlap,
-                model,
                 ..
-            } => grana_scene::SegmentModel::from_name(model).map(|model| {
-                SegmentParams::with_settings(
-                    *cellprob,
-                    *flow,
-                    *minimum_size,
-                    *tile_overlap,
-                    *slice_overlap,
-                )
-                .with_model(model)
-            }),
+            } => Some(SegmentParams::with_settings(
+                *foreground,
+                *density,
+                *minimum_size,
+            )),
             _ => None,
         }
     }
@@ -3384,39 +3365,21 @@ impl SourceSpec {
             }
             Self::Segments {
                 channel,
-                cellprob,
-                flow,
+                foreground,
+                density,
                 minimum_size,
-                tile_overlap,
-                slice_overlap,
-                model,
                 seeds,
                 seed_source,
             } => {
                 validate(channel, &format!("the channel of {set}"))?;
-                if !(cellprob.is_finite() && (-10.0..=10.0).contains(cellprob)) {
-                    return invalid("needs a bounded cell probability threshold".to_string());
+                if !(foreground.is_finite() && (0.0..=1.0).contains(foreground)) {
+                    return invalid("needs a unit foreground threshold".to_string());
                 }
-                if !(flow.is_finite() && (0.0..=1.0).contains(flow)) {
-                    return invalid("needs a unit flow error threshold".to_string());
+                if !(density.is_finite() && (0.0..=10_000.0).contains(density)) {
+                    return invalid("needs a bounded density threshold".to_string());
                 }
                 if *minimum_size > 10_000 {
                     return invalid("needs a bounded minimum size".to_string());
-                }
-                if *tile_overlap > 192 {
-                    return invalid("needs a bounded tile overlap".to_string());
-                }
-                if !(slice_overlap.is_finite() && (0.0..=1.0).contains(slice_overlap)) {
-                    return invalid("needs a unit slice overlap".to_string());
-                }
-                let Some(model) = grana_scene::SegmentModel::from_name(model) else {
-                    return invalid("names an unknown segmentation model".to_string());
-                };
-                if !model.licensed() {
-                    return invalid(format!(
-                        "names the {} model, which this build is not licensed to run",
-                        model.label()
-                    ));
                 }
                 if seeds
                     .iter()

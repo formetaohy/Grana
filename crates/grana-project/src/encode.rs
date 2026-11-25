@@ -684,12 +684,9 @@ impl Encode for Provenance {
             Self::Detection => writer.u8(0),
             Self::Segmented { params } => {
                 writer.u8(6);
-                writer.f32(params.cellprob_threshold());
-                writer.f32(params.flow_threshold());
+                writer.f32(params.foreground_threshold());
+                writer.f32(params.density_threshold());
                 writer.count(params.minimum_size() as usize);
-                writer.count(params.tile_overlap() as usize);
-                writer.f32(params.slice_overlap());
-                writer.u8(params.model().index());
             }
             Self::Filtered { source, criteria } => {
                 writer.u8(1);

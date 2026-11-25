@@ -10,13 +10,9 @@ repository.workspace = true
 grana-file = { workspace = true }
 grana-dir = { workspace = true }
 grana-log = { workspace = true }
-grana-model = { workspace = true }
-sha2 = { workspace = true }
 thiserror = { workspace = true }
 ureq = { workspace = true }
-
-[features]
-commercial = ["grana-model/commercial"]
+xxhash-rust = { workspace = true }
 
 [lints]
 workspace = true
