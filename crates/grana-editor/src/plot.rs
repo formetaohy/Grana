@@ -1170,7 +1170,15 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
 }
 
 pub(crate) fn ripley_caption(language: Language, ripley: &Ripley) -> String {
-    let summary = grana_i18n::measure::ripley_summary(language, ripley.frames(), ripley.objects());
+    let census = ripley.census();
+    let mut summary =
+        grana_i18n::measure::ripley_summary(language, census.valid(), census.objects());
+    if census.single() > 0 {
+        summary = format!(
+            "{summary} · {}",
+            grana_i18n::measure::ripley_single(language, census.single())
+        );
+    }
     match ripley.test() {
         Some(test) => format!(
             "{summary} · {}",

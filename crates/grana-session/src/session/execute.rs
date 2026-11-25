@@ -1001,9 +1001,12 @@ impl Session {
                     }
                 }
                 Action::ObjectParameters => {
-                    self.cancel(Job::Recut(set));
-                    if self.recut.is_some_and(|(pending, _)| pending == set) {
-                        self.recut = None;
+                    let root = self.detection_root(set).unwrap_or(set);
+                    for target in [set, root] {
+                        self.cancel(Job::Recut(target));
+                        if self.recut.is_some_and(|(pending, _)| pending == target) {
+                            self.recut = None;
+                        }
                     }
                 }
                 Action::Track => {

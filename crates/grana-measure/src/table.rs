@@ -179,7 +179,7 @@ impl Aggregate {
             AggregateKind::Sum => "Sum".to_string(),
             AggregateKind::Minimum => "Min".to_string(),
             AggregateKind::Maximum => "Max".to_string(),
-            AggregateKind::Deviation => "SD (蟽)".to_string(),
+            AggregateKind::Deviation => "SD (σ)".to_string(),
             AggregateKind::Mad => "MAD".to_string(),
             AggregateKind::Quantile if self.percent == 50 => "Median".to_string(),
             AggregateKind::Quantile => format!("P{}", self.percent),
@@ -197,6 +197,13 @@ impl Aggregate {
             AggregateKind::Quantile if self.percent == 50 => "median".to_string(),
             AggregateKind::Quantile => format!("p{:02}", self.percent),
         }
+    }
+
+    pub fn fractional(self) -> bool {
+        !matches!(
+            self.kind,
+            AggregateKind::Sum | AggregateKind::Minimum | AggregateKind::Maximum
+        )
     }
 
     pub fn parse(key: &str) -> Option<Self> {
@@ -1822,7 +1829,7 @@ impl Molecule {
 
     fn spread(&self, axis: usize) -> f32 {
         if self.localizations < 2 {
-            return 0.0;
+            return f32::NAN;
         }
         let count = f64::from(self.localizations);
         let mean = self.sum[axis] / count;
@@ -2136,6 +2143,7 @@ fn spread_column(axis: usize) -> Column {
         Unit::Micrometer,
         4,
     )
+    .possibly_absent()
 }
 
 fn aggregated_measurements(kind: Kind, channels: usize) -> Vec<Measurement> {

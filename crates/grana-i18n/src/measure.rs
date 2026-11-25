@@ -203,6 +203,7 @@ messages! {
     distribution_title(column: &str) => "Distribution of {column}" / "{column} 分布";
     trend_title(column: &str) => "Trend of {column}" / "{column} 趋势";
     ripley_summary(frames: u32, objects: u64) => "{frames}f · {objects} objects" / "{frames} 帧 · {objects} 个对象";
+    ripley_single(single: u32) => "{single} single-object frames" / "{single} 帧仅一个对象";
     ripley_envelope(simulations: u32) => "CSR 95% · {simulations}" / "CSR 95% · {simulations}";
     ripley_test(p: &str, beyond: u32) => "p {p} · {beyond}" / "p {p} · {beyond}";
     radial_readout(radius: &str, value: &str, low: &str, high: &str, frames: u64) => "r {radius} µm · L − r {value} µm · CI {low}–{high} · {frames}f" / "r {radius} µm · L − r {value} µm · CI {low}–{high} · {frames} 帧";

@@ -55,9 +55,27 @@ pub struct Plan {
     pub region: Region,
 }
 
-pub(crate) struct Residency {
-    pub(crate) slots: usize,
-    pub(crate) level: usize,
+pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<grana_render::Detail, String> {
+    if plan.poses.is_empty() {
+        return Err("an export holds at least one pose".to_string());
+    }
+    let movie = matches!(plan.destination, Destination::Movie { .. });
+    assert!(
+        !movie || plan.size.height().is_multiple_of(2) && plan.size.width().is_multiple_of(2),
+        "a movie frame holds an even number of pixels"
+    );
+    let size = plan.size.to_array();
+    let mut detail = grana_render::Detail {
+        level: pyramid.level_count() - 1,
+        bricks: 0,
+    };
+    for pose in &plan.poses {
+        let camera = camera(&pose.camera);
+        let held = grana_render::residency(pyramid, &camera, size, plan.region);
+        detail.bricks = detail.bricks.max(held.detail.bricks);
+        detail.level = detail.level.min(held.detail.level);
+    }
+    Ok(detail)
 }
 
 pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
@@ -110,27 +128,6 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-pub(crate) fn residency(plan: &Plan, pyramid: &Pyramid) -> Result<Residency, String> {
-    if plan.poses.is_empty() {
-        return Err("an export holds at least one pose".to_string());
-    }
-    let movie = matches!(plan.destination, Destination::Movie { .. });
-    assert!(
-        !movie || plan.size.height().is_multiple_of(2) && plan.size.width().is_multiple_of(2),
-        "a movie frame holds an even number of pixels"
-    );
-    let size = plan.size.to_array();
-    let mut slots = 1usize;
-    let mut level = pyramid.level_count() - 1;
-    for pose in &plan.poses {
-        let camera = camera(&pose.camera);
-        let held = grana_render::residency(pyramid, &camera, size, plan.region);
-        slots = slots.max(held.slots);
-        level = level.min(held.detail.level);
-    }
-    Ok(Residency { slots, level })
 }
 
 pub(crate) fn detail_lens(poses: &[Pose], height: u32) -> Option<(Camera, u32)> {

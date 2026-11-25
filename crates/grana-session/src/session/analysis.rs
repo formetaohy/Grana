@@ -299,10 +299,17 @@ impl Session {
                             Job::Import(_) => {
                                 self.import_input(set).as_ref() != inputs[index].as_ref()
                             }
+                            Job::Recut(_) => !self.recut_current(index, set),
                             _ => false,
                         };
                         if !stale && let Some(scene) = self.scene.as_mut() {
                             scene.install(set, time, frame);
+                        }
+                        if matches!(job, Job::Recut(_)) {
+                            let input = if stale { None } else { self.recut_input(set) };
+                            if let Some(analysis) = self.analysis.get_mut(index) {
+                                analysis.update_input(input);
+                            }
                         }
                     }
                 }
@@ -534,8 +541,35 @@ impl Session {
                             }
                         }
                         Job::Recut(set) => {
-                            finished.push(job);
-                            recutted.push(set);
+                            if !self.recut_current(index, set) {
+                                let restart = self
+                                    .scene
+                                    .as_ref()
+                                    .and_then(|scene| scene.objects.get(set))
+                                    .filter(|object| object.detected() > 0)
+                                    .and_then(|object| match object.params() {
+                                        ObjectParams::Surfaces(params) => Some(params.cut()),
+                                        ObjectParams::Spots(_)
+                                        | ObjectParams::Filaments(_)
+                                        | ObjectParams::Cells(_) => None,
+                                    });
+                                match restart {
+                                    Some(cut) => {
+                                        self.recut = Some((set, cut));
+                                        self.message = Some(Message::info(
+                                            "the cut finished after the geometry or parameters it measured changed, so it restarted",
+                                        ));
+                                    }
+                                    None => {
+                                        self.message = Some(Message::info(
+                                            "the cut finished after the geometry it measured changed, so its result was discarded",
+                                        ));
+                                    }
+                                }
+                            } else {
+                                finished.push(job);
+                                recutted.push(set);
+                            }
                         }
                         Job::Track(_)
                         | Job::Coloc
@@ -796,6 +830,18 @@ impl Session {
             scene.end_replace(set);
         }
         fallback
+    }
+
+    fn recut_current(&self, index: usize, set: ObjectSetId) -> bool {
+        match (
+            self.analysis
+                .get(index)
+                .and_then(crate::job::Analysis::input),
+            self.recut_input(set),
+        ) {
+            (Some(held), Some(current)) => *held == current,
+            _ => false,
+        }
     }
 
     fn rollback(&mut self, state: grana_scene::SetState) -> bool {
@@ -1441,10 +1487,13 @@ impl Session {
         let fallback = scene.object_state(set);
         self.message = None;
         self.record_progress(Job::Recut(set), 0, 0, source.frames() as usize);
-        self.analysis.push(
-            crate::recut(Job::Recut(set), source, cut, 0, self.store(), ids)
-                .with_fallback(fallback),
-        );
+        let input = self.recut_input(set);
+        let analysis = crate::recut(Job::Recut(set), source, cut, 0, self.store(), ids)
+            .with_fallback(fallback);
+        self.analysis.push(match input {
+            Some(input) => analysis.keyed(input),
+            None => analysis,
+        });
     }
 
     pub(super) fn store(&self) -> Arc<SpillStore> {

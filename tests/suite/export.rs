@@ -342,3 +342,45 @@ fn exports_a_slice_view() {
         "the slice export fills the corner of the frame"
     );
 }
+
+#[test]
+fn reserves_only_the_memory_an_export_uses() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = export_volume();
+    let pyramid = volume.pyramid();
+    let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+    let size = output(WIDTH, false);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
+    let directory = Temp::new("export-claim");
+    let path = directory.path().join("claim.tif");
+    let plan = Plan {
+        destination: Destination::Image { path },
+        size,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            camera: camera.state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let ledger = Arc::new(grana_gpu::Ledger::new(1 << 30));
+    let mut context = Offline::new(
+        gpu.device().clone(),
+        gpu.queue().clone(),
+        TextureFormat::Rgba8Unorm,
+        &ledger,
+        512 << 20,
+        gpu.pipelines(),
+    );
+    match context.run(task(volume, plan), &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Complete { .. } => {}
+        Outcome::Failed { detail } => {
+            panic!("the export claims more memory than the residency it fills: {detail}")
+        }
+        Outcome::Cancelled => panic!("the export was cancelled"),
+    }
+}

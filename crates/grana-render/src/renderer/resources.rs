@@ -613,7 +613,7 @@ impl Placement<'_> {
     }
 }
 
-fn slot_bytes(pyramid: &Pyramid) -> u64 {
+pub(super) fn slot_bytes(pyramid: &Pyramid) -> u64 {
     let channels = pyramid.channel_count();
     let source = (0..pack_count(channels))
         .map(|pack| texels(components(channels, pack)) as u64)

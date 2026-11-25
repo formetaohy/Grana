@@ -43,7 +43,7 @@ impl Reservation {
     ) -> Result<Self, String> {
         match allocation {
             Allocation::Display(budget) => {
-                Ok(Self::display(pyramid, budget, slot_bytes, max_dimension))
+                Self::display(pyramid, budget, slot_bytes, max_dimension)
             }
             Allocation::Export { slots, ceiling } => {
                 Self::export(pyramid, slots, slot_bytes, max_dimension, ceiling)
@@ -51,10 +51,20 @@ impl Reservation {
         }
     }
 
-    fn display(pyramid: &Pyramid, budget: u64, slot_bytes: u64, max_dimension: u32) -> Self {
-        let record_limit = (budget / RECORD_SHARE / RECORD_BYTES).max(1) as usize;
-        let (start, plans) = BrickArena::plan(pyramid, record_limit)
-            .expect("the residency holds the coarsest brick level");
+    fn display(
+        pyramid: &Pyramid,
+        budget: u64,
+        slot_bytes: u64,
+        max_dimension: u32,
+    ) -> Result<Self, String> {
+        let limit = (budget / RECORD_SHARE / RECORD_BYTES) as usize;
+        let record_limit = limit.max(coarsest_count(pyramid));
+        let (start, plans) = BrickArena::plan(pyramid, record_limit).ok_or_else(|| {
+            format!(
+                "the brick residency cannot hold the {} records of the coarsest level",
+                coarsest_count(pyramid)
+            )
+        })?;
         assert!(
             start < pyramid.level_count(),
             "a planned arena names its first level"
@@ -66,14 +76,14 @@ impl Reservation {
             .ok()
             .filter(|slots| slots.capacity() <= (held / slot_bytes) as usize)
             .unwrap_or_else(|| Slots::fitting((held / slot_bytes) as usize, max_dimension));
-        Self {
+        Ok(Self {
             slots,
             record_limit,
             records,
             surface,
             atlas: slots.capacity() as u64 * slot_bytes,
             requested: budget,
-        }
+        })
     }
 
     fn export(
@@ -87,7 +97,7 @@ impl Reservation {
         let atlas = slots.capacity() as u64 * slot_bytes;
         let record_limit = brick_count(pyramid) + 1;
         let (_, records) = BrickArena::plan(pyramid, record_limit)
-            .expect("an export arena covers every brick level");
+            .ok_or_else(|| "the export arena cannot cover every brick level".to_string())?;
         let records = records as u64 * RECORD_BYTES;
         let surface = (atlas + records) / (SURFACE_SHARE - 1);
         let bytes = atlas + records + surface;
@@ -138,8 +148,11 @@ impl Reservation {
 }
 
 pub(crate) fn least(pyramid: &Pyramid, slot_bytes: u64) -> u64 {
-    let coarsest = BrickGrid::new(pyramid.level(pyramid.level_count() - 1).extent()).count() as u64;
-    slot_bytes * MINIMUM_SLOTS + coarsest * RECORD_BYTES
+    slot_bytes * MINIMUM_SLOTS + coarsest_count(pyramid) as u64 * RECORD_BYTES
+}
+
+fn coarsest_count(pyramid: &Pyramid) -> usize {
+    BrickGrid::new(pyramid.level(pyramid.level_count() - 1).extent()).count()
 }
 
 fn brick_count(pyramid: &Pyramid) -> usize {

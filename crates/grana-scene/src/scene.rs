@@ -821,12 +821,8 @@ impl Scene {
         }
     }
 
-    pub fn filtered_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.objects.filtered_dependents(id)
-    }
-
-    pub fn edited_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.objects.edited_dependents(id)
+    pub fn dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+        self.objects.dependents(id)
     }
 
     pub fn masked_object(
@@ -844,10 +840,6 @@ impl Scene {
 
     pub fn replan_masked(&mut self, id: ObjectSetId, strokes: Vec<MaskEdit>) -> bool {
         self.objects.replan_masked(id, strokes)
-    }
-
-    pub fn masked_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.objects.masked_dependents(id)
     }
 
     pub fn refresh_filtered(&mut self, id: ObjectSetId) -> Result<bool, String> {
@@ -1894,10 +1886,6 @@ impl Scene {
             stack.extend(set.seed_source());
         }
         false
-    }
-
-    pub fn seeded_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.objects.seeded_dependents(id)
     }
 
     pub fn seed_frames(&self, id: ObjectSetId) -> Vec<Vec<[f32; 3]>> {

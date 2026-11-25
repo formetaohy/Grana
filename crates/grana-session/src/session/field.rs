@@ -120,10 +120,10 @@ impl Session {
         let Some(scene) = self.scene.take() else {
             return Ok(());
         };
-        let Some(fingerprint) = self.fingerprint.take() else {
-            self.scene = Some(scene);
-            return Ok(());
-        };
+        let fingerprint = self
+            .fingerprint
+            .take()
+            .expect("a captured field names the dataset fingerprint it was opened with");
         let name = scene.dataset.name().to_string();
         let source = self.source_of(&scene.dataset, self.series_index);
         let view = self.current_view.take().map(|mut view| {
@@ -166,6 +166,7 @@ impl Session {
 
     pub(super) fn recover_field(&mut self, field: Field) {
         let Field {
+            fingerprint,
             scene,
             measure,
             history,
@@ -179,6 +180,7 @@ impl Session {
             baseline,
             ..
         } = field;
+        self.fingerprint = Some(fingerprint);
         self.scene = Some(scene);
         self.measure = measure;
         self.history = history;

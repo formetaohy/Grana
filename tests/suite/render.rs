@@ -1301,14 +1301,14 @@ fn fits_the_volume_level_to_the_residency_budget() {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         &crate::support::ledger(),
-        200 << 10,
+        1 << 20,
         gpu.pipelines(),
     );
     renderer
         .set_dataset(
             gpu.device(),
             &pyramid,
-            budget(200 << 10, [SIDE, SIDE]),
+            budget(1 << 20, [SIDE, SIDE]),
             [SIDE, SIDE],
         )
         .expect("the test budget holds the volume");
@@ -2794,7 +2794,7 @@ fn settle_time(
     }
 }
 
-const HOLLOW_BUDGET: u64 = 256 << 10;
+const HOLLOW_BUDGET: u64 = 2 << 20;
 const CLOSE_DISTANCE: f32 = 80.0;
 const OVERVIEW_DISTANCE: f32 = 240.0;
 

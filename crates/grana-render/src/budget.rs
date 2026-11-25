@@ -104,23 +104,34 @@ pub fn target_bytes(size: [u32; 2]) -> u64 {
     Frames::of(size, FrameDemand::full()).bytes()
 }
 
-pub(crate) fn split(total: u64, ceiling: u64, frames: Frames) -> Split {
+pub(crate) fn split(
+    total: u64,
+    ceiling: u64,
+    frames: Frames,
+    splats: u64,
+    size: [u32; 2],
+) -> Result<Split, String> {
     assert!(total > 0, "a renderer needs a positive texture budget");
     assert!(ceiling > 0, "a renderer keeps a positive residency ceiling");
     let single = frames.bytes();
-    let splats = splat_budget(total);
-    let held = total.saturating_sub(single).min(ceiling);
-    if held > splats {
-        return Split {
-            residency: held - splats,
-            frames: single,
-        };
+    if single.saturating_add(splats) >= total {
+        return Err(format!(
+            "a {} × {} view needs {:.1} MiB of frame targets and {:.1} MiB of splats, above the {:.1} MiB render budget; shorten the window or close running analyses",
+            size[0],
+            size[1],
+            single as f64 / (1u64 << 20) as f64,
+            splats as f64 / (1u64 << 20) as f64,
+            total as f64 / (1u64 << 20) as f64
+        ));
     }
-    let residency = (total / 4).max(1).min(ceiling);
-    Split {
+    let residency = total
+        .saturating_sub(single)
+        .saturating_sub(splats)
+        .min(ceiling);
+    Ok(Split {
         residency,
-        frames: total.saturating_sub(residency).saturating_sub(splats),
-    }
+        frames: single,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

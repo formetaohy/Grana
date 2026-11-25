@@ -446,18 +446,6 @@ impl Objects {
         })
     }
 
-    pub fn edited_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.sets
-            .iter()
-            .filter(|set| {
-                set.provenance()
-                    .editing()
-                    .is_some_and(|(source, _)| source == id)
-            })
-            .map(ObjectSet::id)
-            .collect()
-    }
-
     pub fn masked(
         &mut self,
         id: ObjectSetId,
@@ -492,18 +480,6 @@ impl Objects {
             set.set_provenance(Provenance::Masked { source, strokes });
             true
         })
-    }
-
-    pub fn masked_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.sets
-            .iter()
-            .filter(|set| {
-                set.provenance()
-                    .masking()
-                    .is_some_and(|(source, _)| source == id)
-            })
-            .map(ObjectSet::id)
-            .collect()
     }
 
     pub fn merge(&mut self, source: ObjectSetId, target: ObjectSetId) -> Result<(), String> {
@@ -595,16 +571,21 @@ impl Objects {
         Ok(())
     }
 
-    pub fn filtered_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
+    pub fn dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
         let mut ordered = Vec::new();
         let mut frontier = vec![id];
         while !frontier.is_empty() {
             let mut next = Vec::new();
             for set in &self.sets {
-                if let Provenance::Filtered { source, .. } = set.provenance()
-                    && frontier.contains(source)
-                    && !ordered.contains(&set.id())
-                {
+                let derived = set
+                    .provenance()
+                    .source()
+                    .filter(|_| !matches!(set.provenance(), Provenance::Copied { .. }))
+                    .is_some_and(|source| frontier.contains(&source))
+                    || set
+                        .seed_source()
+                        .is_some_and(|source| frontier.contains(&source));
+                if derived && !ordered.contains(&set.id()) {
                     ordered.push(set.id());
                     next.push(set.id());
                 }
@@ -612,14 +593,6 @@ impl Objects {
             frontier = next;
         }
         ordered
-    }
-
-    pub fn seeded_dependents(&self, id: ObjectSetId) -> Vec<ObjectSetId> {
-        self.sets
-            .iter()
-            .filter(|set| set.seed_source() == Some(id))
-            .map(ObjectSet::id)
-            .collect()
     }
 
     pub fn add_relation(&mut self, id: ObjectSetId, target: ObjectSetId, shift: i32) -> bool {

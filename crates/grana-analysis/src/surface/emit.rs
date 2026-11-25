@@ -162,7 +162,13 @@ impl Tile<'_> {
             .position(|candidate| *candidate == direction)
             .expect("a marching cubes edge runs along one of seven directions");
         let extent = plan.extent;
-        let linear = lower[0] + i64::from(extent[0]) * (lower[1] + i64::from(extent[1]) * lower[2]);
+        let shifted = [lower[0] + 1, lower[1] + 1, lower[2] + 1];
+        assert!(
+            shifted.iter().all(|value| *value >= 0),
+            "a marching cubes corner lies at or after the region boundary"
+        );
+        let linear = shifted[0]
+            + (i64::from(extent[0]) + 1) * (shifted[1] + (i64::from(extent[1]) + 1) * shifted[2]);
         let key = ((linear as u64) << 4) | slot as u64;
         if let Some(vertex) = self.edges.get(&key) {
             return *vertex;

@@ -227,14 +227,44 @@ impl RipleyPoint {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Census {
+    frames: u32,
+    valid: u32,
+    single: u32,
+    objects: u64,
+    sampled: u64,
+}
+
+impl Census {
+    pub fn frames(self) -> u32 {
+        self.frames
+    }
+
+    pub fn valid(self) -> u32 {
+        self.valid
+    }
+
+    pub fn single(self) -> u32 {
+        self.single
+    }
+
+    pub fn objects(self) -> u64 {
+        self.objects
+    }
+
+    pub fn sampled(self) -> u64 {
+        self.sampled
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ripley {
     points: Vec<RipleyPoint>,
     low: f32,
     high: f32,
     radius: f32,
-    frames: u32,
-    objects: u64,
+    census: Census,
     test: Option<RipleyTest>,
 }
 
@@ -255,12 +285,12 @@ impl Ripley {
         self.radius
     }
 
-    pub fn frames(&self) -> u32 {
-        self.frames
+    pub fn objects(&self) -> u64 {
+        self.census.objects
     }
 
-    pub fn objects(&self) -> u64 {
-        self.objects
+    pub fn census(&self) -> Census {
+        self.census
     }
 
     pub fn test(&self) -> Option<RipleyTest> {
@@ -319,24 +349,32 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         .collect::<Vec<_>>();
     let volume = window.volume();
     let mut samples = vec![Vec::<f64>::new(); RADII];
-    let mut objects = 0u64;
-    let mut estimated = 0u32;
+    let mut census = Census::default();
     let mut sampled = Vec::<Vec<[f32; 3]>>::new();
     for points in frames {
-        objects += points.len() as u64;
-        if points.len() < 2 {
+        census.frames += 1;
+        let inside = points
+            .iter()
+            .copied()
+            .filter(|point| window.contains(*point))
+            .collect::<Vec<_>>();
+        census.objects += inside.len() as u64;
+        if inside.len() < 2 {
+            census.single += 1;
             continue;
         }
-        let stride = points.len().div_ceil(SAMPLE_LIMIT).max(1);
+        let stride = inside.len().div_ceil(SAMPLE_LIMIT).max(1);
         let held = if stride > 1 {
-            points.iter().step_by(stride).copied().collect::<Vec<_>>()
+            inside.iter().step_by(stride).copied().collect::<Vec<_>>()
         } else {
-            points.clone()
+            inside
         };
         if held.len() < 2 {
+            census.single += 1;
             continue;
         }
-        estimated += 1;
+        census.valid += 1;
+        census.sampled += held.len() as u64;
         let values = frame_l(&held, window, radius, volume, step, &radii);
         for (order, value) in values.iter().enumerate() {
             if value.is_finite() {
@@ -345,7 +383,7 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         }
         sampled.push(held);
     }
-    if objects == 0 || estimated == 0 {
+    if census.objects == 0 || census.valid == 0 {
         return None;
     }
     let simulations = simulations(sampled.iter().map(|points| points.len() as u64).sum());
@@ -404,8 +442,7 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
         low,
         high,
         radius,
-        frames: estimated,
-        objects,
+        census,
         test,
     })
 }

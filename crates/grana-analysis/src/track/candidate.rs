@@ -117,9 +117,16 @@ fn divisions(
         let radius = detections.radius(last);
         let gate = detections.gate(last, reach as f32, step) + Vec3::splat(range);
         let mut nearby = Vec::new();
-        grid.near(predicted, gate, |target, _| nearby.push(target));
-        nearby.sort_unstable();
+        grid.near(predicted, gate, |target, distance| {
+            nearby.push((distance, target))
+        });
+        nearby
+            .sort_unstable_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
         nearby.truncate(PAIRS);
+        let nearby = nearby
+            .into_iter()
+            .map(|(_, target)| target)
+            .collect::<Vec<_>>();
         let motion = steadiness(detections, chains.points(source));
         for first in 0..nearby.len() {
             for second in first + 1..nearby.len() {

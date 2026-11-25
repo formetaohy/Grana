@@ -3,6 +3,8 @@ use grana_object::{IntensityTable, SampleStatistics, SurfaceStatistics, TrackId,
 use crate::column::{Column, Unit, area_key, length_key, speed_key, volume_key};
 use crate::table::Objects;
 
+const FRACTIONAL_DECIMALS: u8 = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Statistic {
     Mean,
@@ -379,11 +381,16 @@ impl Measurement {
         keys: &[String],
         aggregate: crate::table::Aggregate,
     ) -> Column {
+        let decimals = if aggregate.fractional() {
+            self.decimals().max(FRACTIONAL_DECIMALS)
+        } else {
+            self.decimals()
+        };
         Column::new(
             self.label(channels),
             format!("{}_{}", self.key(keys), aggregate.key()),
             self.unit(),
-            self.decimals(),
+            decimals,
         )
         .possibly_absent()
     }

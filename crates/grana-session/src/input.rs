@@ -1,5 +1,5 @@
 use grana_measure::{ColocPair, ColocSettings};
-use grana_object::TrackParams;
+use grana_object::{SurfaceCut, TrackParams};
 use grana_pipeline::Layout;
 use grana_scene::{Drift, MaskKey, ObjectParams, ObjectSetId, Revision, Scene};
 use grana_volume::Region;
@@ -10,6 +10,7 @@ pub enum Input {
     ObjectColoc(ObjectColocInput),
     Detect(DetectInput),
     Import(ImportInput),
+    Recut(RecutInput),
     Relation(RelationInput),
     Track(TrackInput),
     Drift(DriftInput),
@@ -89,6 +90,10 @@ impl Input {
         })
     }
 
+    pub fn recut(set: ObjectSetId, frames: Vec<Option<Revision>>, cut: SurfaceCut) -> Self {
+        Self::Recut(RecutInput { set, frames, cut })
+    }
+
     pub fn relation(
         source: ObjectSetId,
         target: ObjectSetId,
@@ -131,6 +136,13 @@ pub struct ImportInput {
     pub source: ImportSource,
     pub drifts: u64,
     pub registration: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecutInput {
+    pub set: ObjectSetId,
+    pub frames: Vec<Option<Revision>>,
+    pub cut: SurfaceCut,
 }
 
 #[derive(Clone, Debug, PartialEq)]

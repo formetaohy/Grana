@@ -342,28 +342,36 @@ impl Renderer {
         &mut self,
         device: &Device,
         pyramid: &Pyramid,
-        slots: usize,
+        detail: crate::Detail,
+        size: [u32; 2],
         ceiling: u64,
     ) -> Result<(), String> {
-        if !self.claim.resize(ceiling) {
+        let allocation = reserve::Allocation::Export {
+            slots: detail.bricks + 1,
+            ceiling,
+        };
+        let reservation = reserve::Reservation::of(
+            pyramid,
+            allocation,
+            resources::slot_bytes(pyramid),
+            device.limits().max_texture_dimension_3d,
+        )?;
+        let frames = budget::Frames::of(size, budget::FrameDemand::full());
+        let splats = budget::splat_budget(self.total);
+        let held = reservation
+            .bytes()
+            .saturating_add(frames.bytes())
+            .saturating_add(splats);
+        if !self.claim.resize(held) {
             return Err(format!(
-                "the graphics device cannot hold both the export and the running analyses, so the export cannot reserve its {:.1} MiB of brick residency",
-                ceiling as f64 / (1u64 << 20) as f64
+                "the graphics device cannot hold both the export and the running analyses, so the export cannot reserve its {:.1} MiB of textures",
+                held as f64 / (1u64 << 20) as f64
             ));
         }
-        if self.slots() < slots {
-            self.install(
-                device,
-                pyramid,
-                reserve::Allocation::Export { slots, ceiling },
-                Reset::Dataset,
-            )?;
+        if self.slots() < reservation.slots().capacity() || self.first_level() > detail.level {
+            self.install(device, pyramid, allocation, Reset::Dataset)?;
         }
-        self.frames = ceiling.saturating_sub(self.budget);
-        assert!(
-            self.frames > 0,
-            "an export holds room for its frame targets"
-        );
+        self.frames = frames.bytes();
         Ok(())
     }
 
@@ -445,7 +453,13 @@ impl Renderer {
             return Ok(());
         }
         self.demand = demand;
-        let split = budget::split(self.total, self.ceiling, budget::Frames::of(size, demand));
+        let split = budget::split(
+            self.total,
+            self.ceiling,
+            budget::Frames::of(size, demand),
+            self.splat_budget(),
+            size,
+        )?;
         self.frames = split.frames;
         self.settle()?;
         if split.residency.abs_diff(self.requested).saturating_mul(4) > self.total {
@@ -550,7 +564,9 @@ impl Renderer {
             self.total,
             self.ceiling,
             budget::Frames::of(size, self.demand),
-        );
+            self.splat_budget(),
+            size,
+        )?;
         self.install(
             device,
             pyramid,

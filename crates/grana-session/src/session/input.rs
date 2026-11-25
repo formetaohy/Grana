@@ -78,6 +78,21 @@ impl Session {
         ))
     }
 
+    pub(super) fn recut_input(&self, set: ObjectSetId) -> Option<Input> {
+        let scene = self.scene.as_ref()?;
+        let object = scene.objects.get(set)?;
+        let ObjectParams::Surfaces(params) = object.params() else {
+            return None;
+        };
+        Some(Input::recut(
+            set,
+            (0..object.frame_count())
+                .map(|time| object.frame_stamp(time))
+                .collect(),
+            params.cut(),
+        ))
+    }
+
     pub(super) fn relation_input(
         &self,
         source: ObjectSetId,

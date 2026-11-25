@@ -47,7 +47,7 @@ impl Distance {
             accumulated + weights[axis] * (dims[axis] * dims[axis]) as f64
         }) * metric
             + 1.0;
-        let limit = diagonal.sqrt();
+        let limit = diagonal.sqrt() * f64::from(SCALE * METRIC_SCALE);
         let reach = values
             .iter()
             .map(|value| f64::from(*value))

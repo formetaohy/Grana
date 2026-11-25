@@ -11,6 +11,13 @@ type Edited = Vec<grana_pipeline::run::EditedFrame>;
 type EditTask = Progress<Result<Edited, String>>;
 type EditStart = (EditTask, usize, usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refresh {
+    Filter,
+    Edit,
+    Seed,
+}
+
 #[derive(Default)]
 pub(super) struct Edits {
     queue: VecDeque<Queued>,
@@ -479,61 +486,60 @@ impl Session {
     }
 
     pub(super) fn refresh_dependents(&mut self, root: ObjectSetId) {
-        let (filtered, edited, seeded) = {
-            let Some(scene) = self.scene.as_ref() else {
-                return;
-            };
-            (
-                scene.filtered_dependents(root),
-                {
-                    let mut edited = scene.edited_dependents(root);
-                    edited.extend(scene.masked_dependents(root));
-                    edited
-                },
-                scene.seeded_dependents(root),
-            )
+        let dependents = match self.scene.as_ref() {
+            Some(scene) => scene.dependents(root),
+            None => return,
         };
-        let mut seeded = seeded;
-        for set in filtered {
-            let refreshed = self.scene.as_mut().map(|scene| scene.refresh_filtered(set));
-            match refreshed {
-                Some(Ok(true)) => {
-                    if let Some(scene) = self.scene.as_mut() {
-                        scene.clear_tracks(set);
-                    }
-                    self.defer_relations(set);
-                    self.resume_relations(set);
-                    self.start_tracks(set);
-                    if let Some(scene) = self.scene.as_ref() {
-                        seeded.extend(scene.seeded_dependents(set));
+        for set in dependents {
+            match self.refresh_kind(set) {
+                Some(Refresh::Filter) => {
+                    let refreshed = self.scene.as_mut().map(|scene| scene.refresh_filtered(set));
+                    match refreshed {
+                        Some(Ok(true)) => {
+                            if let Some(scene) = self.scene.as_mut() {
+                                scene.clear_tracks(set);
+                            }
+                            self.defer_relations(set);
+                            self.resume_relations(set);
+                            self.start_tracks(set);
+                        }
+                        Some(Ok(false)) => {}
+                        Some(Err(detail)) => {
+                            self.message = Some(Message::error(detail));
+                            return;
+                        }
+                        None => return,
                     }
                 }
-                Some(Ok(false)) => {}
-                Some(Err(detail)) => {
-                    self.message = Some(Message::error(detail));
-                    return;
+                Some(Refresh::Edit) => self.enqueue_edit(set, Rollback::Keep, Follow::Refresh),
+                Some(Refresh::Seed) => {
+                    if self.recipe.is_some() {
+                        return;
+                    }
+                    self.start_detect(set);
                 }
-                None => return,
+                None => {}
             }
-        }
-        for set in edited {
-            if !self.refresh_edited(set) {
-                return;
-            }
-        }
-        seeded.sort_unstable_by_key(|set| set.raw());
-        seeded.dedup();
-        for set in seeded {
-            if self.recipe.is_some() {
-                return;
-            }
-            self.start_detect(set);
         }
     }
 
-    pub(super) fn refresh_edited(&mut self, set: ObjectSetId) -> bool {
-        self.enqueue_edit(set, Rollback::Keep, Follow::Refresh);
-        true
+    fn refresh_kind(&self, set: ObjectSetId) -> Option<Refresh> {
+        let object = self.scene.as_ref()?.objects.get(set)?;
+        Some(match object.provenance() {
+            grana_scene::Provenance::Filtered { .. } => Refresh::Filter,
+            grana_scene::Provenance::Edited { .. } | grana_scene::Provenance::Masked { .. } => {
+                Refresh::Edit
+            }
+            grana_scene::Provenance::Detection
+            | grana_scene::Provenance::Segmented { .. }
+            | grana_scene::Provenance::Copied { .. } => {
+                object.seed_source().map(|_| Refresh::Seed)?
+            }
+            grana_scene::Provenance::Imported { .. }
+            | grana_scene::Provenance::Interop { .. }
+            | grana_scene::Provenance::Attached { .. }
+            | grana_scene::Provenance::Merged { .. } => return None,
+        })
     }
 
     pub(super) fn enqueue_edit(&mut self, set: ObjectSetId, rollback: Rollback, follow: Follow) {

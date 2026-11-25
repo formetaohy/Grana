@@ -280,6 +280,7 @@ impl<'a> Tile<'a> {
     }
 
     fn seed_label(&self, seed: [i64; 3]) -> Option<u32> {
+        let step = [0, 1, 2].map(|axis| i64::from(self.pass.plan.metric(axis)));
         let mut nearest: Option<(i64, u32)> = None;
         for dz in -super::SEED_SNAP..=super::SEED_SNAP {
             for dy in -super::SEED_SNAP..=super::SEED_SNAP {
@@ -292,7 +293,8 @@ impl<'a> Tile<'a> {
                     if label == EMPTY {
                         continue;
                     }
-                    let distance = dx * dx + dy * dy + dz * dz;
+                    let distance =
+                        (dx * step[0]).pow(2) + (dy * step[1]).pow(2) + (dz * step[2]).pow(2);
                     if nearest.is_none_or(|(current, _)| distance < current) {
                         nearest = Some((distance, label));
                     }

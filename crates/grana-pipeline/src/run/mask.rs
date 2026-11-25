@@ -385,11 +385,12 @@ fn rebuild(
     let mut start = 0;
     while start < extent[2] {
         let core = SLAB.min(extent[2] - start);
-        let span = [extent[0], extent[1], core];
+        let core_span = [extent[0], extent[1], core];
+        let span = [extent[0], extent[1], (core + 1).min(extent[2] - start)];
         let ranges = [
             origin[0]..origin[0] + extent[0],
             origin[1]..origin[1] + extent[1],
-            origin[2] + start..origin[2] + start + core,
+            origin[2] + start..origin[2] + start + span[2],
         ];
         let labels = labels(mask, origin, span, start);
         let mut data = Vec::with_capacity(channels);
@@ -408,7 +409,7 @@ fn rebuild(
         }
         builder.push(LabelSlab {
             origin: [origin[0], origin[1], origin[2] + start],
-            core: span,
+            core: core_span,
             extent: span,
             labels: &labels,
             channels: &data,

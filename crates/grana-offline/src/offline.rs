@@ -127,7 +127,7 @@ impl Offline {
         }
         if let Err(detail) =
             self.renderer
-                .reserve(&self.device, &pyramid, needed.slots, EXPORT_CEILING)
+                .reserve(&self.device, &pyramid, needed, size, EXPORT_CEILING)
         {
             return Outcome::Failed { detail };
         }

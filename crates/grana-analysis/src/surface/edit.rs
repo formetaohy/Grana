@@ -245,7 +245,7 @@ fn rebuild(
             accumulators: &aggregate.accumulators,
             triangles: &order[range],
         };
-        let Some(chunk) = cut::mesh_piece(topology, piece, false, None) else {
+        let Some(chunk) = cut::mesh_piece(topology, piece, true, None) else {
             return Err(format!(
                 "the edited object {object} carries no surface triangles"
             ));

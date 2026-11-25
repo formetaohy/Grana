@@ -207,7 +207,7 @@ fn sweep(mask: &[u8], grid: &Grid, distance: &mut [u16], offsets: &[Chamfer; 13]
                 if mask[index] == 0 {
                     continue;
                 }
-                let mut best = u16::MAX;
+                let mut best = distance[index];
                 for (offset, weight) in offsets {
                     let target = (index as isize
                         + offset[0] * stride[0] as isize

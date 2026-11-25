@@ -405,6 +405,7 @@ impl SurfaceBuilder {
             .placement
             .voxel_of(seed)
             .map(|value| (value - 0.5).round() as i64);
+        let step = [0, 1, 2].map(|axis| i64::from(self.metric(axis)));
         let mut nearest: Option<(i64, [i64; 3])> = None;
         for dz in -SEED_SNAP..=SEED_SNAP {
             for dy in -SEED_SNAP..=SEED_SNAP {
@@ -413,7 +414,8 @@ impl SurfaceBuilder {
                     if !solid.get(voxel, self.anchor) {
                         continue;
                     }
-                    let distance = dx * dx + dy * dy + dz * dz;
+                    let distance =
+                        (dx * step[0]).pow(2) + (dy * step[1]).pow(2) + (dz * step[2]).pow(2);
                     if nearest.is_none_or(|(current, _)| distance < current) {
                         nearest = Some((distance, voxel));
                     }

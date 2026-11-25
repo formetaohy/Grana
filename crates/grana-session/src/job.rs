@@ -31,6 +31,10 @@ impl Analysis {
         self.input.as_ref()
     }
 
+    pub fn update_input(&mut self, input: Option<Input>) {
+        self.input = input;
+    }
+
     pub fn keyed(self, input: Input) -> Self {
         Self {
             input: Some(input),
