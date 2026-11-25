@@ -22,6 +22,14 @@ impl Checkpoint {
         Ok(Self { reader })
     }
 
+    pub(crate) fn bytes(&self) -> u64 {
+        self.reader
+            .tensors()
+            .values()
+            .map(|tensor| (tensor.num_elements() * size_of::<f32>()) as u64)
+            .sum()
+    }
+
     pub(crate) fn shape(&self, name: &str) -> Result<Vec<usize>> {
         let tensor = self.reader.get(name).ok_or_else(|| missing(name))?;
         Ok(tensor.shape().to_vec())

@@ -56,7 +56,7 @@ impl Attention {
         })
     }
 
-    fn forward(&self, input: Tensor<4>) -> Tensor<4> {
+    fn forward(&self, input: Tensor<4>, queries: usize) -> Tensor<4> {
         let [batch, height, width, dimension] = input.dims();
         let tokens = height * width;
         let heads = self.heads;
@@ -92,14 +92,7 @@ impl Attention {
         } else {
             (query, height, width)
         };
-        let attended = burn::tensor::module::attention(
-            query,
-            key,
-            value,
-            None,
-            None,
-            burn::tensor::ops::AttentionModuleOptions::default(),
-        );
+        let attended = attend(query, key, value, queries);
         let attended =
             attended
                 .permute([0, 2, 1, 3])
@@ -108,6 +101,36 @@ impl Attention {
             .forward(attended)
             .reshape([batch, height, width, heads * head_dimension])
     }
+}
+
+fn attend(query: Tensor<4>, key: Tensor<4>, value: Tensor<4>, queries: usize) -> Tensor<4> {
+    let tokens = query.dims()[2];
+    if tokens <= queries {
+        return attention(query, key, value);
+    }
+    let mut parts = Vec::with_capacity(tokens.div_ceil(queries));
+    let mut start = 0;
+    while start < tokens {
+        let length = queries.min(tokens - start);
+        parts.push(attention(
+            query.clone().narrow(2, start, length),
+            key.clone(),
+            value.clone(),
+        ));
+        start += length;
+    }
+    Tensor::cat(parts, 2)
+}
+
+fn attention(query: Tensor<4>, key: Tensor<4>, value: Tensor<4>) -> Tensor<4> {
+    burn::tensor::module::attention(
+        query,
+        key,
+        value,
+        None,
+        None,
+        burn::tensor::ops::AttentionModuleOptions::default(),
+    )
 }
 
 struct Perceptron {
@@ -214,7 +237,7 @@ impl Block {
         })
     }
 
-    fn forward(&self, input: Tensor<4>) -> Tensor<4> {
+    fn forward(&self, input: Tensor<4>, queries: usize) -> Tensor<4> {
         let [batch, height, width, _] = input.dims();
         let normed = self.norm_one.forward(input.clone());
         let shortcut = if self.dim != self.dim_out {
@@ -248,7 +271,7 @@ impl Block {
         } else {
             (normed, height, width)
         };
-        let attended = self.attention.forward(windowed);
+        let attended = self.attention.forward(windowed, queries);
         let attended = if self.window > 0 {
             let window = if self.pool {
                 self.window / 2
@@ -349,8 +372,8 @@ impl Encoder {
         })
     }
 
-    pub(crate) fn forward(&self, input: Tensor<4>) -> Result<Tensor<4>> {
-        let stages = self.stages(input)?;
+    pub(crate) fn forward(&self, input: Tensor<4>, queries: usize) -> Result<Tensor<4>> {
+        let stages = self.stages(input, queries)?;
         let deep = stages
             .get(3)
             .ok_or_else(|| Error::inference("the encoder holds no deep stage"))?;
@@ -368,7 +391,7 @@ impl Encoder {
         Ok(shallow + deep)
     }
 
-    pub(crate) fn stages(&self, input: Tensor<4>) -> Result<Vec<Tensor<4>>> {
+    fn stages(&self, input: Tensor<4>, queries: usize) -> Result<Vec<Tensor<4>>> {
         let [_, channels, height, width] = input.dims();
         if channels != 3 {
             return Err(Error::inference(format!(
@@ -383,7 +406,7 @@ impl Encoder {
         let mut x = self.prelude(input);
         let mut stages = Vec::with_capacity(4);
         for (index, block) in self.blocks.iter().enumerate() {
-            x = block.forward(x);
+            x = block.forward(x, queries);
             if STAGE_ENDS.contains(&index) {
                 stages.push(x.clone().permute([0, 3, 1, 2]));
             }
@@ -393,20 +416,19 @@ impl Encoder {
 
     fn prelude(&self, input: Tensor<4>) -> Tensor<4> {
         let [_, _, height, width] = input.dims();
-        let mut x = burn::tensor::module::conv2d(
+        let x = burn::tensor::module::conv2d(
             input,
             self.patch_weight.clone(),
             Some(self.patch_bias.clone()),
             burn::tensor::ops::ConvOptions::new([4, 4], [3, 3], [1, 1], 1),
         )
         .permute([0, 2, 3, 1]);
-        x = x + position(
+        x + position(
             self.position.clone(),
             self.window_position.clone(),
             height / 4,
             width / 4,
-        );
-        x
+        )
     }
 }
 

@@ -1,4 +1,72 @@
-use grana_segment::{Settings, Volume};
+use grana_segment::{Segmenter, Settings, Volume};
+
+fn planes(width: u32, height: u32, depth: u32) -> Vec<Vec<f32>> {
+    let voxels = (width * height) as usize;
+    (0..depth)
+        .map(|z| {
+            let mut noise = noise(z);
+            (0..voxels)
+                .map(|index| {
+                    let x = (index % width as usize) as f32 / width as f32;
+                    let y = (index / width as usize) as f32 / height as f32;
+                    let blob = ((x - 0.5).powi(2) + (y - 0.5).powi(2)).sqrt();
+                    (1.0 - blob).max(0.0) + noise()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn noise(seed: u32) -> impl FnMut() -> f32 {
+    let mut state = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+    move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / 16_777_216.0 * 0.2
+    }
+}
+
+fn segmenter() -> Option<(Segmenter, std::path::PathBuf)> {
+    grana_gpu::Headless::shared().ok()?;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let path = grana_weight::weights(&cancel, &mut |_, _| {}).ok()?;
+    let segmenter = Segmenter::open(&path, Settings::for_depth(8)).ok()?;
+    Some((segmenter, path))
+}
+
+#[test]
+fn splitting_the_decode_keeps_every_label() {
+    let Some((segmenter, _)) = segmenter() else {
+        println!("no graphics device or weights, skipping");
+        return;
+    };
+    let (width, height, depth) = (256, 256, 8);
+    let planes = planes(width, height, depth);
+    let whole = segmenter
+        .plan(8, u64::MAX)
+        .expect("the whole plan fits an unbounded budget");
+    let split = segmenter
+        .plan(8, 4 << 30)
+        .expect("the split plan fits four gibibytes");
+    assert!(
+        split.bytes() < whole.bytes(),
+        "a bounded budget splits the decode further than an unbounded one"
+    );
+    let mut progress = |_| {};
+    let coarse = segmenter
+        .segment(&planes, width, height, whole, &mut progress)
+        .expect("the whole decode segments");
+    let fine = segmenter
+        .segment(&planes, width, height, split, &mut progress)
+        .expect("the split decode segments");
+    assert_eq!(coarse.width(), fine.width());
+    assert_eq!(coarse.height(), fine.height());
+    assert_eq!(coarse.depth(), fine.depth());
+    assert_eq!(
+        coarse.labels(),
+        fine.labels(),
+        "the stripes decode every voxel exactly like the whole surface"
+    );
+}
 
 fn two_objects() -> Volume {
     let labels = vec![1, 1, 0, 2, 1, 1, 0, 2, 1, 1, 0, 2, 1, 1, 0, 2];

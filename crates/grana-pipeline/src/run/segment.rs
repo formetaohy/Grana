@@ -195,21 +195,19 @@ impl Slicer<'_> {
             self.segmenter.voxel_budget(),
         );
         let ranges = expand(&core, margin, self.info);
-        let shape = [0, 1, 2].map(|axis| ranges[axis].end - ranges[axis].start);
-        let peak = self.segmenter.peak(shape);
-        let Some(_lease) = self.ledger.claim(Consumer::Inference, peak) else {
+        let plan = self
+            .segmenter
+            .plan(ranges[2].end - ranges[2].start, self.ledger.spare())
+            .map_err(|error| error.to_string())?;
+        let Some(_lease) = self.ledger.claim(Consumer::Inference, plan.bytes()) else {
             return Err(format!(
-                "segmentation needs {:.1} GiB of graphics memory for a {} x {} x {} voxel block, above the {:.1} GiB the renderer leaves free",
-                peak as f64 / (1u64 << 30) as f64,
-                shape[0],
-                shape[1],
-                shape[2],
-                self.ledger.spare() as f64 / (1u64 << 30) as f64,
+                "the segmentation plan cannot claim the {:.1} GiB of graphics memory it needs",
+                plan.bytes() as f64 / (1u64 << 30) as f64,
             ));
         };
         grana_log::info!(
             target: "grana::segment",
-            peak,
+            peak = plan.bytes(),
             measured = self.ledger.measured(),
             allowance = self.ledger.total(),
             "the segmentation reserves the graphics memory its block needs"
@@ -249,7 +247,7 @@ impl Slicer<'_> {
         }
         let mut volume = self
             .segmenter
-            .segment(&planes, width, height, progress)
+            .segment(&planes, width, height, plan, progress)
             .map_err(|error| format!("the segmentation model failed: {error}"))?;
         volume.filter(|[x, y, z]| {
             let position = [
