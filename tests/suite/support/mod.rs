@@ -525,7 +525,7 @@ pub fn read_localizations(
 
 pub fn versions() -> grana_render::Versions {
     let stamp = revision();
-    grana_render::Versions::new(stamp, stamp, stamp)
+    grana_render::Versions::new(stamp, stamp, stamp, stamp)
 }
 
 pub fn spheres(extent: Extent, spacing: Spacing, spheres: &[([f32; 3], f32)], peak: u16) -> Volume {

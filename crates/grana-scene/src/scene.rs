@@ -1144,6 +1144,16 @@ impl Scene {
         self.region.enabled().then_some(self.region)
     }
 
+    pub fn measure_bounds(&self) -> (Vec3, Vec3) {
+        match self.region_scope() {
+            Some(region) => region.bounds(),
+            None => {
+                let half = 0.5 * self.dataset.world_size();
+                (-half, half)
+            }
+        }
+    }
+
     pub fn set_clip(&mut self, clip: Clip) {
         self.clip = clip;
     }

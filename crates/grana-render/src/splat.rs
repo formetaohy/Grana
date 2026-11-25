@@ -639,10 +639,9 @@ impl SplatPasses {
             let entry = (chunk.key(), chunk.level());
             self.seen.insert(entry);
             count = count.max(chunk.len());
-            let fitted = self
-                .slots
-                .get(&entry)
-                .is_some_and(|slot| slot.capacity >= chunk.len());
+            let fitted = self.slots.get(&entry).is_some_and(|slot| {
+                chunk.len() <= slot.capacity && chunk.len().saturating_mul(2) >= slot.capacity
+            });
             if fitted {
                 if let Some(slot) = self.slots.get_mut(&entry) {
                     slot.write(queue, chunk.data(), &mut self.scratch);

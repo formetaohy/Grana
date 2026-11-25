@@ -297,6 +297,7 @@ pub fn frame(
     let mut topology = Digest::new();
     let mut classification = Digest::new();
     let mut appearance = Digest::new();
+    let mut splat_versions = Digest::new();
     let mut ordinal = 0usize;
     let mut base = 0u32;
     let time = scene.time();
@@ -325,7 +326,6 @@ pub fn frame(
         let choice = targets.splats[ordinal];
         ordinal += 1;
         topology.mix(detail.map_or(0, TriangleBudget::raw));
-        topology.mix(choice.digest());
         let mut seeded = Vec::new();
         let seed_sigma = seed_radius / grana_object::RADIUS_PER_SIGMA;
         let seed_color = srgb_to_linear(SEED_COLOR);
@@ -336,8 +336,8 @@ pub fn frame(
             let key = splat_key(set.id().raw(), SEED_PART);
             let stamp = seed_stamp(scene, set);
             let count = seeded.len();
-            topology.mix(key);
-            topology.mix(stamp);
+            splat_versions.mix(key);
+            splat_versions.mix(stamp);
             let chunk = SplatChunk::single(key, stamp, seeded);
             spend(&mut available, chunk.bytes(), "seed");
             splats.push(chunk);
@@ -363,12 +363,11 @@ pub fn frame(
             );
             spend(&mut available, prepared.used, "detection");
             for chunk in &prepared.chunks {
-                topology.mix(chunk.key());
-                topology.mix(u64::from(chunk.level()));
-                topology.flag(chunk.active());
-                classification.mix(chunk.data().geometry_stamp());
-                classification.mix(chunk.data().style_stamp());
-                appearance.mix(chunk.data().style_stamp());
+                splat_versions.mix(chunk.key());
+                splat_versions.mix(u64::from(chunk.level()));
+                splat_versions.flag(chunk.active());
+                splat_versions.mix(chunk.data().geometry_stamp());
+                splat_versions.mix(chunk.data().style_stamp());
             }
             splats.extend(prepared.chunks);
             members.push(prepared.members);
@@ -387,8 +386,8 @@ pub fn frame(
             if !highlight.geometry.is_empty() {
                 let key = splat_key(set.id().raw(), HIGHLIGHT_PART);
                 let stamp = highlight_stamp(scene, set);
-                topology.mix(key);
-                appearance.mix(stamp);
+                splat_versions.mix(key);
+                splat_versions.mix(stamp);
                 let chunk = SplatChunk::new(
                     key,
                     0,
@@ -537,6 +536,7 @@ pub fn frame(
             topology.finish(),
             classification.finish(),
             appearance.finish(),
+            splat_versions.finish(),
         ),
         channels,
         layers,

@@ -347,7 +347,7 @@ impl Protocol {
         let world = scene.dataset.world_size();
         scene.set_region(match self.region {
             Some(region) => region.region(world),
-            None => Region::none(),
+            None => Region::full(-0.5 * world, 0.5 * world),
         });
         scene.set_mask_radius(self.mask_radius);
         let mut builder = Builder {

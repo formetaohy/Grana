@@ -20,7 +20,10 @@ use grana_object::Mask;
 const MAX_STEP: u32 = 32;
 
 pub fn filament_level(pyramid: &Pyramid, budget: Budget) -> Option<usize> {
-    pyramid.fit_level(Region::none(), budget.filament_voxels())
+    pyramid.fit_level_by(budget.filament_voxels(), |index| {
+        let extent = pyramid.level(index).extent();
+        Some(u64::from(extent.x()) * u64::from(extent.y()) * u64::from(extent.z()))
+    })
 }
 
 pub fn filament_fits(info: Level, budget: Budget) -> bool {

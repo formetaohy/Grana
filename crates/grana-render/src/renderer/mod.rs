@@ -391,7 +391,6 @@ impl Renderer {
         }
         self.requested = proven;
         self.budget = resources.reserved();
-        self.settle();
         let surface = resources.surface_bytes();
         if let Some(meshes) = self.meshes.as_mut() {
             meshes.set_budget(surface);
@@ -419,14 +418,21 @@ impl Renderer {
         Ok(())
     }
 
-    fn settle(&mut self) {
+    fn settle(&mut self) -> Result<(), String> {
         let held = self
             .budget
             .saturating_add(self.frames)
             .saturating_add(self.splat_budget());
-        if held < self.claim.bytes() {
-            self.claim.resize(held);
+        if held == self.claim.bytes() {
+            return Ok(());
         }
+        if !self.claim.resize(held) {
+            return Err(format!(
+                "the renderer holds {:.1} MiB of textures and the running analyses leave no room for it",
+                held as f64 / (1u64 << 20) as f64
+            ));
+        }
+        Ok(())
     }
 
     fn fit(
@@ -441,7 +447,7 @@ impl Renderer {
         self.demand = demand;
         let split = budget::split(self.total, self.ceiling, budget::Frames::of(size, demand));
         self.frames = split.frames;
-        self.settle();
+        self.settle()?;
         if split.residency.abs_diff(self.requested).saturating_mul(4) > self.total {
             let pyramid = self.resources.as_ref().map(|held| held.pyramid.clone());
             if let Some(pyramid) = pyramid {
@@ -451,6 +457,7 @@ impl Renderer {
                     reserve::Allocation::Display(split.residency),
                     Reset::Residency,
                 )?;
+                self.settle()?;
             }
         }
         Ok(())
@@ -551,7 +558,7 @@ impl Renderer {
             Reset::Dataset,
         )?;
         self.frames = split.frames;
-        self.settle();
+        self.settle()?;
         Ok(())
     }
 

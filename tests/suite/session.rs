@@ -1174,6 +1174,40 @@ fn replays_a_captured_protocol() {
 }
 
 #[test]
+fn replays_an_analysis_box_that_still_covers_the_dataset() {
+    let volume = support::spheres(
+        Extent::new(16, 16, 8),
+        Spacing::new(1.0, 1.0, 1.0),
+        &[([4.0, 4.0, 2.0], 2.0), ([12.0, 12.0, 6.0], 2.0)],
+        HIGH,
+    );
+    let mut scene = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
+    let half = 0.5 * scene.dataset.world_size();
+    let spots = scene.add_object(ObjectKind::Spots, 0);
+    scene
+        .objects
+        .get_mut(spots)
+        .expect("the set exists")
+        .set_params(ObjectParams::Spots(SpotParams::new(0.5, 0.1)));
+    let protocol = Protocol::capture(&scene, &Measure::new(), None, Vec::new(), None)
+        .expect("a scene without an analysis box captures");
+    let restored = Protocol::from_toml(
+        &protocol
+            .to_toml()
+            .expect("the protocol serializes the missing analysis box"),
+    )
+    .expect("the protocol parses");
+    assert!(
+        restored.region().is_none(),
+        "a disabled analysis box stays out of the protocol"
+    );
+    let mut staged = Scene::new(Dataset::synthetic("fixture", volume.pyramid()));
+    restored.stage(&mut staged).expect("the protocol stages");
+    assert_eq!(staged.region, Region::full(-half, half));
+    assert_eq!(staged.measure_bounds(), (-half, half));
+}
+
+#[test]
 fn navigates_a_plate_field_by_field() {
     let temp = Temp::new("suite-plate-session");
     let root = temp.path().join("assay.ome.zarr");

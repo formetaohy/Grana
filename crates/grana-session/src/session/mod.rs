@@ -745,7 +745,7 @@ impl Session {
             return;
         }
         if !self.tasks.plotting() {
-            let (low, high) = scene.region.bounds();
+            let (low, high) = scene.measure_bounds();
             let window = grana_measure::Window::new(low.to_array(), high.to_array());
             if let Some(request) = self.measure.plot_request(window) {
                 self.tasks.start_plot(request);

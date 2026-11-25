@@ -353,6 +353,7 @@ impl Renderer {
             content: signature.content(),
             classification: signature.classification(),
             appearance: signature.appearance(),
+            splats: scene.versions.splats(),
             detail: signature.detail(),
             lens: signature::lens(&data),
             camera: Mat4::from_cols_array_2d(&data.view_projection),
@@ -375,6 +376,8 @@ impl Renderer {
             } else if let Some(passes) = meshes.as_mut() {
                 passes.clear();
             }
+        }
+        if started.resplatted || started.restaged || started.restyled {
             if shot.splats {
                 splats
                     .get_or_insert_with(|| SplatPasses::new(device, layouts, pipelines))

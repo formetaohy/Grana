@@ -323,10 +323,10 @@ pub(crate) fn ripley(frames: &[Vec<[f32; 3]>], window: Window) -> Option<Ripley>
     let mut estimated = 0u32;
     let mut sampled = Vec::<Vec<[f32; 3]>>::new();
     for points in frames {
+        objects += points.len() as u64;
         if points.len() < 2 {
             continue;
         }
-        objects += points.len() as u64;
         let stride = points.len().div_ceil(SAMPLE_LIMIT).max(1);
         let held = if stride > 1 {
             points.iter().step_by(stride).copied().collect::<Vec<_>>()

@@ -8,6 +8,7 @@ pub(super) struct Begin<'a> {
     pub(super) content: u64,
     pub(super) classification: u64,
     pub(super) appearance: u64,
+    pub(super) splats: u64,
     pub(super) detail: u64,
     pub(super) lens: u64,
     pub(super) camera: Mat4,
@@ -22,6 +23,7 @@ pub(super) struct Started {
     pub(super) refresh: bool,
     pub(super) restaged: bool,
     pub(super) restyled: bool,
+    pub(super) resplatted: bool,
     pub(super) moved: bool,
     pub(super) changed: bool,
     pub(super) snapshot: bool,
@@ -33,7 +35,7 @@ impl Started {
     }
 
     pub(super) fn recompacts(self) -> bool {
-        self.restart || self.restaged || self.restyled || self.moved
+        self.restart || self.restaged || self.restyled || self.resplatted || self.moved
     }
 
     pub(super) fn resets_age(self) -> bool {
@@ -49,6 +51,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         content,
         classification,
         appearance,
+        splats,
         detail,
         lens,
         camera,
@@ -70,12 +73,19 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
     let restart = target.layers != Some(layers);
     let restaged = target.classification != Some(classification);
     let restyled = target.appearance != Some(appearance);
+    let resplatted = target.splats != Some(splats);
     let redetailed = target.detail != Some(detail);
-    let refresh = restart || target.content != Some(content) || restaged || restyled || redetailed;
+    let refresh = restart
+        || target.content != Some(content)
+        || restaged
+        || restyled
+        || resplatted
+        || redetailed;
     target.layers = Some(layers);
     target.content = Some(content);
     target.classification = Some(classification);
     target.appearance = Some(appearance);
+    target.splats = Some(splats);
     target.detail = Some(detail);
     target.lens = Some(lens);
     target.camera = Some(camera);
@@ -88,6 +98,7 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         refresh,
         restaged,
         restyled,
+        resplatted,
         moved,
         changed,
         snapshot,

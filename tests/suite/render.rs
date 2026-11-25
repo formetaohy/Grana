@@ -547,7 +547,7 @@ fn restyles_and_hides_objects_without_rebuilding_the_meshes() {
             0,
         )];
         let scene = SceneFrame {
-            versions: grana_render::Versions::new(stamp, stamp, stamp),
+            versions: grana_render::Versions::new(stamp, stamp, stamp, stamp),
             channels: &channels,
             shading: Shading::default(),
             step_scale: 1.0,
@@ -603,7 +603,7 @@ fn restyles_and_hides_objects_without_rebuilding_the_meshes() {
     ]);
     let (restyled, tinted) = changed(
         selected,
-        grana_render::Versions::new(stamp, stamp, stamp.wrapping_add(1)),
+        grana_render::Versions::new(stamp, stamp, stamp.wrapping_add(1), stamp.wrapping_add(3)),
     );
     assert!(!restyled.rebuilt, "a style change rebuilt the mesh passes");
     assert!(
@@ -624,7 +624,12 @@ fn restyles_and_hides_objects_without_rebuilding_the_meshes() {
     ]);
     let (staged, cleared) = changed(
         hidden,
-        grana_render::Versions::new(stamp, stamp.wrapping_add(1), stamp.wrapping_add(2)),
+        grana_render::Versions::new(
+            stamp,
+            stamp.wrapping_add(1),
+            stamp.wrapping_add(2),
+            stamp.wrapping_add(3),
+        ),
     );
     assert!(
         !staged.rebuilt,
@@ -1583,6 +1588,97 @@ fn picked(gpu: &Gpu, renderer: &mut Renderer) -> PickId {
 }
 
 #[test]
+fn switches_a_splat_level_without_rebuilding_the_volume_passes() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = sphere_volume();
+    let pyramid = volume.pyramid();
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let markers = [
+        splat([0.0, 0.0, 0.1], 0.3, [1.0, 0.2, 0.2], 1.0),
+        splat([0.0, 0.5, 0.1], 0.3, [0.2, 0.2, 1.0], 1.0),
+    ];
+    let stamp = revision();
+    let coarse = [SplatChunk::new(
+        7,
+        1,
+        true,
+        grana_render::SplatLevel::of(stamp, vec![markers[0]]),
+    )];
+    let fine = [SplatChunk::new(
+        7,
+        3,
+        true,
+        grana_render::SplatLevel::of(stamp.wrapping_add(1), vec![markers[1]]),
+    )];
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let camera = slice_camera(&pyramid, 16);
+    let drawn = |renderer: &mut Renderer, chunks: &[SplatChunk], splats: u64, point: [f32; 3]| {
+        let scene = SceneFrame {
+            versions: grana_render::Versions::new(stamp, stamp, stamp, splats),
+            channels: &channels,
+            shading: Shading::default(),
+            step_scale: 0.5,
+            layers: &[],
+            splats: Splats::new(chunks),
+            overlays: &[],
+        };
+        let view = View {
+            target: &view_texture,
+            camera: &camera,
+            region: Region::none(),
+            scene: &scene,
+            viewport: WHOLE,
+            delivery: grana_render::Delivery::Immediate,
+        };
+        settle(&gpu, renderer, &view, &volume);
+        assert!(renderer.request_pick(gpu.device(), gpu.queue(), project(&camera, point)));
+        let picked = picked(&gpu, renderer);
+        let info = renderer
+            .draw(gpu.device(), gpu.queue(), frame(&view))
+            .expect("a splat level draws");
+        (info, picked)
+    };
+    let (first, coarse_pick) = drawn(&mut renderer, &coarse, stamp, [0.0, 0.0, 0.1]);
+    assert_eq!(
+        coarse_pick,
+        PickId::Splat {
+            key: 7,
+            level: 1,
+            index: 0
+        },
+        "the coarse level holds the marker the pick lands on"
+    );
+    let (second, fine_pick) = drawn(&mut renderer, &fine, stamp.wrapping_add(1), [0.0, 0.5, 0.1]);
+    assert!(
+        !first.rebuilt && !second.rebuilt,
+        "switching a splat level rebuilt the volume and mesh passes"
+    );
+    assert_eq!(
+        fine_pick,
+        PickId::Splat {
+            key: 7,
+            level: 3,
+            index: 0
+        },
+        "the finer level replaced the coarse one"
+    );
+    assert_eq!(
+        drawn(&mut renderer, &coarse, stamp, [0.0, 0.0, 0.1]).1,
+        PickId::Splat {
+            key: 7,
+            level: 1,
+            index: 0
+        },
+        "switching back to the coarse level uploads it again"
+    );
+}
+
+#[test]
 fn picks_only_the_objects_of_the_slice_plane() {
     let Some(gpu) = gpu() else {
         return;
@@ -2464,7 +2560,7 @@ fn reveals_the_surface_behind_a_moving_occluder() {
         0,
     )];
     let scene = SceneFrame {
-        versions: grana_render::Versions::new(stamp, stamp, stamp),
+        versions: grana_render::Versions::new(stamp, stamp, stamp, stamp),
         channels: &channels,
         shading: Shading::default(),
         step_scale: 1.0,

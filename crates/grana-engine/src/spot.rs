@@ -47,10 +47,6 @@ impl Choice {
             Self::Level(level) => level,
         }
     }
-
-    pub(crate) fn digest(self) -> u64 {
-        u64::from(self.level())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

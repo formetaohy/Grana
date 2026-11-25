@@ -46,14 +46,16 @@ pub struct Versions {
     topology: u64,
     classification: u64,
     appearance: u64,
+    splats: u64,
 }
 
 impl Versions {
-    pub fn new(topology: u64, classification: u64, appearance: u64) -> Self {
+    pub fn new(topology: u64, classification: u64, appearance: u64, splats: u64) -> Self {
         Self {
             topology,
             classification,
             appearance,
+            splats,
         }
     }
 
@@ -67,6 +69,10 @@ impl Versions {
 
     pub fn appearance(self) -> u64 {
         self.appearance
+    }
+
+    pub fn splats(self) -> u64 {
+        self.splats
     }
 }
 

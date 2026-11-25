@@ -9,8 +9,13 @@ use crate::spot::{self, Choice, Frame, LEVEL_COUNT};
 
 const WEIGHT_FRAMES: usize = 48;
 
+const COOLDOWN: u64 = 90;
+
+const KEEP_TIERS: usize = 2;
+
 pub struct SplatCache {
     sets: Vec<SetLevels>,
+    tick: u64,
 }
 
 impl Default for SplatCache {
@@ -21,7 +26,10 @@ impl Default for SplatCache {
 
 impl SplatCache {
     pub fn new() -> Self {
-        Self { sets: Vec::new() }
+        Self {
+            sets: Vec::new(),
+            tick: 0,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -89,6 +97,8 @@ impl SplatCache {
         let projected = range[0] != range[1];
         let present = (range[0]..=range[1]).any(|time| set.frame_stamp(time).is_some());
         let index = self.entry(set);
+        self.tick += 1;
+        let tick = self.tick;
         let entry = &mut self.sets[index];
         if !present {
             entry.levels = std::array::from_fn(|_| Level::default());
@@ -196,6 +206,11 @@ impl SplatCache {
                 spot::Kind::Cells => stamp_of(&[geometry, opacity]),
                 spot::Kind::Spots => stamp_of(&[data, shape, colored, appearance, opacity]),
             };
+            let refused = stamp_of(&[geometry, available]);
+            if level.refused == Some(refused) {
+                continue;
+            }
+            level.refused = None;
             if level
                 .geometry
                 .as_ref()
@@ -215,6 +230,7 @@ impl SplatCache {
                     cells: Arc::clone(&built.cells),
                     paint: built.paint,
                 });
+                level.style = None;
             }
             if level.style.as_ref().is_none_or(|held| held.stamp != style) {
                 let held = level
@@ -234,11 +250,16 @@ impl SplatCache {
             let bytes = grana_render::SPLAT_SLOT_BYTES
                 + held.cells.len() as u64 * grana_render::SPLAT_INSTANCE_BYTES;
             if held.cells.len() <= spot::SPLAT_LIMIT && bytes <= available {
+                level.used = tick;
                 chosen = Some((tier, bytes));
                 break;
             }
+            level.refused = Some(refused);
+            level.geometry = None;
+            level.style = None;
         }
         let Some((tier, used)) = chosen else {
+            entry.evict(tick, None);
             return Prepared {
                 chunks: Vec::new(),
                 members: SplatMembers {
@@ -260,21 +281,21 @@ impl SplatCache {
             .expect("the active level holds its styles");
         let mut members = std::array::from_fn(|_| None);
         members[tier as usize] = held.members.as_ref().map(Arc::clone);
+        let chunk = SplatChunk::new(
+            key,
+            tier,
+            true,
+            SplatLevel::new(
+                held.stamp,
+                held_style.stamp,
+                Arc::clone(&held.cells),
+                Arc::clone(&held_style.styles),
+            ),
+        )
+        .pickable(held.members.is_some());
+        entry.evict(tick, Some(tier));
         Prepared {
-            chunks: vec![
-                SplatChunk::new(
-                    key,
-                    tier,
-                    true,
-                    SplatLevel::new(
-                        held.stamp,
-                        held_style.stamp,
-                        Arc::clone(&held.cells),
-                        Arc::clone(&held_style.styles),
-                    ),
-                )
-                .pickable(held.members.is_some()),
-            ],
+            chunks: vec![chunk],
             members: SplatMembers {
                 key,
                 set: set.id(),
@@ -301,6 +322,30 @@ struct CachedStyle {
 struct Level {
     geometry: Option<CachedGeometry>,
     style: Option<CachedStyle>,
+    used: u64,
+    refused: Option<u64>,
+}
+
+impl SetLevels {
+    fn evict(&mut self, tick: u64, active: Option<u8>) {
+        let mut resident = self
+            .levels
+            .iter()
+            .enumerate()
+            .filter(|(tier, level)| {
+                Some(*tier as u8) != active && (level.geometry.is_some() || level.style.is_some())
+            })
+            .map(|(tier, level)| (level.used, tier))
+            .collect::<Vec<_>>();
+        resident.sort_unstable_by_key(|(used, tier)| (std::cmp::Reverse(*used), *tier));
+        for (rank, (used, tier)) in resident.into_iter().enumerate() {
+            if rank < KEEP_TIERS && tick.saturating_sub(used) <= COOLDOWN {
+                continue;
+            }
+            self.levels[tier].geometry = None;
+            self.levels[tier].style = None;
+        }
+    }
 }
 
 pub(crate) fn range(set: &ObjectSet, time: u32, frames: u32) -> [u32; 2] {
