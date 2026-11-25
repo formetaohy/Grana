@@ -39,7 +39,7 @@ impl Default for Shading {
         Self {
             ambient: 0.35,
             diffuse: 0.75,
-            shadows: 0.7,
+            shadows: 0.0,
             azimuth: DEFAULT_AZIMUTH,
             elevation: DEFAULT_ELEVATION,
         }

@@ -527,10 +527,9 @@ impl Encode for Visibility {
     fn encode(&self, writer: &mut Encoder<'_>) {
         match self {
             Self::All => writer.u8(0),
-            Self::Objects { mask, frames } => {
+            Self::Objects(ids) => {
                 writer.u8(1);
-                mask.encode(writer);
-                frames.encode(writer);
+                ids.encode(writer);
             }
             Self::Tracks(mask) => {
                 writer.u8(2);
@@ -824,20 +823,23 @@ impl Encode for RelationState {
 
 impl Encode for RelationFrame {
     fn encode(&self, writer: &mut Encoder<'_>) {
-        let objects = self.objects();
-        writer.count(objects);
-        for object in 0..objects {
-            writer.f32(self.distance(object));
-            writer.f32(self.center(object));
-            writer.f32(self.inside(object));
-            writer.f32(self.contact(object));
-            writer.u32(self.overlapping(object));
-            writer.u32(self.partner(object));
+        self.sources().encode(writer);
+        self.targets().encode(writer);
+        for source in self.sources().as_slice() {
+            let reading = self
+                .reading(*source)
+                .expect("a relation frame reads every object it names");
+            writer.f32(reading.distance());
+            writer.f32(reading.center());
+            writer.f32(reading.inside());
+            writer.f32(reading.contact());
+            writer.u32(reading.overlapping());
+            writer.u32(reading.partner().map_or(0, grana_object::ObjectId::raw));
         }
         writer.count(self.pairs().len());
         for pair in self.pairs() {
-            writer.u32(pair.source());
-            writer.u32(pair.target());
+            writer.u32(pair.source().raw());
+            writer.u32(pair.target().raw());
             writer.f32(pair.contact());
             writer.f32(pair.distance());
             writer.f32(pair.inside());

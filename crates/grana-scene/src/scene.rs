@@ -1116,9 +1116,9 @@ impl Scene {
 
     pub fn child_count(&self, parent: ObjectSetId, child: ObjectSetId) -> Option<usize> {
         let frame = self.objects.get(child)?.frame_shared(self.time)?;
-        let parents = self.objects.get(parent)?.object_count(self.time);
+        let parents = self.objects.get(parent)?.frame_shared(self.time)?;
         let query = self.objects.child(parent, child, self.time, &frame)?;
-        let values = query.values(parents, grana_measure::ChildField::Count);
+        let values = query.values(&parents.objects(), grana_measure::ChildField::Count);
         if values.iter().any(|value| !value.is_finite()) {
             return None;
         }

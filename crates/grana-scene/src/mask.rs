@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use grana_measure::RelationField;
-use grana_object::{RelationFrame, Roi, Shape};
+use grana_object::{ObjectId, RelationFrame, Roi, Shape};
 
 use crate::object_set::ObjectSetId;
 use crate::source::ObjectSource;
@@ -54,9 +54,9 @@ impl MaskFilter {
         self.range
     }
 
-    pub fn holds(self, frame: &RelationFrame, object: usize) -> bool {
-        let value = self.field.measure(frame, object);
-        value >= self.range[0] && value <= self.range[1]
+    pub fn holds(self, frame: &RelationFrame, source: ObjectId) -> bool {
+        let value = self.field.measure(frame, source);
+        value.is_finite() && value >= self.range[0] && value <= self.range[1]
     }
 }
 
@@ -116,6 +116,7 @@ impl MaskGate {
             return frame.shape().map(Some).map_err(|error| error.to_string());
         }
         let objects = frame.object_count();
+        let ids = frame.ids();
         let mut keep = (0..objects)
             .map(|object| self.source.visible_object(time, object))
             .collect::<Vec<_>>();
@@ -136,16 +137,14 @@ impl MaskGate {
                         relation.source, relation.target
                     )
                 })?;
-            if measured.objects() != objects {
+            if measured.sources() != ids {
                 return Err(format!(
-                    "the relation of {} to {} measures {} objects at frame {time} and the frame holds {objects}",
-                    relation.source,
-                    relation.target,
-                    measured.objects()
+                    "the relation of {} to {} measures other objects at frame {time} than the frame holds",
+                    relation.source, relation.target
                 ));
             }
-            for (object, kept) in keep.iter_mut().enumerate() {
-                *kept &= filter.holds(measured, object);
+            for (object, id) in ids.as_slice().iter().enumerate() {
+                keep[object] &= filter.holds(measured, *id);
             }
         }
         let frame = if keep.iter().all(|kept| *kept) {

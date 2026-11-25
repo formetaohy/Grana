@@ -83,10 +83,7 @@ impl Readoption {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Visibility {
     All,
-    Objects {
-        mask: Arc<Mask>,
-        frames: Arc<Vec<u32>>,
-    },
+    Objects(ObjectIds),
     Tracks(Arc<Mask>),
     Molecules {
         mask: Arc<Mask>,
@@ -94,14 +91,9 @@ pub enum Visibility {
     },
 }
 
-const ABSENT_ROW: u32 = u32::MAX;
-
 impl Visibility {
-    pub(crate) fn objects(mask: Arc<Mask>, frames: &[u32]) -> Self {
-        Self::Objects {
-            mask,
-            frames: Arc::new(frames.to_vec()),
-        }
+    pub(crate) fn objects(ids: ObjectIds) -> Self {
+        Self::Objects(ids)
     }
 
     pub(crate) fn molecules(mask: Arc<Mask>, rows: &HashMap<u32, u32>) -> Self {
@@ -772,13 +764,7 @@ impl ObjectSet {
         let relation = metric
             .relation()
             .and_then(|(target, shift)| self.relation(target, shift));
-        let frames = &self.frames;
-        metric.value(track, layer.set(), relation, |time, id| {
-            frames
-                .get(time as usize)
-                .and_then(FrameSlot::shared)
-                .and_then(|frame| frame.index_of(id))
-        })
+        metric.value(track, layer.set(), relation)
     }
 
     pub fn visible(&self) -> bool {
@@ -1600,16 +1586,7 @@ impl ObjectSet {
             return;
         }
         match &visibility {
-            Visibility::All => {}
-            Visibility::Objects { mask, frames } => {
-                assert_eq!(
-                    frames.len(),
-                    self.frames.len(),
-                    "the visibility covers every frame"
-                );
-                let objects = self.frames.iter().map(FrameSlot::objects).sum::<usize>();
-                assert_eq!(mask.rows(), objects, "the visibility covers every object");
-            }
+            Visibility::All | Visibility::Objects(_) => {}
             Visibility::Tracks(mask) => {
                 assert_eq!(
                     mask.rows(),
@@ -1649,11 +1626,10 @@ impl ObjectSet {
     pub fn filtered_object(&self, time: u32, object: usize) -> bool {
         match &self.visibility {
             Visibility::All => true,
-            Visibility::Objects { mask, frames } => frames
-                .get(time as usize)
-                .filter(|base| **base != ABSENT_ROW)
-                .and_then(|base| base.checked_add(u32::try_from(object).ok()?))
-                .is_some_and(|row| mask.contains(row as usize)),
+            Visibility::Objects(ids) => self
+                .frame_shared(time)
+                .and_then(|frame| frame.id_of(object))
+                .is_some_and(|id| ids.contains(id)),
             Visibility::Tracks(mask) => self
                 .frame_shared(time)
                 .and_then(|frame| frame.id_of(object))
@@ -1696,7 +1672,7 @@ impl ObjectSet {
     pub fn visible_track(&self, track: usize) -> bool {
         match &self.visibility {
             Visibility::Tracks(mask) => mask.contains(track),
-            Visibility::All | Visibility::Objects { .. } | Visibility::Molecules { .. } => true,
+            Visibility::All | Visibility::Objects(_) | Visibility::Molecules { .. } => true,
         }
     }
 

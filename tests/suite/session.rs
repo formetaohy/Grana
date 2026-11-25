@@ -779,10 +779,10 @@ fn round_trips_a_project() {
             ),
         )),
     );
-    let visibility = grana_scene::Visibility::Objects {
-        mask: std::sync::Arc::new(grana_measure::Mask::of(2, |row| row == 0)),
-        frames: std::sync::Arc::new(vec![0u32]),
-    };
+    let visibility = grana_scene::Visibility::Objects(grana_object::ObjectIds::block(
+        grana_object::ObjectId::FIRST,
+        1,
+    ));
     assert!(
         scene.objects.set_visibility(spots, visibility.clone()),
         "a statistics filter excludes the second spot"

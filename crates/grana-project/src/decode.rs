@@ -18,8 +18,9 @@ use grana_measure::{
 };
 use grana_object::{
     CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit,
-    MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair, SampleStatistics, Spot,
-    SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track, TrackLink, TrackNode, TrackSet,
+    MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair, RelationReading,
+    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
+    TrackLink, TrackNode, TrackSet,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
@@ -731,10 +732,7 @@ impl Decode for Visibility {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
         match reader.u8()? {
             0 => Ok(Self::All),
-            1 => Ok(Self::Objects {
-                mask: Arc::new(grana_measure::Mask::decode(reader)?),
-                frames: Arc::new(Vec::<u32>::decode(reader)?),
-            }),
+            1 => Ok(Self::Objects(decode_ids(reader)?)),
             2 => Ok(Self::Tracks(Arc::new(grana_measure::Mask::decode(reader)?))),
             3 => {
                 let mask = Arc::new(grana_measure::Mask::decode(reader)?);
@@ -764,14 +762,11 @@ fn validate_visibility(
 ) -> Result<(), &'static str> {
     let holds = match visibility {
         Visibility::All => true,
-        Visibility::Objects { mask, frames } => {
-            let objects = slots
+        Visibility::Objects(ids) => slots.iter().flatten().all(|frame| {
+            ids.as_slice()
                 .iter()
-                .flatten()
-                .map(grana_scene::Frame::objects)
-                .sum::<usize>();
-            frames.len() == slots.len() && mask.rows() == objects
-        }
+                .all(|id| frame.index_of(*id).is_some())
+        }),
         Visibility::Tracks(mask) => mask.rows() == tracks.map_or(0, TrackSet::len),
         Visibility::Molecules { mask, rows } => mask.rows() == rows.len(),
     };
@@ -1200,47 +1195,53 @@ impl Decode for RelationState {
 
 impl Decode for RelationFrame {
     fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
-        let count = reader.count(16)?;
-        let mut distance = Vec::with_capacity(count.min(1 << 16));
-        let mut center = Vec::with_capacity(count.min(1 << 16));
-        let mut inside = Vec::with_capacity(count.min(1 << 16));
-        let mut contact = Vec::with_capacity(count.min(1 << 16));
-        let mut overlapping = Vec::with_capacity(count.min(1 << 16));
-        let mut partner = Vec::with_capacity(count.min(1 << 16));
+        let sources = decode_ids(reader)?;
+        let targets = decode_ids(reader)?;
+        let count = sources.len();
+        let mut readings = Vec::with_capacity(count.min(1 << 16));
         for _ in 0..count {
             let reach = reader.f32()?;
             if reach.is_nan() || reach < 0.0 {
                 return Err(FAULT_VALUE);
             }
-            distance.push(reach);
             let span = reader.f32()?;
             if span.is_nan() || span < 0.0 {
                 return Err(FAULT_VALUE);
             }
-            center.push(span);
             let within = reader.f32()?;
             if !(0.0..=1.0).contains(&within) {
                 return Err(FAULT_VALUE);
             }
-            inside.push(within);
             let area = reader.f32()?;
             if !area.is_finite() || area < 0.0 {
                 return Err(FAULT_VALUE);
             }
-            contact.push(area);
-            overlapping.push(reader.u32()?);
-            partner.push(reader.u32()?);
+            let overlapping = reader.u32()?;
+            let partner = match ObjectId::from_raw(reader.u32()?) {
+                Some(id) if targets.contains(id) => Some(id),
+                Some(_) => return Err(FAULT_VALUE),
+                None => None,
+            };
+            readings.push(RelationReading::new(
+                reach,
+                span,
+                within,
+                area,
+                overlapping,
+                partner,
+            ));
         }
         let pairs = reader.count(24)?;
         let mut rows: Vec<RelationPair> = Vec::with_capacity(pairs.min(1 << 16));
         for _ in 0..pairs {
-            let source = reader.u32()?;
-            let target = reader.u32()?;
+            let source = ObjectId::from_raw(reader.u32()?).ok_or(FAULT_VALUE)?;
+            let target = ObjectId::from_raw(reader.u32()?).ok_or(FAULT_VALUE)?;
             let contact = reader.f32()?;
             let distance = reader.f32()?;
             let inside = reader.f32()?;
             let center = reader.f32()?;
-            if source as usize >= count
+            if !sources.contains(source)
+                || !targets.contains(target)
                 || rows.last().is_some_and(|previous| {
                     (previous.source(), previous.target()) >= (source, target)
                 })
@@ -1258,15 +1259,7 @@ impl Decode for RelationFrame {
                 source, target, contact, distance, inside, center,
             ));
         }
-        Ok(Self::new(
-            distance,
-            center,
-            inside,
-            contact,
-            overlapping,
-            partner,
-            rows,
-        ))
+        Ok(Self::new(sources, targets, readings, rows))
     }
 }
 

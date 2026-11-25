@@ -34,7 +34,7 @@ pub use params::{
     CellParams, FilamentParams, SpotParams, SurfaceCut, SurfaceFilter, SurfaceParams, TrackEvents,
     TrackParams,
 };
-pub use relation::{RelationFrame, RelationPair};
+pub use relation::{RelationFrame, RelationPair, RelationReading};
 pub use shape::Shape;
 pub use spot::{RADIUS_PER_SIGMA, Spot, SpotSet};
 pub use spot_page::SpotPage;

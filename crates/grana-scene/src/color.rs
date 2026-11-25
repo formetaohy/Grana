@@ -74,7 +74,9 @@ impl ObjectColor {
         match self {
             Self::Identity => object as f32,
             Self::Measurement(measurement) => measurement.value(objects, object),
-            Self::Relation { field, .. } => relation_value(field, relation, Some(object)),
+            Self::Relation { field, .. } => {
+                relation_value(field, relation, Some(objects.id(object)))
+            }
             Self::Child { .. } => {
                 panic!("a child aggregate is read from the objects of its parent set")
             }

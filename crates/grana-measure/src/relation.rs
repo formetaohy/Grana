@@ -1,4 +1,4 @@
-use grana_object::RelationFrame;
+use grana_object::{ObjectId, RelationFrame};
 
 use crate::column::{Column, Unit, area_key, length_key};
 
@@ -99,32 +99,29 @@ impl RelationField {
         )
     }
 
-    pub fn value(self, row: RelationRow<'_>, object: usize) -> f32 {
+    pub fn value(self, row: RelationRow<'_>, source: ObjectId) -> f32 {
         let Some(frame) = row.frame() else {
-            return self.missing();
+            return f32::INFINITY;
         };
-        self.measure(frame, object)
+        self.measure(frame, source)
     }
 
-    pub fn measure(self, frame: &RelationFrame, object: usize) -> f32 {
-        assert!(
-            object < frame.objects(),
-            "the relation measures the object it is read from"
-        );
-        match self {
-            Self::Distance => frame.distance(object),
-            Self::Center => frame.center(object),
-            Self::Inside => 100.0 * frame.inside(object),
-            Self::Partner => frame.partner(object) as f32,
-            Self::Contact => frame.contact(object),
-            Self::Overlapping => frame.overlapping(object) as f32,
+    pub fn measure(self, frame: &RelationFrame, source: ObjectId) -> f32 {
+        let Some(reading) = frame.reading(source) else {
+            return f32::INFINITY;
+        };
+        if !reading.distance().is_finite() {
+            return f32::INFINITY;
         }
-    }
-
-    fn missing(self) -> f32 {
         match self {
-            Self::Distance | Self::Center => f32::INFINITY,
-            Self::Inside | Self::Partner | Self::Contact | Self::Overlapping => 0.0,
+            Self::Distance => reading.distance(),
+            Self::Center => reading.center(),
+            Self::Inside => 100.0 * reading.inside(),
+            Self::Partner => reading
+                .partner()
+                .map_or(f32::INFINITY, |id| id.raw() as f32),
+            Self::Contact => reading.contact(),
+            Self::Overlapping => reading.overlapping() as f32,
         }
     }
 }

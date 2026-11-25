@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+﻿use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_display::{CATEGORICAL as PALETTE, Extent};
-use grana_measure::{Child, ObjectColoc, RelationField, UNASSIGNED};
+use grana_measure::{Child, ObjectColoc, RelationField};
 use grana_object::{MaskEdit, ObjectId, RelationFrame, SurfaceEdit, TrackSet};
 
 use crate::alignment::LocalizationAlignment;
@@ -1139,7 +1139,7 @@ impl Objects {
         let relation = set.relation(parent, 0)?;
         let members = relation
             .frame(time)
-            .filter(|relation| relation.objects() == frame.object_count())
+            .filter(|relation| relation.sources() == frame.ids())
             .map(members_of);
         Some(Child::new(
             set.key().as_str(),
@@ -1208,10 +1208,15 @@ impl Objects {
                 let relation = set
                     .relation(target, shift)
                     .and_then(|relation| relation.frame(time));
+                let objects = frame.objects();
                 Some(
                     (0..frame.object_count())
                         .map(|object| {
-                            crate::track_color::relation_value(field, relation, Some(object))
+                            crate::track_color::relation_value(
+                                field,
+                                relation,
+                                Some(objects.id(object)),
+                            )
                         })
                         .collect(),
                 )
@@ -1219,7 +1224,7 @@ impl Objects {
             ObjectColor::Child { target, field } => {
                 let child_frame = self.get(target)?.frame_shared(time)?;
                 let child = self.child(id, target, time, &child_frame)?;
-                Some(child.values(frame.object_count(), field))
+                Some(child.values(&frame.objects(), field))
             }
             ObjectColor::Coloc { pair, metric } => {
                 let coloc = set.object_coloc().filter(|coloc| coloc.pair() == pair)?;
@@ -1416,11 +1421,11 @@ impl Objects {
         let set = self.get(id)?;
         match metric {
             ObjectColor::Child { target, field } => {
-                let parents = set.frame_shared(time)?.object_count();
+                let parents = set.frame_shared(time)?;
                 let child_frame = self.get(target)?.frame_shared(time)?;
                 let values = self
                     .child(id, target, time, &child_frame)?
-                    .values(parents, field);
+                    .values(&parents.objects(), field);
                 extent_of(&values)
             }
             ObjectColor::Coloc { .. } | ObjectColor::Score => {
@@ -1483,14 +1488,16 @@ impl Objects {
     }
 }
 
-pub(crate) fn members_of(relation: &RelationFrame) -> Vec<u32> {
-    (0..relation.objects())
-        .map(|object| {
-            if relation.inside(object) > 0.0 && relation.partner(object) > 0 {
-                relation.partner(object) - 1
-            } else {
-                UNASSIGNED
-            }
+pub(crate) fn members_of(relation: &RelationFrame) -> Vec<Option<ObjectId>> {
+    relation
+        .sources()
+        .as_slice()
+        .iter()
+        .map(|source| {
+            relation
+                .reading(*source)
+                .filter(|reading| reading.inside() > 0.0)
+                .and_then(grana_object::RelationReading::partner)
         })
         .collect()
 }

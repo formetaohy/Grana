@@ -41,13 +41,7 @@ impl TrackColor {
         self.relation().map(|(target, _)| target)
     }
 
-    pub fn value(
-        self,
-        track: usize,
-        set: &TrackSet,
-        relation: Option<&Relation>,
-        index_of: impl Fn(u32, ObjectId) -> Option<usize>,
-    ) -> f32 {
+    pub fn value(self, track: usize, set: &TrackSet, relation: Option<&Relation>) -> f32 {
         match self {
             Self::Measurement(measurement) => measurement.value(track, set),
             Self::Relation {
@@ -56,11 +50,11 @@ impl TrackColor {
                 let (Some(entry), Some(relation)) = (set.track(track), relation) else {
                     return f32::NAN;
                 };
-                let mut values = Vec::with_capacity(entry.nodes().len());
-                for node in entry.nodes() {
-                    let object = index_of(node.time(), node.id());
-                    values.push(relation_value(field, relation.frame(node.time()), object));
-                }
+                let values = entry
+                    .nodes()
+                    .iter()
+                    .map(|node| relation_value(field, relation.frame(node.time()), Some(node.id())))
+                    .collect::<Vec<_>>();
                 aggregate.apply(&values).present().unwrap_or(f32::NAN)
             }
         }
@@ -70,10 +64,13 @@ impl TrackColor {
 pub(crate) fn relation_value(
     field: RelationField,
     frame: Option<&RelationFrame>,
-    object: Option<usize>,
+    object: Option<ObjectId>,
 ) -> f32 {
     match (frame, object) {
-        (Some(frame), Some(object)) if object < frame.objects() => field.measure(frame, object),
+        (Some(frame), Some(id)) => {
+            let value = field.measure(frame, id);
+            if value.is_finite() { value } else { f32::NAN }
+        }
         _ => f32::NAN,
     }
 }

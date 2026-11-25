@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::channels::Channels;
 use grana_analysis::local::field_bytes;
 use grana_analysis::{
-    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, RelationRun,
-    SeedPolicy, Sources, SpotScanner, SurfaceBuilder, SurfaceScan, coloc_sampling, filament_level,
-    relate_frames, spot_level, surface_level,
+    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, ObjectColocScan, ObjectShape,
+    RelationRun, SeedPolicy, Sources, SpotScanner, SurfaceBuilder, SurfaceScan, coloc_sampling,
+    filament_level, relate_frames, spot_level, surface_level,
 };
 use grana_measure::{ColocPair, ColocSettings, ObjectColoc, ObjectColocValue};
 use grana_object::{LabelRaster, ObjectIdSource, Roi, SurfaceSet};
@@ -204,11 +204,10 @@ pub fn relation(
         done: 0,
         total,
     });
-    let source_counts = source.counts();
     let frames = match relate_frames(
-        &source_counts[..total],
-        |time| shape(source.frame(time as u32)),
-        |time| shape(target.frame(time as u32)),
+        total,
+        |time| object_shape(source.frame(time as u32)),
+        |time| object_shape(target.frame(time as u32)),
         RelationRun {
             shift: request.shift,
             gate: request.gate,
@@ -243,11 +242,12 @@ pub fn relation(
     sink(Event::Done);
 }
 
-fn shape(frame: Option<Arc<ObjectFrame>>) -> Result<Option<grana_object::Shape>, String> {
+fn object_shape(frame: Option<Arc<ObjectFrame>>) -> Result<Option<ObjectShape>, String> {
     let Some(frame) = frame else {
         return Ok(None);
     };
-    frame.shape().map(Some).map_err(|error| error.to_string())
+    let shape = frame.shape().map_err(|error| error.to_string())?;
+    Ok(Some(ObjectShape::new(shape, frame.ids().clone())))
 }
 
 pub struct ColocRequest {

@@ -1,4 +1,4 @@
-mod child;
+﻿mod child;
 mod classifier;
 mod cluster;
 mod coloc;
@@ -22,7 +22,7 @@ mod significance;
 mod spatial;
 mod table;
 
-pub use child::{Child, ChildField, ChildMetric, UNASSIGNED};
+pub use child::{Child, ChildField, ChildMetric};
 pub use classifier::{Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL};
 pub use cluster::{ClusterSample, ClusteredWelch};
 pub use coloc::{

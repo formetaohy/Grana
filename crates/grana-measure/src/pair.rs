@@ -52,24 +52,23 @@ impl PairExport {
     }
 
     pub fn push(&mut self, time: u32, frame: &RelationFrame) {
-        let objects = frame.objects();
         for pair in frame.pairs() {
-            let source = pair.source() as usize;
-            let target = pair.target() as usize;
-            assert!(source < objects, "a relation pair names its source object");
+            let overlapping = frame
+                .reading(pair.source())
+                .map_or(0, grana_object::RelationReading::overlapping);
             self.text.push_str(&csv::line(&[
                 &(time + 1).to_string(),
                 &format!("{:.3}", time as f32 * self.interval),
                 &self.source,
                 &self.target,
-                &(source + 1).to_string(),
-                &(target + 1).to_string(),
+                &pair.source().raw().to_string(),
+                &pair.target().raw().to_string(),
                 if pair.contact() > 0.0 { "1" } else { "0" },
                 &format!("{:.3}", pair.contact()),
                 &format!("{:.3}", pair.distance()),
                 &format!("{:.2}", 100.0 * pair.inside()),
                 &format!("{:.3}", pair.center()),
-                &frame.overlapping(source).to_string(),
+                &overlapping.to_string(),
             ]));
         }
     }

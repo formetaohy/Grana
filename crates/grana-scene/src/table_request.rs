@@ -140,7 +140,7 @@ impl FrameSource for TableSource {
                         .members
                         .get(time as usize)
                         .and_then(Option::as_deref)
-                        .filter(|relation| relation.objects() == frame.object_count())
+                        .filter(|relation| relation.sources() == frame.ids())
                         .map(members_of)
                 });
                 Child::new(

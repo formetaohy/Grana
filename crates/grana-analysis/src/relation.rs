@@ -3,13 +3,43 @@ use std::sync::atomic::AtomicBool;
 
 use glam::Vec3;
 use grana_geometry::{Bvh, PackedMesh, Primitive};
-use grana_object::{RelationFrame, RelationPair, Shape};
+use grana_object::{ObjectIds, RelationFrame, RelationPair, RelationReading, Shape};
 
 use crate::schedule::Delivery;
+
+#[derive(Clone)]
+pub struct ObjectShape {
+    shape: Shape,
+    ids: ObjectIds,
+}
+
+impl ObjectShape {
+    pub fn new(shape: Shape, ids: ObjectIds) -> Self {
+        assert_eq!(
+            ids.len(),
+            shape.objects(),
+            "the ids of a shape name every object it holds"
+        );
+        Self { shape, ids }
+    }
+
+    pub fn shape(&self) -> &Shape {
+        &self.shape
+    }
+
+    pub fn ids(&self) -> &ObjectIds {
+        &self.ids
+    }
+
+    fn into_parts(self) -> (Shape, ObjectIds) {
+        (self.shape, self.ids)
+    }
+}
 
 pub struct Reference {
     bvh: Bvh,
     centers: Vec<Vec3>,
+    ids: ObjectIds,
 }
 
 #[derive(Default)]
@@ -30,7 +60,12 @@ impl Touch {
 }
 
 impl Reference {
-    pub fn new(shape: &Shape) -> Self {
+    pub fn new(shape: &Shape, ids: ObjectIds) -> Self {
+        assert_eq!(
+            ids.len(),
+            shape.objects(),
+            "the ids of a reference name every object it measures"
+        );
         let centers = match shape {
             Shape::Spots(spots) => spots.iter().map(|spot| Vec3::from(spot.center())).collect(),
             Shape::Mesh(mesh) => (0..mesh.object_count())
@@ -46,7 +81,7 @@ impl Reference {
                     .map(|(index, spot)| (index as u32, Primitive::ellipsoid(spot.ellipsoid()))),
             ),
         };
-        Self { bvh, centers }
+        Self { bvh, centers, ids }
     }
 
     fn centroid(mesh: &PackedMesh, object: usize) -> Vec3 {
@@ -76,27 +111,31 @@ impl Reference {
         self.bvh.is_empty()
     }
 
-    pub fn relate(&self, source: &Shape, gate: f32, same: bool) -> RelationFrame {
+    pub fn relate(&self, source: &ObjectShape, gate: f32, same: bool) -> RelationFrame {
         assert!(
             gate.is_finite() && gate >= 0.0,
             "the contact gate of a relation is a length"
         );
+        let ObjectShape { shape, ids } = source;
         if self.is_empty() {
-            return RelationFrame::empty(sources(source));
+            return RelationFrame::empty(ids.clone(), self.ids.clone());
         }
-        match source {
-            Shape::Spots(spots) => self.relate_spots(spots, gate, same),
-            Shape::Mesh(mesh) => self.relate_mesh(mesh, gate, same),
+        match shape {
+            Shape::Spots(spots) => self.relate_spots(spots, ids, gate, same),
+            Shape::Mesh(mesh) => self.relate_mesh(mesh, ids, gate, same),
         }
     }
 
-    fn relate_spots(&self, spots: &[grana_object::Spot], gate: f32, same: bool) -> RelationFrame {
-        let mut distance = Vec::with_capacity(spots.len());
-        let mut center = Vec::with_capacity(spots.len());
-        let mut inside = Vec::with_capacity(spots.len());
-        let mut contact = Vec::with_capacity(spots.len());
-        let mut overlapping = Vec::with_capacity(spots.len());
-        let mut partner = Vec::with_capacity(spots.len());
+    fn relate_spots(
+        &self,
+        spots: &[grana_object::Spot],
+        ids: &ObjectIds,
+        gate: f32,
+        same: bool,
+    ) -> RelationFrame {
+        let targets = self.ids.as_slice();
+        let sources = ids.as_slice();
+        let mut readings = Vec::with_capacity(spots.len());
         let mut pairs = Vec::with_capacity(spots.len());
         for (index, spot) in spots.iter().enumerate() {
             let point = Vec3::from(spot.center());
@@ -108,57 +147,57 @@ impl Reference {
             } else {
                 cap(spot.equivalent_radius(), reach, gate)
             };
-            distance.push(reach);
-            center.push(if measured {
+            let center = if measured {
                 point.distance(self.centers[object as usize])
             } else {
                 f32::INFINITY
-            });
-            inside.push(if contained { 1.0 } else { 0.0 });
-            contact.push(touched);
-            overlapping.push(u32::from(contained));
-            partner.push(if measured { object + 1 } else { 0 });
+            };
+            let partner = measured.then(|| targets[object as usize]);
+            readings.push(RelationReading::new(
+                reach,
+                center,
+                if contained { 1.0 } else { 0.0 },
+                touched,
+                u32::from(contained),
+                partner,
+            ));
             if measured {
                 pairs.push(RelationPair::new(
-                    index as u32,
-                    object,
+                    sources[index],
+                    targets[object as usize],
                     touched,
                     reach,
                     if contained { 1.0 } else { 0.0 },
-                    point.distance(self.centers[object as usize]),
+                    center,
                 ));
             }
         }
-        RelationFrame::new(
-            distance,
-            center,
-            inside,
-            contact,
-            overlapping,
-            partner,
-            pairs,
-        )
+        pairs.sort_unstable_by_key(|pair| (pair.source(), pair.target()));
+        RelationFrame::new(ids.clone(), self.ids.clone(), readings, pairs)
     }
 
-    fn relate_mesh(&self, mesh: &PackedMesh, gate: f32, same: bool) -> RelationFrame {
-        let mut distance = Vec::with_capacity(mesh.object_count());
-        let mut center = Vec::with_capacity(mesh.object_count());
-        let mut inside = Vec::with_capacity(mesh.object_count());
-        let mut contact = Vec::with_capacity(mesh.object_count());
-        let mut overlapping = Vec::with_capacity(mesh.object_count());
-        let mut partner = Vec::with_capacity(mesh.object_count());
+    fn relate_mesh(
+        &self,
+        mesh: &PackedMesh,
+        ids: &ObjectIds,
+        gate: f32,
+        same: bool,
+    ) -> RelationFrame {
+        let sources = ids.as_slice();
+        let targets = self.ids.as_slice();
+        let mut readings = Vec::with_capacity(mesh.object_count());
         let mut pairs = Vec::new();
         let mut votes: HashMap<u32, u32> = HashMap::new();
         let mut touches: HashMap<u32, Touch> = HashMap::new();
         let mut reaches: Vec<f32> = Vec::new();
-        let mut targets: Vec<u32> = Vec::new();
+        let mut nearest_of: Vec<u32> = Vec::new();
         let mut contained: Vec<bool> = Vec::new();
-        for object in 0..mesh.object_count() {
+        for (object, source) in sources.iter().enumerate().take(mesh.object_count()) {
             let group = mesh.groups()[object];
             let vertices = group.vertex_count() as usize;
             let triangles = group.index_count() as usize / 3;
             reaches.clear();
-            targets.clear();
+            nearest_of.clear();
             contained.clear();
             let skipped = same.then_some(object as u32);
             let mut sum = Vec3::ZERO;
@@ -172,7 +211,7 @@ impl Reference {
                 sum += point;
                 let (value, target, holds) = self.measure(point, skipped);
                 reaches.push(value);
-                targets.push(target);
+                nearest_of.push(target);
                 contained.push(holds);
                 if holds {
                     within += 1;
@@ -205,7 +244,7 @@ impl Reference {
                 };
                 let touched = area_of(mesh.triangle(object, triangle));
                 area += touched;
-                if let Some(touch) = touches.get_mut(&targets[owner as usize]) {
+                if let Some(touch) = touches.get_mut(&nearest_of[owner as usize]) {
                     touch.contact += touched as f32;
                 }
             }
@@ -219,36 +258,30 @@ impl Reference {
             } else {
                 sum / vertices as f32
             };
-            distance.push(reach);
-            center.push(chosen.map_or(f32::INFINITY, |target| {
+            let center = chosen.map_or(f32::INFINITY, |target| {
                 centroid.distance(self.centers[target as usize])
-            }));
-            inside.push(within as f32 / vertices.max(1) as f32);
-            contact.push(area as f32);
-            overlapping.push(votes.len() as u32);
-            partner.push(chosen.map_or(0, |target| target + 1));
-            let start = pairs.len();
+            });
+            readings.push(RelationReading::new(
+                reach,
+                center,
+                within as f32 / vertices.max(1) as f32,
+                area as f32,
+                votes.len() as u32,
+                chosen.map(|target| targets[target as usize]),
+            ));
             for (target, touch) in touches.drain() {
                 pairs.push(RelationPair::new(
-                    object as u32,
-                    target,
+                    *source,
+                    targets[target as usize],
                     touch.contact,
                     touch.distance,
                     touch.inside as f32 / vertices.max(1) as f32,
                     centroid.distance(self.centers[target as usize]),
                 ));
             }
-            pairs[start..].sort_by_key(|pair| pair.target());
         }
-        RelationFrame::new(
-            distance,
-            center,
-            inside,
-            contact,
-            overlapping,
-            partner,
-            pairs,
-        )
+        pairs.sort_unstable_by_key(|pair| (pair.source(), pair.target()));
+        RelationFrame::new(ids.clone(), self.ids.clone(), readings, pairs)
     }
 
     fn measure(&self, point: Vec3, skipped: Option<u32>) -> (f32, u32, bool) {
@@ -285,10 +318,6 @@ fn cap(radius: f32, reach: f32, gate: f32) -> f32 {
     std::f32::consts::TAU * radius * height
 }
 
-fn sources(shape: &Shape) -> usize {
-    shape.objects()
-}
-
 pub struct RelationRun<'a> {
     pub shift: i32,
     pub gate: f32,
@@ -299,9 +328,9 @@ pub struct RelationRun<'a> {
 }
 
 pub fn relate_frames(
-    counts: &[Option<usize>],
-    source: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
-    target: impl Fn(usize) -> Result<Option<Shape>, String> + Sync,
+    total: usize,
+    source: impl Fn(usize) -> Result<Option<ObjectShape>, String> + Sync,
+    target: impl Fn(usize) -> Result<Option<ObjectShape>, String> + Sync,
     run: RelationRun<'_>,
 ) -> Result<Option<Vec<Option<RelationFrame>>>, String> {
     let RelationRun {
@@ -312,7 +341,6 @@ pub fn relate_frames(
         cancel,
         progress,
     } = run;
-    let total = counts.len();
     let workers = crate::schedule::workers(workers);
     let mut frames = (0..total).map(|_| None).collect::<Vec<_>>();
     let mut done = 0usize;
@@ -328,14 +356,20 @@ pub fn relate_frames(
             let Some(index) = shifted(time, shift, total) else {
                 return Ok(None);
             };
-            let Some(place) = target(index)? else {
-                return Ok(counts[time].map(RelationFrame::empty));
+            let Some(source) = source(time)? else {
+                return Ok(None);
             };
-            let shape = source(time)?;
-            let reference = Reference::new(&place);
-            drop(place);
+            let Some(target) = target(index)? else {
+                return Ok(Some(RelationFrame::empty(
+                    source.ids().clone(),
+                    ObjectIds::empty(),
+                )));
+            };
+            let (shape, ids) = target.into_parts();
+            let reference = Reference::new(&shape, ids);
+            drop(shape);
             let same = same && shift == 0;
-            Ok(shape.map(|shape| reference.relate(&shape, gate, same)))
+            Ok(Some(reference.relate(&source, gate, same)))
         },
         |delivery| match delivery {
             Delivery::Progress { .. } => Ok(()),

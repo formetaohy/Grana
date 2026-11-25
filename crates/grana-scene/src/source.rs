@@ -6,8 +6,6 @@ use crate::frame::Frame;
 use crate::object::ObjectFrame;
 use crate::object_set::Visibility;
 
-const ABSENT_ROW: u32 = u32::MAX;
-
 pub struct ObjectSource {
     frames: Vec<Option<Frame>>,
     visibility: Visibility,
@@ -107,11 +105,7 @@ impl ObjectSource {
     pub fn filtered_object(&self, time: u32, object: usize) -> bool {
         match &self.visibility {
             Visibility::All => true,
-            Visibility::Objects { mask, frames } => frames
-                .get(time as usize)
-                .filter(|base| **base != ABSENT_ROW)
-                .and_then(|base| base.checked_add(u32::try_from(object).ok()?))
-                .is_some_and(|row| mask.contains(row as usize)),
+            Visibility::Objects(ids) => self.id_of(time, object).is_some_and(|id| ids.contains(id)),
             Visibility::Tracks(mask) => {
                 let Some(id) = self.id_of(time, object) else {
                     return false;
@@ -178,7 +172,7 @@ impl ObjectSource {
                 .group()
                 .and_then(|group| rows.get(&group).copied())
                 .is_some_and(|row| mask.contains(row as usize)),
-            Visibility::All | Visibility::Objects { .. } | Visibility::Tracks(_) => {
+            Visibility::All | Visibility::Objects(_) | Visibility::Tracks(_) => {
                 self.filtered_object(time, object)
             }
         };

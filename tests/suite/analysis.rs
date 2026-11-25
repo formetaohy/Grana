@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use grana_analysis::localization::{LocalizationFilter, LocalizationSpec};
 use grana_analysis::{
-    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, Reference, Sources, SpotScanner,
-    SurfaceBuilder, TrackLinker, coloc_sampling,
+    Budget, ChannelSet, ColocScan, ColocScanConfig, FilamentScan, ObjectShape, Reference, Sources,
+    SpotScanner, SurfaceBuilder, TrackLinker, coloc_sampling,
 };
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_geometry::{Bounds, Mesh, MeshVertex};
@@ -501,42 +501,45 @@ fn extract_surfaces_at(
 fn relates_objects_by_surface_centre_and_neighbours() {
     let pair = relation_surfaces(&[([20.0, 32.0, 24.0], 8.0), ([52.0, 32.0, 24.0], 8.0)]);
     assert_eq!(pair.object_count(), 2, "each ball is one object");
+    let ids = pair.ids().clone();
     let mesh = pair.geometry().expect("the pair carries geometry");
-    let neighbours =
-        Reference::new(&Shape::mesh(mesh.clone())).relate(&Shape::mesh(mesh), 0.0, true);
-    assert_eq!(neighbours.objects(), 2);
+    let neighbours = Reference::new(&Shape::mesh(mesh.clone()), ids.clone()).relate(
+        &ObjectShape::new(Shape::mesh(mesh), ids.clone()),
+        0.0,
+        true,
+    );
+    assert_eq!(neighbours.sources().len(), 2);
     assert_eq!(
         neighbours.pairs().len(),
         2,
         "each neighbour names its partner as a pair"
     );
     for object in 0..2 {
+        let id = ids.get(object).expect("the pair names its objects");
+        let partner = ids
+            .get(1 - object)
+            .expect("the pair names the neighbour of its objects");
+        let reading = neighbours
+            .reading(id)
+            .expect("the relation reads the object it measures");
         assert!(
-            (neighbours.center(object) - 6.4).abs() < 0.3,
+            (reading.center() - 6.4).abs() < 0.3,
             "the neighbours sit {} apart",
-            neighbours.center(object)
+            reading.center()
         );
         assert!(
-            (neighbours.distance(object) - 3.2).abs() < 0.3,
+            (reading.distance() - 3.2).abs() < 0.3,
             "the surfaces sit {} apart",
-            neighbours.distance(object)
+            reading.distance()
         );
-        assert_eq!(
-            neighbours.overlapping(object),
-            0,
-            "the balls do not overlap"
-        );
-        assert_eq!(neighbours.partner(object), if object == 0 { 2 } else { 1 });
+        assert_eq!(reading.overlapping(), 0, "the balls do not overlap");
+        assert_eq!(reading.partner(), Some(partner));
         let pair = neighbours
             .pairs()
             .iter()
-            .find(|pair| pair.source() as usize == object)
+            .find(|pair| pair.source() == id)
             .expect("the object keeps one pair");
-        assert_eq!(
-            pair.target(),
-            u32::from(object == 0),
-            "the pair points at the neighbour"
-        );
+        assert_eq!(pair.target(), partner, "the pair points at the neighbour");
         assert!(
             (pair.distance() - 3.2).abs() < 0.3,
             "the pair sits {} apart",
@@ -554,31 +557,37 @@ fn relates_objects_by_surface_centre_and_neighbours() {
     let first = relation_surfaces(&[([24.0, 32.0, 24.0], 8.0)]);
     let second = relation_surfaces(&[([26.0, 32.0, 24.0], 8.0)]);
     let source = Shape::mesh(first.geometry().expect("the source carries geometry"));
-    let overlap = Reference::new(&Shape::mesh(
-        second.geometry().expect("the target carries geometry"),
-    ))
-    .relate(&source, 0.0, false);
+    let source_id = first.ids().get(0).expect("the source carries its id");
+    let target_id = second.ids().get(0).expect("the target carries its id");
+    let overlap = Reference::new(
+        &Shape::mesh(second.geometry().expect("the target carries geometry")),
+        second.ids().clone(),
+    )
+    .relate(&ObjectShape::new(source, first.ids().clone()), 0.0, false);
+    let reading = overlap
+        .reading(source_id)
+        .expect("the overlap reads its source");
     assert_eq!(
-        overlap.overlapping(0),
+        reading.overlapping(),
         1,
         "the source lies inside its partner"
     );
-    assert_eq!(overlap.partner(0), 1);
+    assert_eq!(reading.partner(), Some(target_id));
     assert!(
-        overlap.inside(0) > 0.3,
+        reading.inside() > 0.3,
         "only {} of the source lies inside",
-        overlap.inside(0)
+        reading.inside()
     );
     assert!(
-        overlap.center(0) < 0.8,
+        reading.center() < 0.8,
         "the overlapped centres sit {} apart",
-        overlap.center(0)
+        reading.center()
     );
-    assert_eq!(overlap.distance(0), 0.0, "an overlapping surface touches");
+    assert_eq!(reading.distance(), 0.0, "an overlapping surface touches");
     let pair = overlap.pairs().first().expect("the overlap keeps a pair");
-    assert_eq!(pair.target(), 0);
+    assert_eq!(pair.target(), target_id);
     assert!(
-        (pair.inside() - overlap.inside(0)).abs() < 1.0e-6,
+        (pair.inside() - reading.inside()).abs() < 1.0e-6,
         "the pair carries the containment of its object"
     );
     assert!(
@@ -594,21 +603,32 @@ fn relates_objects_by_surface_centre_and_neighbours() {
     );
 
     let far = relation_surfaces(&[([52.0, 32.0, 24.0], 8.0)]);
-    let apart = Reference::new(&Shape::mesh(
-        far.geometry().expect("the distant ball carries geometry"),
-    ))
-    .relate(&source, 0.0, false);
+    let apart = Reference::new(
+        &Shape::mesh(far.geometry().expect("the distant ball carries geometry")),
+        far.ids().clone(),
+    )
+    .relate(
+        &ObjectShape::new(
+            Shape::mesh(first.geometry().expect("the source carries geometry")),
+            first.ids().clone(),
+        ),
+        0.0,
+        false,
+    );
+    let reading = apart
+        .reading(source_id)
+        .expect("the distance reads its source");
     assert!(
-        (apart.center(0) - 5.6).abs() < 0.3,
+        (reading.center() - 5.6).abs() < 0.3,
         "the centres sit {} apart",
-        apart.center(0)
+        reading.center()
     );
     assert!(
-        (apart.distance(0) - 2.4).abs() < 0.3,
+        (reading.distance() - 2.4).abs() < 0.3,
         "the surfaces sit {} apart",
-        apart.distance(0)
+        reading.distance()
     );
-    assert_eq!(apart.overlapping(0), 0);
+    assert_eq!(reading.overlapping(), 0);
     let pair = apart.pairs().first().expect("the distance keeps a pair");
     assert!(
         (pair.distance() - 2.4).abs() < 0.3,
@@ -616,27 +636,37 @@ fn relates_objects_by_surface_centre_and_neighbours() {
         pair.distance()
     );
 
-    let surface = Reference::new(&Shape::mesh(
-        first.geometry().expect("the ball carries geometry"),
-    ));
+    let surface = Reference::new(
+        &Shape::mesh(first.geometry().expect("the ball carries geometry")),
+        first.ids().clone(),
+    );
+    let beads = grana_object::ObjectIds::block(grana_object::ObjectId::FIRST, 1);
+    let bead = beads.get(0).expect("the bead carries its id");
     let measure = |reach: f32, gate: f32| {
-        let frame = surface.relate(&Shape::spots(approaching(reach)), gate, false);
-        (frame.distance(0), frame.contact(0))
+        let frame = surface.relate(
+            &ObjectShape::new(Shape::spots(approaching(reach)), beads.clone()),
+            gate,
+            false,
+        );
+        let reading = frame
+            .reading(bead)
+            .expect("the bead lies in the measured frame");
+        (reading.distance(), reading.contact())
     };
     let (reach, area) = measure(0.3, 0.0);
     assert!(
         (reach - 0.3).abs() < 0.15,
-        "the bead sits {reach:.2} 碌m from the surface"
+        "the bead sits {reach:.2} µm from the surface"
     );
     let expected = std::f32::consts::TAU * BEAD * (BEAD - reach);
     assert!(
         (area - expected).abs() < 0.6,
-        "the cut bead shares {area:.2} 碌m铏?against {expected:.2}"
+        "the cut bead shares {area:.2} µm² against {expected:.2}"
     );
     let (_, gated) = measure(0.3, 0.5);
     assert!(
         gated > area + 1.0,
-        "a wider gate shares {gated:.2} 碌m铏?against {area:.2}"
+        "a wider gate shares {gated:.2} µm² against {area:.2}"
     );
     let (_, apart) = measure(3.0, 0.0);
     assert_eq!(apart, 0.0, "a bead beyond its reach shares no face");

@@ -1,10 +1,8 @@
-use grana_object::SampleAccumulator;
+use grana_object::{ObjectId, SampleAccumulator};
 
 use crate::column::{Column, Unit, area_key, length_key, volume_key};
 use crate::metric::{Measurement, Statistic};
 use crate::table::Objects;
-
-pub const UNASSIGNED: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChildMetric {
@@ -328,7 +326,7 @@ pub struct Child<'a> {
     name: &'a str,
     fields: Vec<ChildField>,
     objects: Option<Objects<'a>>,
-    members: Option<Vec<u32>>,
+    members: Option<Vec<Option<ObjectId>>>,
 }
 
 impl<'a> Child<'a> {
@@ -337,7 +335,7 @@ impl<'a> Child<'a> {
         name: &'a str,
         fields: Vec<ChildField>,
         objects: Option<Objects<'a>>,
-        members: Option<Vec<u32>>,
+        members: Option<Vec<Option<ObjectId>>>,
     ) -> Self {
         assert!(!key.trim().is_empty(), "a child names a stable key");
         if let Some(members) = &members {
@@ -367,33 +365,32 @@ impl<'a> Child<'a> {
         &self.fields
     }
 
-    pub fn values(&self, parents: usize, field: ChildField) -> Vec<f32> {
+    pub fn values(&self, parents: &Objects<'_>, field: ChildField) -> Vec<f32> {
         let Some((objects, members)) = self.assignments() else {
-            return vec![f32::NAN; parents];
+            return vec![f32::NAN; parents.count()];
         };
+        let slots = parents.count();
         match field {
             ChildField::Count => {
-                let mut values = vec![0.0; parents];
-                for member in members {
-                    if *member != UNASSIGNED {
-                        values[assert_parent(*member, parents)] += 1.0;
-                    }
+                let mut values = vec![0.0; slots];
+                for member in members.iter().flatten() {
+                    values[parent_of(parents, *member)] += 1.0;
                 }
                 values
             }
             ChildField::Stat { metric, statistic } => {
-                let mut accumulators = vec![SampleAccumulator::new(); parents];
-                let mut counts = vec![0u32; parents];
+                let mut accumulators = vec![SampleAccumulator::new(); slots];
+                let mut counts = vec![0u32; slots];
                 for (child, member) in members.iter().enumerate() {
-                    if *member == UNASSIGNED {
+                    let Some(member) = member else {
                         continue;
-                    }
-                    let parent = assert_parent(*member, parents);
+                    };
+                    let parent = parent_of(parents, *member);
                     counts[parent] += 1;
                     accumulators[parent].push(metric.value(objects, child));
                 }
-                let mut values = vec![f32::NAN; parents];
-                for parent in 0..parents {
+                let mut values = vec![f32::NAN; slots];
+                for parent in 0..slots {
                     if counts[parent] > 0 {
                         values[parent] = statistic.value(accumulators[parent].statistics());
                     }
@@ -403,8 +400,9 @@ impl<'a> Child<'a> {
         }
     }
 
-    pub fn columns(&self, parents: usize) -> Vec<Vec<f32>> {
-        let mut values = vec![vec![f32::NAN; parents]; self.fields.len()];
+    pub fn columns(&self, parents: &Objects<'_>) -> Vec<Vec<f32>> {
+        let slots = parents.count();
+        let mut values = vec![vec![f32::NAN; slots]; self.fields.len()];
         let Some((objects, members)) = self.assignments() else {
             return values;
         };
@@ -412,7 +410,7 @@ impl<'a> Child<'a> {
             .fields
             .iter()
             .position(|field| *field == ChildField::Count);
-        let slots = self
+        let assignments = self
             .fields
             .iter()
             .enumerate()
@@ -421,45 +419,43 @@ impl<'a> Child<'a> {
                 ChildField::Stat { metric, statistic } => Some((index, *metric, *statistic)),
             })
             .collect::<Vec<_>>();
-        let mut counts = vec![0u32; parents];
-        let mut accumulators = vec![SampleAccumulator::new(); parents * slots.len()];
+        let mut counts = vec![0u32; slots];
+        let mut accumulators = vec![SampleAccumulator::new(); slots * assignments.len()];
         for (child, member) in members.iter().enumerate() {
-            if *member == UNASSIGNED {
+            let Some(member) = member else {
                 continue;
-            }
-            let parent = assert_parent(*member, parents);
+            };
+            let parent = parent_of(parents, *member);
             counts[parent] += 1;
-            for (slot, (_, metric, _)) in slots.iter().enumerate() {
-                accumulators[parent * slots.len() + slot].push(metric.value(objects, child));
+            for (slot, (_, metric, _)) in assignments.iter().enumerate() {
+                accumulators[parent * assignments.len() + slot].push(metric.value(objects, child));
             }
         }
         if let Some(index) = count {
-            for parent in 0..parents {
+            for parent in 0..slots {
                 values[index][parent] = counts[parent] as f32;
             }
         }
-        for parent in 0..parents {
+        for parent in 0..slots {
             if counts[parent] == 0 {
                 continue;
             }
-            for (slot, (index, _, statistic)) in slots.iter().enumerate() {
+            for (slot, (index, _, statistic)) in assignments.iter().enumerate() {
                 values[*index][parent] =
-                    statistic.value(accumulators[parent * slots.len() + slot].statistics());
+                    statistic.value(accumulators[parent * assignments.len() + slot].statistics());
             }
         }
         values
     }
 
-    fn assignments(&self) -> Option<(Objects<'a>, &[u32])> {
+    fn assignments(&self) -> Option<(Objects<'a>, &[Option<ObjectId>])> {
         Some((self.objects?, self.members.as_deref()?))
     }
 }
 
-fn assert_parent(member: u32, parents: usize) -> usize {
-    let parent = member as usize;
-    assert!(
-        parent < parents,
-        "a child assignment names a parent object of its frame"
-    );
-    parent
+fn parent_of(parents: &Objects<'_>, member: ObjectId) -> usize {
+    parents
+        .ids()
+        .index_of(member)
+        .unwrap_or_else(|| panic!("a child assignment names a parent object of its frame"))
 }

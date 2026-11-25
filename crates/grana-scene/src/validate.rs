@@ -320,11 +320,11 @@ impl SceneState {
                 .any(|(frame, objects)| {
                     frame
                         .as_ref()
-                        .is_some_and(|frame| frame.objects() != object_count(objects))
+                        .is_some_and(|frame| frame.sources() != &object_ids(objects))
                 })
             {
                 return Err(fault(
-                    "a relation covers another number of objects than its frame",
+                    "a relation measures another set of objects than its frame",
                 ));
             }
         }
@@ -551,6 +551,12 @@ impl SceneState {
 
 fn object_count(frame: &Option<crate::frame::Frame>) -> usize {
     frame.as_ref().map_or(0, crate::frame::Frame::objects)
+}
+
+fn object_ids(frame: &Option<crate::frame::Frame>) -> grana_object::ObjectIds {
+    frame
+        .as_ref()
+        .map_or_else(grana_object::ObjectIds::empty, crate::frame::Frame::ids)
 }
 
 fn provenance_acyclic(sets: &[SetState]) -> bool {

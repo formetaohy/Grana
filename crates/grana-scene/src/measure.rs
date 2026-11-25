@@ -660,11 +660,16 @@ impl Measure {
         if table.rows() == 0 {
             return Some(Visibility::All);
         }
-        let mask = Arc::new(self.fresh_rows()?.restricted().clone());
+        let mask = self.fresh_rows()?.restricted().clone();
         Some(match self.group {
-            Group::Object => Visibility::objects(mask, table.frame_bases()?),
-            Group::Track => Visibility::Tracks(mask),
-            Group::Molecule => Visibility::molecules(mask, table.molecule_rows()?),
+            Group::Object => Visibility::objects(grana_object::ObjectIds::checked(
+                (0..table.rows())
+                    .filter(|row| mask.contains(*row))
+                    .filter_map(|row| table.observation(row).object())
+                    .collect(),
+            )?),
+            Group::Track => Visibility::Tracks(Arc::new(mask)),
+            Group::Molecule => Visibility::molecules(Arc::new(mask), table.molecule_rows()?),
             Group::Timepoint => Visibility::All,
         })
     }

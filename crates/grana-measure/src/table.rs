@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::sync::{Arc, RwLock};
 
-use grana_object::{CellSet, FilamentSet, IntensityTable, ObjectId, SpotSet, SurfaceSet, TrackSet};
+use grana_object::{
+    CellSet, FilamentSet, IntensityTable, ObjectId, ObjectIds, SpotSet, SurfaceSet, TrackSet,
+};
 
 use crate::child::Child;
 use crate::column::{Column, Unit, length_key};
@@ -339,6 +341,15 @@ impl<'a> Objects<'a> {
         .expect("every object of a frame carries its id")
     }
 
+    pub fn ids(self) -> &'a ObjectIds {
+        match self {
+            Self::Spots(set) => set.ids(),
+            Self::Surfaces(set) => set.ids(),
+            Self::Cells(set) => set.ids(),
+            Self::Filaments(set) => set.ids(),
+        }
+    }
+
     pub(crate) fn intensities(self) -> &'a IntensityTable {
         match self {
             Self::Spots(set) => set.intensities(),
@@ -401,7 +412,7 @@ impl ObjectCell {
                 .and_then(|set| set.track_at(frame.time(), id))
                 .map_or(0.0, |track| (track + 1) as f32),
             Self::Measure(measurement) => measurement.value(frame.objects(), object),
-            Self::Relation { index, field } => field.value(frame.relations()[*index], object),
+            Self::Relation { index, field } => field.value(frame.relations()[*index], id),
             Self::Child { .. } => {
                 panic!("a child cell reads its frame columns outside one object at a time")
             }
@@ -1069,7 +1080,7 @@ impl Table {
             let parents = frame.objects().count();
             if let ObjectCell::Child { index, field } = cell {
                 let child = &frame.children()[*index];
-                let columns = child.columns(parents);
+                let columns = child.columns(&frame.objects());
                 for value in columns[*field].iter().take(parents) {
                     values[row] = read(*value);
                     row += 1;
@@ -1108,7 +1119,7 @@ impl Table {
                 if let Plan::Object(ObjectCell::Child { index, .. }) = &self.plan[*column] {
                     children
                         .entry(*index)
-                        .or_insert_with(|| frame.children()[*index].columns(parents));
+                        .or_insert_with(|| frame.children()[*index].columns(&frame.objects()));
                 }
             }
             for object in 0..parents {
@@ -1181,7 +1192,8 @@ impl Table {
                 let Some(row) = self.row_of_track(track) else {
                     continue;
                 };
-                collected[row as usize].push(field.value(frame.relations()[index], object));
+                collected[row as usize]
+                    .push(field.value(frame.relations()[index], frame.objects().id(object)));
             }
         });
         self.aggregate_columns(collected)
@@ -1252,7 +1264,7 @@ impl Table {
         self.source.visit_all(&mut |frame: Frame<'_>| {
             let mut collected = Vec::with_capacity(frame.objects().count());
             for object in 0..frame.objects().count() {
-                collected.push(field.value(frame.relations()[index], object));
+                collected.push(field.value(frame.relations()[index], frame.objects().id(object)));
             }
             aggregated.insert(frame.time(), self.aggregate.apply(&collected));
         });
@@ -1343,7 +1355,8 @@ impl Table {
                 let Some(row) = self.row_of_molecule(group) else {
                     continue;
                 };
-                collected[row as usize].push(field.value(frame.relations()[index], object));
+                collected[row as usize]
+                    .push(field.value(frame.relations()[index], frame.objects().id(object)));
             }
         });
         self.aggregate_columns(collected)
@@ -1771,7 +1784,9 @@ impl Value {
     fn of(self, frame: &Frame<'_>, object: usize) -> f32 {
         match self {
             Self::Measurement(measurement) => measurement.value(frame.objects(), object),
-            Self::Relation { index, field } => field.value(frame.relations()[index], object),
+            Self::Relation { index, field } => {
+                field.value(frame.relations()[index], frame.objects().id(object))
+            }
         }
     }
 }

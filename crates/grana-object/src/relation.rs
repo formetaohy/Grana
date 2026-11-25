@@ -1,7 +1,9 @@
+use crate::identity::{ObjectId, ObjectIds};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RelationPair {
-    source: u32,
-    target: u32,
+    source: ObjectId,
+    target: ObjectId,
     contact: f32,
     distance: f32,
     inside: f32,
@@ -10,8 +12,8 @@ pub struct RelationPair {
 
 impl RelationPair {
     pub fn new(
-        source: u32,
-        target: u32,
+        source: ObjectId,
+        target: ObjectId,
         contact: f32,
         distance: f32,
         inside: f32,
@@ -43,11 +45,11 @@ impl RelationPair {
         }
     }
 
-    pub fn source(self) -> u32 {
+    pub fn source(self) -> ObjectId {
         self.source
     }
 
-    pub fn target(self) -> u32 {
+    pub fn target(self) -> ObjectId {
         self.target
     }
 
@@ -68,76 +70,36 @@ impl RelationPair {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct RelationFrame {
-    distance: Vec<f32>,
-    center: Vec<f32>,
-    inside: Vec<f32>,
-    contact: Vec<f32>,
-    overlapping: Vec<u32>,
-    partner: Vec<u32>,
-    pairs: Vec<RelationPair>,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RelationReading {
+    distance: f32,
+    center: f32,
+    inside: f32,
+    contact: f32,
+    overlapping: u32,
+    partner: Option<ObjectId>,
 }
 
-impl RelationFrame {
+impl RelationReading {
     pub fn new(
-        distance: Vec<f32>,
-        center: Vec<f32>,
-        inside: Vec<f32>,
-        contact: Vec<f32>,
-        overlapping: Vec<u32>,
-        partner: Vec<u32>,
-        pairs: Vec<RelationPair>,
+        distance: f32,
+        center: f32,
+        inside: f32,
+        contact: f32,
+        overlapping: u32,
+        partner: Option<ObjectId>,
     ) -> Self {
-        let objects = distance.len();
-        assert_eq!(
-            center.len(),
-            objects,
-            "a relation frame centres the objects it measures"
-        );
-        assert_eq!(
-            inside.len(),
-            objects,
-            "a relation frame measures every object it counts"
-        );
-        assert_eq!(
-            contact.len(),
-            objects,
-            "a relation frame measures the contact of every object"
-        );
-        assert_eq!(
-            overlapping.len(),
-            objects,
-            "a relation frame counts the partners of every object"
-        );
-        assert_eq!(
-            partner.len(),
-            objects,
-            "a relation frame names a partner for every object"
-        );
         assert!(
-            distance.iter().chain(&center).all(|value| *value >= 0.0),
+            distance >= 0.0 && center >= 0.0,
             "a relation distance is a length"
         );
         assert!(
-            inside.iter().all(|value| (0.0..=1.0).contains(value)),
+            (0.0..=1.0).contains(&inside),
             "a relation containment is a fraction"
         );
         assert!(
-            contact
-                .iter()
-                .all(|value| value.is_finite() && *value >= 0.0),
+            contact.is_finite() && contact >= 0.0,
             "a relation contact is an area"
-        );
-        assert!(
-            pairs.windows(2).all(|pair| {
-                (pair[0].source(), pair[0].target()) < (pair[1].source(), pair[1].target())
-            }),
-            "a relation frame lists each pair once in source and target order"
-        );
-        assert!(
-            pairs.iter().all(|pair| (pair.source() as usize) < objects),
-            "a relation pair names a source object of the frame"
         );
         Self {
             distance,
@@ -146,48 +108,118 @@ impl RelationFrame {
             contact,
             overlapping,
             partner,
+        }
+    }
+
+    pub fn unreached() -> Self {
+        Self {
+            distance: f32::INFINITY,
+            center: f32::INFINITY,
+            inside: 0.0,
+            contact: 0.0,
+            overlapping: 0,
+            partner: None,
+        }
+    }
+
+    pub fn reached(self) -> bool {
+        self.distance.is_finite()
+    }
+
+    pub fn distance(self) -> f32 {
+        self.distance
+    }
+
+    pub fn center(self) -> f32 {
+        self.center
+    }
+
+    pub fn inside(self) -> f32 {
+        self.inside
+    }
+
+    pub fn contact(self) -> f32 {
+        self.contact
+    }
+
+    pub fn overlapping(self) -> u32 {
+        self.overlapping
+    }
+
+    pub fn partner(self) -> Option<ObjectId> {
+        self.partner
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelationFrame {
+    sources: ObjectIds,
+    targets: ObjectIds,
+    readings: Vec<RelationReading>,
+    pairs: Vec<RelationPair>,
+}
+
+impl RelationFrame {
+    pub fn new(
+        sources: ObjectIds,
+        targets: ObjectIds,
+        readings: Vec<RelationReading>,
+        pairs: Vec<RelationPair>,
+    ) -> Self {
+        assert_eq!(
+            readings.len(),
+            sources.len(),
+            "a relation frame measures every object it names"
+        );
+        assert!(
+            readings
+                .iter()
+                .all(|reading| reading.partner.is_none_or(|id| targets.contains(id))),
+            "a relation partner belongs to the measured target frame"
+        );
+        assert!(
+            pairs
+                .windows(2)
+                .all(|pair| (pair[0].source(), pair[0].target())
+                    < (pair[1].source(), pair[1].target())),
+            "a relation frame lists each pair once in source and target order"
+        );
+        assert!(
+            pairs
+                .iter()
+                .all(|pair| sources.contains(pair.source()) && targets.contains(pair.target())),
+            "a relation pair names objects of the measured frames"
+        );
+        Self {
+            sources,
+            targets,
+            readings,
             pairs,
         }
     }
 
-    pub fn empty(objects: usize) -> Self {
+    pub fn empty(sources: ObjectIds, targets: ObjectIds) -> Self {
+        let readings = vec![RelationReading::unreached(); sources.len()];
         Self {
-            distance: vec![f32::INFINITY; objects],
-            center: vec![f32::INFINITY; objects],
-            inside: vec![0.0; objects],
-            contact: vec![0.0; objects],
-            overlapping: vec![0; objects],
-            partner: vec![0; objects],
+            sources,
+            targets,
+            readings,
             pairs: Vec::new(),
         }
     }
 
-    pub fn objects(&self) -> usize {
-        self.distance.len()
+    pub fn sources(&self) -> &ObjectIds {
+        &self.sources
     }
 
-    pub fn distance(&self, object: usize) -> f32 {
-        self.distance[object]
+    pub fn targets(&self) -> &ObjectIds {
+        &self.targets
     }
 
-    pub fn center(&self, object: usize) -> f32 {
-        self.center[object]
-    }
-
-    pub fn inside(&self, object: usize) -> f32 {
-        self.inside[object]
-    }
-
-    pub fn contact(&self, object: usize) -> f32 {
-        self.contact[object]
-    }
-
-    pub fn overlapping(&self, object: usize) -> u32 {
-        self.overlapping[object]
-    }
-
-    pub fn partner(&self, object: usize) -> u32 {
-        self.partner[object]
+    pub fn reading(&self, source: ObjectId) -> Option<RelationReading> {
+        self.sources
+            .index_of(source)
+            .map(|slot| self.readings[slot])
     }
 
     pub fn pairs(&self) -> &[RelationPair] {
