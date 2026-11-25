@@ -3383,6 +3383,7 @@ dependencies = [
  "grana-display",
  "grana-editor",
  "grana-engine",
+ "grana-evaluation",
  "grana-exec",
  "grana-figure",
  "grana-file",
@@ -3592,6 +3593,14 @@ dependencies = [
  "grana-scene",
  "grana-volume",
  "wgpu",
+]
+
+[[package]]
+name = "grana-evaluation"
+version = "0.2.3"
+dependencies = [
+ "grana-object",
+ "rand 0.9.5",
 ]
 
 [[package]]

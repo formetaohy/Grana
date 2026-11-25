@@ -10,7 +10,6 @@ pub struct View<'a> {
     pub camera: &'a Camera,
     pub size: [u32; 2],
     pub delivery: Delivery,
-    pub level_cap: usize,
     pub overlays: &'a [grana_render::Overlay<'a>],
 }
 
@@ -43,7 +42,6 @@ pub(crate) fn draw(
             exposure: view.scene.exposure,
             scene: &scene,
             delivery: view.delivery,
-            level_cap: view.level_cap,
         },
     )
 }

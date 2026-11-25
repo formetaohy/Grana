@@ -230,7 +230,6 @@ impl Export {
                 exposure: scene.exposure,
                 scene: &frame,
                 delivery: Delivery::Assured,
-                level_cap: usize::MAX,
             },
         ) {
             Ok(info) => info,

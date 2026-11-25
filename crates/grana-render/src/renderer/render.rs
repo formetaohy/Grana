@@ -228,14 +228,13 @@ impl Renderer {
             region: frame.region,
             view,
             arena: &resources.arena,
-            slots: resources.atlas.slots(),
+            budget: resources.atlas.slots(),
             size: frame.size,
             time: frame.time,
             versions: scene.versions,
             awaits: shot.awaits,
             assured: shot.assured,
             prefetch: frame.delivery.prefetches(),
-            overflow: info.view.visible > info.view.demand,
         });
         let channel = channel_style(scene.channels);
         if residence.style_outdated(channel) {

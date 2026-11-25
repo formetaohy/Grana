@@ -9,6 +9,6 @@ pub(crate) fn stored(asset: &Asset) -> Result<PathBuf, Error> {
 
 fn directory() -> Result<PathBuf, Error> {
     let base =
-        grana_dir::data().ok_or_else(|| Error::storage("the system holds no data directory"))?;
+        grana_dir::cache().ok_or_else(|| Error::storage("the system holds no cache directory"))?;
     Ok(base.join("models"))
 }

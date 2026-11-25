@@ -16,7 +16,6 @@ use crate::support::{
 };
 
 const SIDE: u32 = 128;
-const CAP: usize = 0;
 const FRAMES: u32 = 8;
 const SAMPLES: u32 = 160;
 const BUDGET: u64 = 256 << 20;
@@ -33,10 +32,6 @@ struct View<'a> {
 }
 
 fn frame<'a>(view: &View<'a>) -> Frame<'a, 'a> {
-    capped(view, usize::MAX)
-}
-
-fn capped<'a>(view: &View<'a>, level_cap: usize) -> Frame<'a, 'a> {
     Frame {
         target: view.target,
         size: [SIDE, SIDE],
@@ -48,7 +43,6 @@ fn capped<'a>(view: &View<'a>, level_cap: usize) -> Frame<'a, 'a> {
         exposure: 1.0,
         scene: view.scene,
         delivery: view.delivery,
-        level_cap,
     }
 }
 
@@ -331,7 +325,7 @@ fn streams_and_shades_two_channels() {
         viewport: WHOLE,
         delivery: grana_render::Delivery::Immediate,
     };
-    let requests = settle_with(&gpu, &mut renderer, || capped(&view, CAP), &volume);
+    let requests = settle_with(&gpu, &mut renderer, || frame(&view), &volume);
     assert!(requests.view.visible > 0, "the view sees no brick");
     assert_eq!(
         requests.view.resident, requests.view.demand,
@@ -355,8 +349,8 @@ fn streams_and_shades_two_channels() {
         shot.hue(shot.all(), Hue::Green) > 100,
         "the green channel barely rendered"
     );
-    settle_with(&gpu, &mut renderer, || capped(&view, CAP), &volume);
-    let shaded = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, SAMPLES);
+    settle_with(&gpu, &mut renderer, || frame(&view), &volume);
+    let shaded = settled_pixels(&gpu, &mut renderer, &view, &target, SAMPLES);
     let occluder = bricked_volume(Some([1, 1, 0]));
     let region = brick_region(&pyramid, 0, BrickCoord::new(1, 1, 0));
     let damage = Damage::new(region, ChannelSet::of(0)).expect("the damage names a channel");
@@ -373,15 +367,15 @@ fn streams_and_shades_two_channels() {
             delivery: view.delivery,
         };
         renderer
-            .draw(gpu.device(), gpu.queue(), capped(&moved, CAP))
+            .draw(gpu.device(), gpu.queue(), frame(&moved))
             .expect("the moved frame draws");
     }
-    refresh(&gpu, &mut renderer, &view, &occluder, CAP);
-    settle_with(&gpu, &mut renderer, || capped(&view, CAP), &occluder);
-    let streamed = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, SAMPLES);
+    refresh(&gpu, &mut renderer, &view, &occluder);
+    settle_with(&gpu, &mut renderer, || frame(&view), &occluder);
+    let streamed = settled_pixels(&gpu, &mut renderer, &view, &target, SAMPLES);
     let mut cold = build_renderer(&gpu, &occluder.pyramid());
-    settle_with(&gpu, &mut cold, || capped(&view, CAP), &occluder);
-    let rebuilt = settled_pixels(&gpu, &mut cold, &view, &target, CAP, SAMPLES);
+    settle_with(&gpu, &mut cold, || frame(&view), &occluder);
+    let rebuilt = settled_pixels(&gpu, &mut cold, &view, &target, SAMPLES);
     let moved = mean_difference(&shaded, &streamed);
     assert!(
         moved > 2.0,
@@ -392,7 +386,7 @@ fn streams_and_shades_two_channels() {
         0,
         "the streamed brick departs from a full rebuild"
     );
-    let repeated = settled_pixels(&gpu, &mut renderer, &view, &target, CAP, 2 * SAMPLES);
+    let repeated = settled_pixels(&gpu, &mut renderer, &view, &target, 2 * SAMPLES);
     let drift = mean_difference(&repeated, &streamed);
     assert!(
         drift < 0.5,
@@ -418,10 +412,10 @@ fn brick_region(pyramid: &Pyramid, level: usize, coord: BrickCoord) -> Region {
     Region::axis_aligned(low, high)
 }
 
-fn refresh(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume, cap: usize) {
+fn refresh(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>, volume: &Volume) {
     for _ in 0..8 {
         renderer
-            .draw(gpu.device(), gpu.queue(), capped(view, cap))
+            .draw(gpu.device(), gpu.queue(), frame(view))
             .expect("the damaged frame draws");
         let Some(requests) = next_demand(gpu, renderer) else {
             return;
@@ -439,18 +433,17 @@ fn settled_pixels(
     renderer: &mut Renderer,
     view: &View<'_>,
     target: &wgpu::Texture,
-    cap: usize,
     samples: u32,
 ) -> Vec<[u8; 4]> {
     let mut info = renderer
-        .draw(gpu.device(), gpu.queue(), capped(view, cap))
+        .draw(gpu.device(), gpu.queue(), frame(view))
         .expect("the converged frame draws");
     for _ in 0..1024 {
         if info.age >= samples {
             break;
         }
         info = renderer
-            .draw(gpu.device(), gpu.queue(), capped(view, cap))
+            .draw(gpu.device(), gpu.queue(), frame(view))
             .expect("the converged frame draws");
     }
     assert!(
@@ -1327,88 +1320,6 @@ fn fits_the_volume_level_to_the_residency_budget() {
     holds_a_settled_frame(&gpu, &mut renderer, &view);
 }
 
-#[test]
-fn restarts_accumulation_when_the_band_ladder_changes() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let volumes = ladder_volumes();
-    let pyramid = ladder_pyramid(&volumes);
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let mut renderer = Renderer::new(
-        gpu.device(),
-        gpu.queue(),
-        wgpu::TextureFormat::Rgba8Unorm,
-        16 << 20,
-        gpu.pipelines(),
-    );
-    renderer
-        .set_dataset(
-            gpu.device(),
-            &pyramid,
-            budget(16 << 20, [SIDE, SIDE]),
-            [SIDE, SIDE],
-        )
-        .expect("the test budget holds the volume");
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = ladder_view(&view_texture, &camera, &scene);
-    let settled = stream_levels(&gpu, &mut renderer, &view, &volumes);
-    assert_eq!(
-        settled.view.level, 0,
-        "the unconstrained view never reached the finest level"
-    );
-    let narrowed = renderer
-        .draw(gpu.device(), gpu.queue(), capped(&view, 0))
-        .expect("the narrowed ladder draws");
-    assert!(narrowed.drawn, "the single band frame never drew");
-    assert!(
-        narrowed.fading,
-        "a different band ladder did not fade the frame it replaced"
-    );
-    assert_eq!(
-        narrowed.age, 1,
-        "a different band ladder kept the convergence age of the old one"
-    );
-    assert!(
-        !narrowed.history,
-        "a different band ladder mixed the samples of the old one through the temporal history"
-    );
-    let held = renderer
-        .draw(gpu.device(), gpu.queue(), capped(&view, 0))
-        .expect("the narrowed ladder draws");
-    assert!(
-        held.history,
-        "an unchanged band ladder dropped its temporal history"
-    );
-    let mut blended = 2;
-    loop {
-        let info = renderer
-            .draw(gpu.device(), gpu.queue(), capped(&view, 0))
-            .expect("the faded frame draws");
-        blended += 1;
-        if !info.fading {
-            break;
-        }
-        assert!(
-            blended <= 16,
-            "the fade over a replaced band ladder never finished"
-        );
-    }
-}
-
 fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
     for _ in 0..4 {
         let info = renderer
@@ -1956,10 +1867,10 @@ fn follows_a_dragged_camera_without_trailing_the_view_it_left() {
         viewport: WHOLE,
         delivery: grana_render::Delivery::Immediate,
     };
-    settle_with(&gpu, &mut renderer, || capped(&start, CAP), &volume);
+    settle_with(&gpu, &mut renderer, || frame(&start), &volume);
     for _ in 0..192 {
         renderer
-            .draw(gpu.device(), gpu.queue(), capped(&start, CAP))
+            .draw(gpu.device(), gpu.queue(), frame(&start))
             .expect("the settled frame draws");
     }
     for _ in 0..12 {
@@ -1973,7 +1884,7 @@ fn follows_a_dragged_camera_without_trailing_the_view_it_left() {
             delivery: grana_render::Delivery::Immediate,
         };
         renderer
-            .draw(gpu.device(), gpu.queue(), capped(&view, CAP))
+            .draw(gpu.device(), gpu.queue(), frame(&view))
             .expect("the dragged frame draws");
     }
     let dragged = read_pixels(&gpu, &target, [SIDE, SIDE]);
@@ -1987,7 +1898,7 @@ fn follows_a_dragged_camera_without_trailing_the_view_it_left() {
     };
     for _ in 0..192 {
         renderer
-            .draw(gpu.device(), gpu.queue(), capped(&end, CAP))
+            .draw(gpu.device(), gpu.queue(), frame(&end))
             .expect("the resting frame draws");
     }
     let rest = read_pixels(&gpu, &target, [SIDE, SIDE]);
@@ -2144,10 +2055,10 @@ fn keeps_the_accumulated_image_through_a_quiet_camera_move() {
         viewport: WHOLE,
         delivery: grana_render::Delivery::Immediate,
     };
-    settle_with(&gpu, &mut renderer, || capped(&start, CAP), &volume);
+    settle_with(&gpu, &mut renderer, || frame(&start), &volume);
     for _ in 0..64 {
         renderer
-            .draw(gpu.device(), gpu.queue(), capped(&start, CAP))
+            .draw(gpu.device(), gpu.queue(), frame(&start))
             .expect("the resting frame draws");
     }
     let settled = read_pixels(&gpu, &target, [SIDE, SIDE]);
@@ -2162,7 +2073,7 @@ fn keeps_the_accumulated_image_through_a_quiet_camera_move() {
         delivery: grana_render::Delivery::Immediate,
     };
     let info = renderer
-        .draw(gpu.device(), gpu.queue(), capped(&moved, CAP))
+        .draw(gpu.device(), gpu.queue(), frame(&moved))
         .expect("the nudged frame draws");
     assert!(
         info.history,
@@ -2224,7 +2135,7 @@ fn keeps_the_demand_plan_through_a_sub_brick_pan() {
         delivery: grana_render::Delivery::Immediate,
     };
     renderer
-        .draw(gpu.device(), gpu.queue(), capped(&nudged, CAP))
+        .draw(gpu.device(), gpu.queue(), frame(&nudged))
         .expect("the nudged frame draws");
     assert!(
         !renderer.requests_pending(),
@@ -2241,7 +2152,7 @@ fn keeps_the_demand_plan_through_a_sub_brick_pan() {
         delivery: grana_render::Delivery::Immediate,
     };
     renderer
-        .draw(gpu.device(), gpu.queue(), capped(&panned, CAP))
+        .draw(gpu.device(), gpu.queue(), frame(&panned))
         .expect("the panned frame draws");
     assert!(
         renderer.requests_pending(),

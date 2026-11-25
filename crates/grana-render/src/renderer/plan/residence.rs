@@ -62,8 +62,7 @@ pub(crate) struct Residence {
     prefetch_stable: bool,
     batches: Vec<Batch>,
     refreshes: HashSet<BrickRequest>,
-    denials: usize,
-    denied_frames: u32,
+    denial: Vec<usize>,
     prefetch_rate: f32,
     prefetch_sent: u64,
     prefetch_hit: u64,
@@ -73,11 +72,8 @@ pub(crate) struct Residence {
     missing: Missing,
     restaged: bool,
     passes: Option<Passes>,
-    cap: Option<usize>,
-    level: Option<usize>,
+    target: Option<usize>,
     measure: Vec<Option<Measured>>,
-    rejection: Option<(usize, usize)>,
-    cache: Option<(u64, VolumeFit)>,
     grids: Vec<BrickGrid>,
     view: ViewInfo,
 }
@@ -275,14 +271,13 @@ pub(crate) struct Adapt<'a> {
     pub(crate) region: Region,
     pub(crate) view: View,
     pub(crate) arena: &'a BrickArena,
-    pub(crate) slots: usize,
+    pub(crate) budget: usize,
     pub(crate) size: [u32; 2],
     pub(crate) time: u32,
     pub(crate) versions: Versions,
     pub(crate) awaits: bool,
     pub(crate) assured: bool,
     pub(crate) prefetch: bool,
-    pub(crate) overflow: bool,
 }
 
 pub(crate) struct Outlook {
@@ -313,8 +308,7 @@ impl Residence {
             prefetch_stable: false,
             batches: Vec::new(),
             refreshes: HashSet::new(),
-            denials: 0,
-            denied_frames: 0,
+            denial: Vec::new(),
             prefetch_rate: 1.0,
             prefetch_sent: 0,
             prefetch_hit: 0,
@@ -324,11 +318,8 @@ impl Residence {
             missing: Missing::default(),
             restaged: false,
             passes: None,
-            cap: None,
-            level: None,
+            target: None,
             measure: Vec::new(),
-            rejection: None,
-            cache: None,
             grids: Vec::new(),
             view: ViewInfo::default(),
         }
@@ -345,6 +336,7 @@ impl Residence {
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
         self.measure = vec![None; pyramid.level_count()];
+        self.denial = vec![0; pyramid.level_count()];
         self.grids = pyramid
             .levels()
             .iter()
@@ -364,8 +356,7 @@ impl Residence {
         self.prefetch_stable = false;
         self.batches.clear();
         self.refreshes.clear();
-        self.denials = 0;
-        self.denied_frames = 0;
+        self.denial.fill(0);
         self.prefetch_rate = 1.0;
         self.prefetch_sent = 0;
         self.prefetch_hit = 0;
@@ -375,11 +366,8 @@ impl Residence {
         self.missing.clear();
         self.restaged = false;
         self.passes = None;
-        self.cap = None;
-        self.level = None;
+        self.target = None;
         self.measure.fill(None);
-        self.rejection = None;
-        self.cache = None;
         self.view = ViewInfo::default();
     }
 
@@ -397,11 +385,9 @@ impl Residence {
         self.prefetch_stable = false;
         self.batches.clear();
         self.refreshes.clear();
-        self.denials = 0;
-        self.denied_frames = 0;
+        self.denial.fill(0);
         self.measure.fill(None);
-        self.rejection = None;
-        self.cache = None;
+        self.target = None;
         self.bump();
     }
 
@@ -419,26 +405,18 @@ impl Residence {
         self.demand = None;
         self.missing.clear();
         self.restaged = false;
-        self.cap = None;
-        self.level = None;
-        self.rejection = None;
+        self.target = None;
         self.planned = None;
         self.prefetched.clear();
         self.prefetch_key = None;
         self.prefetch_stable = false;
         self.batches.clear();
         self.refreshes.clear();
-        self.denials = 0;
-        self.denied_frames = 0;
+        self.denial.fill(0);
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
         self.measure.fill(None);
-        self.cache = None;
         self.view = ViewInfo::default();
-    }
-
-    pub(crate) fn set_cap(&mut self, cap: usize) {
-        self.cap = Some(cap);
     }
 
     pub(crate) fn content(&self) -> u32 {
@@ -485,8 +463,12 @@ impl Residence {
         }
     }
 
-    pub(crate) fn denied(&mut self, count: usize) {
-        self.denials = self.denials.saturating_add(count);
+    pub(crate) fn denied(&mut self, requests: &[BrickRequest]) {
+        for request in requests {
+            if let Some(count) = self.denial.get_mut(request.level) {
+                *count = count.saturating_add(1);
+            }
+        }
     }
 
     pub(crate) fn style_outdated(&self, style: u64) -> bool {
@@ -521,70 +503,41 @@ impl Residence {
             region,
             view,
             arena,
-            slots,
+            budget,
             size,
             time,
             versions,
             awaits,
             assured,
             prefetch,
-            overflow,
         } = adapt;
-        let quantum = Resolution::of(
+        let target = volume_target(TargetView {
             pyramid,
-            self.level.unwrap_or(pyramid.level_count() - 1),
             camera,
-            size[1],
-        );
-        let pose = pose(camera, size, region, time, quantum);
-        let current = if assured { None } else { self.level };
-        let measured = !assured
-            && current.is_some_and(|level| {
-                self.measure
-                    .get(level)
-                    .copied()
-                    .flatten()
-                    .is_some_and(|held| held.pose == pose)
-            });
-        let rejected = if assured { None } else { self.rejection };
-        let denied = std::mem::take(&mut self.denials);
-        self.denied_frames = if denied > 0 {
-            self.denied_frames + 1
-        } else {
-            0
-        };
-        let planned = levels(
-            Input {
-                pyramid,
-                camera,
-                region,
-                view,
-                arena,
-                slots,
-                cap: self.cap,
-                current,
-                measured,
-                pose,
-                rejection: rejected,
-            },
-            &self.measure,
-            &mut self.cache,
-        );
-        if !assured {
-            self.rejection = match planned.overflowed {
-                Some(level) => Some((planned.desired.base, level)),
-                None if planned.truncated || self.denied_frames >= 2 => {
-                    Some((planned.desired.base, planned.ladder.base))
-                }
-                None if self.denied_frames == 0 || planned.ladder.base <= planned.desired.base => {
-                    None
-                }
-                None => self.rejection,
-            };
+            height: view.height as f32,
+            first: arena.first(),
+            current: self.target,
+        });
+        let quantum = Resolution::of(pyramid, target, camera, size[1]);
+        let pose = pose(camera, size, region, quantum);
+        let planned = levels(Input {
+            pyramid,
+            camera,
+            region,
+            view,
+            arena,
+            target,
+            measure: &self.measure,
+            denial: &self.denial,
+            budget,
+            pose,
+        });
+        for count in &mut self.denial {
+            *count /= 2;
         }
-        let truncated =
-            planned.truncated || overflow && planned.ladder.base <= planned.desired.base;
-        self.level = Some(planned.ladder.base);
+        if !assured {
+            self.target = Some(target);
+        }
         let key = ViewKey::of(
             self.epoch,
             self.stamp(versions.topology()),
@@ -600,7 +553,7 @@ impl Residence {
         );
         let replan = self.planned.as_ref() != Some(&key);
         let settled = self.settled == Some(key);
-        let ready_at_time = settled && (!assured || !truncated);
+        let ready_at_time = settled && (!assured || !planned.truncated);
         let ready = if awaits || assured {
             ready_at_time
         } else {
@@ -613,7 +566,7 @@ impl Residence {
             pose,
             replan,
             settled,
-            truncated,
+            truncated: planned.truncated,
             ready,
         }
     }
@@ -952,7 +905,7 @@ fn demands_complete(demand: &Demand, assured: bool) -> bool {
         && (!assured || demand.info.visible == demand.info.demand)
 }
 
-fn pose(camera: &Camera, size: [u32; 2], region: Region, time: u32, quantum: Resolution) -> u64 {
+fn pose(camera: &Camera, size: [u32; 2], region: Region, quantum: Resolution) -> u64 {
     let mut hasher = DefaultHasher::new();
     quantum.position(camera.eye().to_array()).hash(&mut hasher);
     quantum
@@ -965,7 +918,6 @@ fn pose(camera: &Camera, size: [u32; 2], region: Region, time: u32, quantum: Res
         .map(|slice| SliceKey::of(slice, quantum))
         .hash(&mut hasher);
     size.hash(&mut hasher);
-    time.hash(&mut hasher);
     region.enabled().hash(&mut hasher);
     quantum
         .position(region.center().to_array())

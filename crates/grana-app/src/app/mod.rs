@@ -47,7 +47,6 @@ use self::update::Update;
 use self::viewport::AnnotationKey;
 use crate::clipboard::SystemClipboard;
 use crate::preference::Preference;
-use crate::stream::Stream;
 use crate::window;
 
 const STREAM_POLL: Duration = Duration::from_millis(16);
@@ -121,7 +120,6 @@ pub struct App {
     fatal: Option<String>,
     ime: bool,
     ime_area: Option<(i32, i32, u32, u32)>,
-    stream: Stream,
     pick_toggle: Option<bool>,
     mask_path: Vec<[f32; 3]>,
     plate: Option<(String, usize)>,
@@ -208,7 +206,6 @@ impl App {
             fatal: None,
             ime: false,
             ime_area: None,
-            stream: Stream::new(),
             pick_toggle: None,
             mask_path: Vec::new(),
             plate: None,

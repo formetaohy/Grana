@@ -42,9 +42,8 @@ use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
 use crate::planner::{
-    self, BAND, FitView, Ladder, LadderView, Limits, Measured, Planner, Schedule, VolumeFit,
-    bucket_scale, capacities, fit_measured, fit_volume, ladder_count, truncated, volume_dispatch,
-    volume_ladder,
+    self, BAND, Counts, Ladder, Measured, Planner, Schedule, TargetView, bucket_scale, capacities,
+    fresh, ladder_count, volume_dispatch, volume_target,
 };
 use crate::present::Present;
 use crate::reserve;
@@ -161,7 +160,6 @@ pub struct Frame<'a, 'b> {
     pub exposure: f32,
     pub scene: &'a SceneFrame<'b>,
     pub delivery: Delivery,
-    pub level_cap: usize,
 }
 
 pub struct Renderer {
@@ -542,7 +540,6 @@ impl Renderer {
         if created {
             self.residence.forget_settled();
         }
-        self.residence.set_cap(frame.level_cap);
         let info = self.render(device, queue, &mut target, frame, shot);
         self.targets.put(target);
         info
@@ -585,7 +582,7 @@ impl Renderer {
         let uploaded = resources.upload(bricks, &mut self.residence, self.time);
         self.uploads += uploaded.written as u64;
         if !uploaded.denied.is_empty() {
-            self.residence.denied(uploaded.denied.len());
+            self.residence.denied(&uploaded.denied);
         }
         let mut unplaced = uploaded.dropped;
         unplaced.extend(uploaded.denied);

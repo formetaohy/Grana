@@ -92,7 +92,6 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
                     camera: &camera,
                     size: [320, 320],
                     delivery,
-                    level_cap: 99,
                     overlays: &[],
                 },
             )

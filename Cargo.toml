@@ -19,6 +19,7 @@ wgpu = "30"
 winit = "0.30"
 pollster = "0.4"
 rayon = "1"
+rand = "0.9"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -97,6 +98,7 @@ grana-ui = { version = "0.2.3", path = "crates/grana-ui" }
 grana-editor = { version = "0.2.3", path = "crates/grana-editor" }
 grana-exec = { version = "0.2.3", path = "crates/grana-exec" }
 grana-analysis = { version = "0.2.3", path = "crates/grana-analysis" }
+grana-evaluation = { version = "0.2.3", path = "crates/grana-evaluation" }
 grana-render = { version = "0.2.3", path = "crates/grana-render" }
 grana-zarr = { version = "0.2.3", path = "crates/grana-zarr" }
 grana-tiff = { version = "0.2.3", path = "crates/grana-tiff" }
@@ -161,6 +163,7 @@ zip = { workspace = true }
 grana-analysis = { workspace = true }
 grana-animation = { workspace = true }
 grana-archive = { workspace = true }
+grana-evaluation = { workspace = true }
 grana-display = { workspace = true }
 grana-engine = { workspace = true }
 grana-editor = { workspace = true }

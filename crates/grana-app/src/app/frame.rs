@@ -1,10 +1,9 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use grana_engine::Viewport;
 use grana_render::{Delivery, FrameInfo};
 
 use super::{App, STREAM_POLL};
-use crate::stream::{Stream, View as StreamView};
 
 impl App {
     pub(super) fn exchange_bricks(&mut self) -> Result<(), String> {
@@ -31,7 +30,6 @@ impl App {
                 self.changed_at = None;
                 self.last_advance = None;
                 self.last_animation = None;
-                self.stream = Stream::new();
             }
         }
         let App {
@@ -118,7 +116,6 @@ impl App {
 
     pub(super) fn render(&mut self, delivery: Delivery) -> Option<Duration> {
         let viewport = self.viewport();
-        let cap = self.level_cap();
         let scene = self.session.scene();
         let overlays = scene.map_or_else(Vec::new, grana_engine::overlays);
         let outcome = {
@@ -137,7 +134,6 @@ impl App {
                         camera,
                         size: [viewport.region[2], viewport.region[3]],
                         delivery,
-                        level_cap: cap,
                         overlays: &overlays,
                     },
                 ),
@@ -156,28 +152,6 @@ impl App {
                 Some(Duration::MAX)
             }
         }
-    }
-
-    pub(super) fn level_cap(&mut self) -> usize {
-        let Some((levels, brick_bytes)) = self.session.scene().map(|scene| {
-            (
-                scene.dataset.level_count(),
-                scene.dataset.pyramid().brick_bytes(),
-            )
-        }) else {
-            return 0;
-        };
-        let info = self.frame_info();
-        let view = StreamView {
-            remote: self.session.remote(),
-            levels,
-            rate: self.session.throughput(),
-            bricks: info.view.demand,
-            rendered: info.view.level,
-            brick_bytes,
-            now: Instant::now(),
-        };
-        self.stream.cap(view)
     }
 
     pub(super) fn present_ui(&mut self) {

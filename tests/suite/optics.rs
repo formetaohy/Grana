@@ -89,7 +89,6 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             exposure: 1.0,
             scene: &scene,
             delivery: grana_render::Delivery::Assured,
-            level_cap: usize::MAX,
         };
         settle(&gpu, &mut renderer, &frame, &volume);
         read_pixels(&gpu, &texture, [SIDE, SIDE])
@@ -219,7 +218,6 @@ fn copy<'a, 'b>(frame: &Frame<'a, 'b>) -> Frame<'a, 'b> {
         exposure: frame.exposure,
         scene: frame.scene,
         delivery: frame.delivery,
-        level_cap: frame.level_cap,
     }
 }
 

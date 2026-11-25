@@ -1645,7 +1645,6 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                             camera: &camera,
                             size,
                             delivery: Delivery::Immediate,
-                            level_cap: 99,
                             overlays: &[],
                         },
                     )
@@ -1768,7 +1767,6 @@ fn reads_each_streamed_brick_once() {
                     camera: &camera,
                     size: [160, 160],
                     delivery: Delivery::Immediate,
-                    level_cap: 99,
                     overlays: &[],
                 },
             )

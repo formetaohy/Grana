@@ -24,7 +24,6 @@ struct Content {
     clip: Clip,
     exposure: u32,
     size: [u32; 2],
-    level_cap: usize,
     generation: u64,
 }
 
@@ -36,7 +35,6 @@ impl Content {
             && self.region == other.region
             && self.clip == other.clip
             && self.size == other.size
-            && self.level_cap == other.level_cap
             && self.generation == other.generation
     }
 }
@@ -242,7 +240,6 @@ impl Engine {
             clip: view.scene.clip,
             exposure: view.scene.exposure.to_bits(),
             size: view.size,
-            level_cap: view.level_cap,
             generation: self.generation,
         }
     }
@@ -329,7 +326,6 @@ impl Engine {
                         camera: view.camera,
                         size,
                         delivery: view.delivery,
-                        level_cap: view.level_cap,
                         overlays: view.overlays,
                     },
                 },

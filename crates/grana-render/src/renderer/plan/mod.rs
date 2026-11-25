@@ -11,119 +11,80 @@ pub(super) struct Input<'a> {
     pub(super) region: Region,
     pub(super) view: View,
     pub(super) arena: &'a BrickArena,
-    pub(super) slots: usize,
-    pub(super) cap: Option<usize>,
-    pub(super) current: Option<usize>,
-    pub(super) measured: bool,
+    pub(super) target: usize,
+    pub(super) measure: &'a [Option<Measured>],
+    pub(super) denial: &'a [usize],
+    pub(super) budget: usize,
     pub(super) pose: u64,
-    pub(super) rejection: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Planned {
     pub(super) ladder: Ladder,
-    pub(super) desired: Ladder,
     pub(super) levels: Levels,
-    pub(super) overflowed: Option<usize>,
     pub(super) truncated: bool,
 }
 
-pub(super) fn levels(
-    input: Input<'_>,
-    measure: &[Option<Measured>],
-    cache: &mut Option<(u64, VolumeFit)>,
-) -> Planned {
+pub(super) fn levels(input: Input<'_>) -> Planned {
     let Input {
         pyramid,
         camera,
         region,
         view,
         arena,
-        slots,
-        cap,
-        current,
-        measured,
+        target,
+        measure,
+        denial,
+        budget,
         pose,
-        rejection,
     } = input;
     let level_count = pyramid.level_count();
     let first = arena.first();
-    let ceiling = cap
-        .unwrap_or(level_count - 1)
-        .max(first)
-        .min(level_count - 1);
-    let limits = Limits { first, ceiling };
-    let allowed = limits.count(pyramid);
-    let share = slots.max(1);
-    let desired = volume_ladder(LadderView {
-        pyramid,
-        camera,
-        height: view.height as f32,
-        current,
-        limits,
-    });
-    let floor = rejection
-        .filter(|(regime, _)| *regime == desired.base)
-        .map(|(_, level)| level);
-    let fit_view = FitView {
-        pyramid,
-        camera,
-        region,
-        aspect: view.aspect,
-        height: view.height,
-        limits: Limits { first, ceiling },
-        capacity: share,
-    };
-    let key = digest(&[
-        view.motion,
-        share as u64,
-        u64::from(view.height),
-        ceiling as u64,
-        first as u64,
-        u64::from(u32::from(measured)),
-        level_key(current),
-        level_key(floor),
-        level_key(Some(desired.base)),
-    ]);
-    let (fit, overflowed) = if measured {
-        let fitted = fit_measured(fit_view, desired, measure, pose, floor);
-        (fitted.fit, fitted.overflowed)
-    } else if let Some((held, value)) = *cache
-        && held == key
-    {
-        (value, None)
-    } else {
-        let mut computed = fit_volume(fit_view, desired);
-        if let Some(floor) = floor.filter(|floor| *floor > computed.ladder.base) {
-            let count = ladder_count(camera.projection(), allowed, floor);
-            computed = VolumeFit {
-                ladder: Ladder { base: floor, count },
-                capacity: capacities(share, &computed.capacity, count),
-            };
+    let budget = budget.max(1);
+    let projection = camera.projection();
+    let mut counts = Counts::new(pyramid, camera, region, view.aspect, view.height, first);
+    let mut fit = None;
+    for base in target..level_count {
+        let count = ladder_count(projection, level_count, base);
+        let mut wanted = [0usize; BAND];
+        let mut needed = 0usize;
+        for (band, slot) in wanted.iter_mut().enumerate().take(count) {
+            let level = base + band;
+            let denied = denial.get(level).copied().unwrap_or(0);
+            let visible = fresh(measure, level, pose)
+                .map_or_else(|| counts.level(level), |held| held.visible);
+            *slot = visible + denied;
+            needed += visible + denied;
         }
-        *cache = Some((key, computed));
-        (computed, None)
-    };
-    let base = fit.ladder.base.min(allowed - 1);
-    let count = BAND.min(allowed - base);
-    let ladder = Ladder { base, count };
-    let capacity = if base == fit.ladder.base && count == fit.ladder.count {
-        fit.capacity
+        if needed <= budget {
+            fit = Some((base, count, wanted, false));
+            break;
+        }
+    }
+    let (base, count, wanted, truncated) = fit.unwrap_or_else(|| {
+        let base = level_count - 1;
+        let count = ladder_count(projection, level_count, base);
+        let mut wanted = [0usize; BAND];
+        for (band, slot) in wanted.iter_mut().enumerate().take(count) {
+            let level = base + band;
+            let denied = denial.get(level).copied().unwrap_or(0);
+            let visible = fresh(measure, level, pose)
+                .map_or_else(|| counts.level(level), |held| held.visible);
+            *slot = visible + denied;
+        }
+        (base, count, wanted, true)
+    });
+    let capacity = if truncated {
+        capacities(budget, &wanted, count)
     } else {
-        capacities(share, &fit.capacity, count)
+        [budget; BAND]
     };
-    let levels = Levels { ladder, capacity };
+    let ladder = Ladder { base, count };
     Planned {
         ladder,
-        desired,
-        levels,
-        overflowed,
-        truncated: truncated(measure, pose, ladder, capacity),
+        levels: Levels { ladder, capacity },
+        truncated,
     }
-}
-
-fn level_key(level: Option<usize>) -> u64 {
-    level.map_or(u64::MAX, |level| level as u64)
 }
 
 pub(super) struct Tables<'a> {
