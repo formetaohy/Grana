@@ -70,7 +70,6 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
                 requests.epoch,
                 &requests.volume,
                 &requests.prefetch,
-                &requests.unavailable,
             );
         }
         let bricks = session.take_bricks();

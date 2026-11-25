@@ -12,6 +12,10 @@ const VALUE_LIMIT: f32 = 65535.0;
 
 const MASK_SHIFT: u32 = 16;
 
+pub(crate) fn bytes(slots: usize) -> u64 {
+    (slots * STRIDE_WORDS * size_of::<u32>()) as u64
+}
+
 pub(crate) struct Occupancy {
     buffer: Buffer,
     columns: Vec<u16>,
@@ -27,7 +31,7 @@ impl Occupancy {
         );
         let buffer = device.create_buffer(&BufferDescriptor {
             label: Some("grana.brick.occupancy"),
-            size: (slots * STRIDE_WORDS * size_of::<u32>()) as u64,
+            size: bytes(slots),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -37,6 +41,10 @@ impl Occupancy {
             words: vec![0; STRIDE_WORDS],
             slots,
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        bytes(self.slots)
     }
 
     pub fn buffer(&self) -> &Buffer {

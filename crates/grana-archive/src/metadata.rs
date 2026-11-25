@@ -58,6 +58,19 @@ pub fn color_table_values(tables: &[Option<&ColorTable>]) -> Value {
     Value::Array(channels)
 }
 
+pub fn color_table_text(tables: &[Option<&ColorTable>]) -> Option<String> {
+    tables
+        .iter()
+        .any(Option::is_some)
+        .then(|| color_table_values(tables).to_string())
+}
+
+pub fn color_tables_from_text(text: &str) -> Result<Vec<(usize, ColorTable)>, String> {
+    let value = serde_json::from_str::<Value>(text)
+        .map_err(|error| format!("the archive colour tables are not json: {error}"))?;
+    color_tables_from(Some(&value))
+}
+
 pub fn color_tables_from(value: Option<&Value>) -> Result<Vec<(usize, ColorTable)>, String> {
     let Some(value) = value else {
         return Ok(Vec::new());

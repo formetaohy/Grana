@@ -56,15 +56,13 @@ use crate::statistics::Statistics;
 use crate::target::SceneTarget;
 use crate::temporal;
 use crate::volume::VolumePass;
-use grana_volume::{CHANNEL_LIMIT, PACK, components, pack_count, texels};
+use grana_volume::{CHANNEL_LIMIT, PACK};
 
 const DUMMY_VOXEL: [u16; PACK] = [0; PACK];
 
 const FADE_DRAWS: f32 = 10.0;
 
 const PICK_LIFETIME: u64 = 2;
-
-const MINIMUM_EXPORT_SLOTS: usize = 2;
 
 const UNIT: f32 = 65535.0;
 
@@ -193,10 +191,11 @@ pub struct Renderer {
     time: u32,
     motion: Option<u64>,
     budget: u64,
+    residency_target: u64,
     total: u64,
     ceiling: u64,
     frames: u64,
-    requested: u64,
+    mesh_budget: u64,
     demand: budget::FrameDemand,
     residence: Residence,
     prefetch: bool,
@@ -204,6 +203,8 @@ pub struct Renderer {
     transparency: Option<(u64, bool)>,
     exporting: bool,
     wanted: usize,
+    deficit: usize,
+    export_ceiling: u64,
     reclaim: bool,
     degraded: Option<String>,
     temporal: temporal::Resolve,
@@ -287,10 +288,11 @@ impl Renderer {
             time: 0,
             motion: None,
             budget,
+            residency_target: budget,
             total: budget,
             ceiling: budget,
             frames: budget,
-            requested: budget,
+            mesh_budget: 0,
             demand: budget::FrameDemand::full(),
             residence: Residence::new(),
             prefetch: false,
@@ -298,6 +300,8 @@ impl Renderer {
             transparency: None,
             exporting: false,
             wanted: 0,
+            deficit: 0,
+            export_ceiling: budget,
             reclaim: false,
             degraded: None,
             temporal,
@@ -362,58 +366,22 @@ impl Renderer {
         size: [u32; 2],
         ceiling: u64,
     ) -> Result<(), String> {
-        let slot_bytes = resources::slot_bytes(pyramid);
-        let max_dimension = device.limits().max_texture_dimension_3d;
-        let frames = budget::Frames::of(size, budget::FrameDemand::full());
-        let splats = budget::splat_budget(self.total);
-        let wanted = detail.bricks + 1;
-        let mut slots = wanted;
-        let reservation = loop {
-            let reservation = reserve::Reservation::of(
-                pyramid,
-                reserve::Allocation::Export { slots },
-                slot_bytes,
-                max_dimension,
-            )?;
-            let held = reservation
-                .bytes()
-                .saturating_add(frames.bytes())
-                .saturating_add(splats);
-            if held <= ceiling {
-                break reservation;
-            }
-            if slots <= MINIMUM_EXPORT_SLOTS {
-                return Err(format!(
-                    "an export at this size needs more than the {:.1} GiB export ceiling for a single brick",
-                    ceiling as f64 / (1u64 << 30) as f64
-                ));
-            }
-            slots = ((slots as u64).saturating_mul(ceiling) / held)
-                .clamp(MINIMUM_EXPORT_SLOTS as u64, slots as u64 - 1) as usize;
-        };
-        let held = reservation
-            .bytes()
-            .saturating_add(frames.bytes())
-            .saturating_add(splats);
-        if !self.claim.resize(held) {
-            return Err(format!(
-                "the graphics device cannot hold both the export and the running analyses, so the export cannot reserve its {:.1} MiB of textures",
-                held as f64 / (1u64 << 20) as f64
-            ));
-        }
-        if self.slots() < reservation.slots().capacity() || self.first_level() > detail.level {
-            self.install(
-                device,
-                pyramid,
-                reserve::Allocation::Export { slots },
-                Reset::Dataset,
-            )?;
-        }
-        self.frames = frames.bytes();
-        self.wanted = wanted;
-        self.degraded = None;
+        self.wanted = detail.bricks + 1;
+        self.export_ceiling = ceiling;
+        self.deficit = 0;
         self.reclaim = false;
-        Ok(())
+        self.degraded = None;
+        self.frames = budget::Frames::of(size, budget::FrameDemand::full()).bytes();
+        self.install(
+            device,
+            pyramid,
+            reserve::Allocation::Export {
+                slots: self.wanted,
+                ceiling,
+            },
+            Reset::Dataset,
+        )
+        .map(|_| ())
     }
 
     pub fn degraded(&self) -> Option<&str> {
@@ -433,40 +401,29 @@ impl Renderer {
     }
 
     fn grow(&mut self, device: &Device) {
-        let Some(resources) = self.resources.as_ref() else {
+        let Some((slots, slot_bytes, pyramid)) = self
+            .resources
+            .as_ref()
+            .map(|held| (held.slots(), held.slot_bytes, held.pyramid.clone()))
+        else {
             return;
         };
-        let pyramid = resources.pyramid.clone();
-        let slot_bytes = resources.slot_bytes;
-        let slots = (resources.slots() * 2).min(self.wanted);
-        let Ok(reservation) = reserve::Reservation::of(
-            &pyramid,
-            reserve::Allocation::Export { slots },
-            slot_bytes,
-            device.limits().max_texture_dimension_3d,
-        ) else {
-            self.degrade(slot_bytes);
-            return;
-        };
-        let held = reservation
-            .bytes()
-            .saturating_add(self.frames)
-            .saturating_add(self.splat_budget());
-        if !self.claim.resize(held) {
+        let wanted = (slots + self.deficit.max(1)).min(self.wanted);
+        if wanted <= slots {
             self.degrade(slot_bytes);
             return;
         }
-        self.resources = None;
-        if self
-            .install(
-                device,
-                &pyramid,
-                reserve::Allocation::Export { slots },
-                Reset::Dataset,
-            )
-            .is_err()
-        {
-            self.degrade(slot_bytes);
+        match self.install(
+            device,
+            &pyramid,
+            reserve::Allocation::Export {
+                slots: wanted,
+                ceiling: self.export_ceiling,
+            },
+            Reset::Dataset,
+        ) {
+            Ok(installed) if installed > slots => {}
+            _ => self.degrade(slot_bytes),
         }
     }
 
@@ -476,37 +433,95 @@ impl Renderer {
         pyramid: &Pyramid,
         allocation: reserve::Allocation,
         reset: Reset,
-    ) -> Result<(), String> {
-        let resources = Resources::new(
-            device,
-            &self.layouts,
-            &self.pipelines,
-            &self.atlas_sampler,
-            &self.dummy,
-            allocation,
-            pyramid,
-        )?;
-        let proven = resources.requested();
-        if let reserve::Allocation::Display(requested) = allocation
-            && proven < requested
-        {
-            self.ceiling = proven;
-        }
-        self.requested = proven;
-        self.budget = resources.reserved();
-        let surface = resources.surface_bytes();
-        if let Some(meshes) = self.meshes.as_mut() {
-            meshes.set_budget(surface);
-        }
+    ) -> Result<usize, String> {
+        let max_dimension = device.limits().max_texture_dimension_3d;
+        let least = reserve::least(pyramid, reserve::slot_bytes(pyramid));
+        let mut allocation = allocation;
+        let mut shrunk = false;
+        let mut held = self.resources.take();
+        let mut peak = held.as_ref().map_or(0, Resources::bytes);
+        let outcome = loop {
+            let plan = match reserve::Plan::of(pyramid, allocation, self.footprint(), max_dimension)
+            {
+                Ok(plan) => plan,
+                Err(detail) => break Err(detail),
+            };
+            if !self.claim.resize(peak.saturating_add(plan.total())) {
+                let Some(resident) = held.take() else {
+                    break Err(unaffordable(plan.total()));
+                };
+                drop(resident);
+                peak = 0;
+                if !self.claim.resize(plan.total()) {
+                    break Err(unaffordable(plan.total()));
+                }
+            }
+            match Resources::new(
+                device,
+                &self.layouts,
+                &self.pipelines,
+                &self.atlas_sampler,
+                &self.dummy,
+                pyramid,
+                &plan,
+            ) {
+                Ok(resources) => break Ok((plan, resources)),
+                Err(resources::Shortfall::Memory) => {
+                    let Some(next) = allocation.shrink(least) else {
+                        break Err(format!(
+                            "the graphics device cannot hold the smallest brick residency of {:.1} MiB",
+                            least as f64 / (1u64 << 20) as f64
+                        ));
+                    };
+                    grana_log::warn!(
+                        target: "grana::render",
+                        budget = plan.residency(),
+                        "the graphics device is short of memory, so the brick residency shrinks"
+                    );
+                    shrunk = true;
+                    allocation = next;
+                }
+                Err(resources::Shortfall::Detail(detail)) => break Err(detail),
+            }
+        };
+        let (plan, resources) = match outcome {
+            Ok(held) => held,
+            Err(detail) => {
+                self.resources = held;
+                if !self.claim.resize(peak) {
+                    return Err(unaffordable(peak));
+                }
+                return Err(detail);
+            }
+        };
         self.residence.setup(device, resources.slots(), pyramid);
+        assert_eq!(
+            resources.bytes() + self.residence.bytes(),
+            plan.dataset(),
+            "the renderer holds exactly the dataset bytes its plan charges"
+        );
+        let installed = resources.slots();
+        self.budget = plan.residency();
+        self.residency_target = plan.target();
+        self.mesh_budget = plan.surface();
         self.resources = Some(resources);
+        if let Some(meshes) = self.meshes.as_mut() {
+            meshes.set_budget(self.mesh_budget);
+        }
+        drop(held);
+        if !self.claim.resize(plan.total()) {
+            return Err(unaffordable(plan.total()));
+        }
+        if shrunk {
+            self.ceiling = self.ceiling.min(self.budget);
+        }
         if reset == Reset::Dataset {
             self.targets.clear();
             self.meshes = None;
             self.sections.clear();
         }
         if reset == Reset::Residency {
-            return Ok(());
+            return Ok(installed);
         }
         self.time = 0;
         self.sliced = false;
@@ -517,14 +532,15 @@ impl Renderer {
         self.fade = None;
         self.motion = None;
         self.info = FrameInfo::default();
-        Ok(())
+        Ok(installed)
     }
 
     fn settle(&mut self) -> Result<(), String> {
         let held = self
             .budget
             .saturating_add(self.frames)
-            .saturating_add(self.splat_budget());
+            .saturating_add(self.splat_budget())
+            .saturating_add(self.support());
         if held == self.claim.bytes() {
             return Ok(());
         }
@@ -556,7 +572,12 @@ impl Renderer {
         )?;
         self.frames = split.frames;
         self.settle()?;
-        if split.residency.abs_diff(self.requested).saturating_mul(4) > self.total {
+        if split
+            .residency
+            .abs_diff(self.residency_target)
+            .saturating_mul(4)
+            > self.total
+        {
             let pyramid = self.resources.as_ref().map(|held| held.pyramid.clone());
             if let Some(pyramid) = pyramid {
                 self.install(
@@ -565,10 +586,24 @@ impl Renderer {
                     reserve::Allocation::Display(split.residency),
                     Reset::Residency,
                 )?;
-                self.settle()?;
             }
         }
         Ok(())
+    }
+
+    fn support(&self) -> u64 {
+        self.present.bytes()
+            + self.overlay.bytes()
+            + self.sections.bytes()
+            + self.convergence.bytes()
+    }
+
+    fn footprint(&self) -> reserve::Footprint {
+        reserve::Footprint {
+            frames: self.frames,
+            splats: self.splat_budget(),
+            support: self.support(),
+        }
     }
 
     fn fragment_allowance(&self, size: [u32; 2]) -> u64 {
@@ -642,18 +677,17 @@ impl Renderer {
         size: [u32; 2],
     ) -> Result<(), String> {
         assert!(budget > 0, "a renderer needs a texture budget");
-        if !self.claim.resize(budget) {
-            return Err(format!(
-                "the graphics device cannot hold both the renderer and the running analyses, so the dataset cannot reserve its {:.1} MiB render budget",
-                budget as f64 / (1u64 << 20) as f64
-            ));
-        }
         self.ceiling = if budget > self.total {
             budget
         } else {
             self.ceiling.min(budget)
         };
         self.total = budget;
+        self.wanted = 0;
+        self.deficit = 0;
+        self.reclaim = false;
+        self.exporting = false;
+        self.degraded = None;
         let split = budget::split(
             self.total,
             self.ceiling,
@@ -661,14 +695,13 @@ impl Renderer {
             self.splat_budget(),
             size,
         )?;
+        self.frames = split.frames;
         self.install(
             device,
             pyramid,
             reserve::Allocation::Display(split.residency),
             Reset::Dataset,
         )?;
-        self.exporting = false;
-        self.frames = split.frames;
         self.settle()?;
         Ok(())
     }
@@ -745,8 +778,13 @@ impl Renderer {
         if !uploaded.denied.is_empty() {
             self.residence.denied(&uploaded.denied);
             if self.exporting {
+                self.deficit = self.deficit.max(uploaded.denied.len());
                 let slot_bytes = self.resources.as_ref().map_or(0, |held| held.slot_bytes);
-                if self.slots() < self.wanted {
+                if self
+                    .resources
+                    .as_ref()
+                    .is_some_and(|held| held.slots() < self.wanted)
+                {
                     self.reclaim = true;
                 } else {
                     self.degrade(slot_bytes);
@@ -796,12 +834,15 @@ impl Renderer {
         let (residency, atlas, records, surfaces) =
             self.resources
                 .as_ref()
-                .map_or((self.budget, 0, 0, 0), |resources| {
+                .map_or((self.budget, 0, 0, self.mesh_budget), |resources| {
                     (
-                        resources.reserved(),
-                        resources.reservation.atlas(),
-                        resources.reservation.records(),
-                        resources.reservation.surface(),
+                        self.budget
+                            .saturating_add(self.frames)
+                            .saturating_add(self.splat_budget())
+                            .saturating_add(self.support()),
+                        resources.atlas.bytes(),
+                        resources.arena.bytes(),
+                        self.mesh_budget,
                     )
                 });
         Statistics {
@@ -1115,6 +1156,13 @@ impl Renderer {
         self.present_picture(device, queue, &view, size, exposure, transparent);
         crate::image::read(device, queue, &texture, size, read)
     }
+}
+
+fn unaffordable(bytes: u64) -> String {
+    format!(
+        "the graphics device cannot hold the {:.1} MiB of textures this dataset needs together with the running analyses",
+        bytes as f64 / (1u64 << 20) as f64
+    )
 }
 
 pub(super) fn ensure_brick(

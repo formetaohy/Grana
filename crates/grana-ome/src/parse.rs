@@ -71,18 +71,17 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
                 }
             }
             Event::Text(text) => {
-                if let Some(held) = uuid_text.as_mut() {
-                    let decoded = text.decode().map_err(|error| error.to_string())?;
-                    let value =
-                        quick_xml::escape::unescape(&decoded).map_err(|error| error.to_string())?;
-                    held.push_str(&value);
-                }
-                if let Some(held) = annotation.as_mut() {
-                    let decoded = text.decode().map_err(|error| error.to_string())?;
-                    let value =
-                        quick_xml::escape::unescape(&decoded).map_err(|error| error.to_string())?;
-                    held.text(&value);
-                }
+                let decoded = text.decode().map_err(|error| error.to_string())?;
+                let value =
+                    quick_xml::escape::unescape(&decoded).map_err(|error| error.to_string())?;
+                capture(&mut uuid_text, &mut annotation, &value);
+            }
+            Event::GeneralRef(reference) => {
+                let name = reference.decode().map_err(|error| error.to_string())?;
+                let held = format!("&{name};");
+                let value =
+                    quick_xml::escape::unescape(&held).map_err(|error| error.to_string())?;
+                capture(&mut uuid_text, &mut annotation, &value);
             }
             Event::End(end) => {
                 let name = end.name();
@@ -126,6 +125,15 @@ pub fn parse(xml: &str) -> Result<Metadata, String> {
         binary_only,
         uuid,
     })
+}
+
+fn capture(uuid: &mut Option<String>, annotation: &mut Option<Annotation>, value: &str) {
+    if let Some(held) = uuid.as_mut() {
+        held.push_str(value);
+    }
+    if let Some(held) = annotation.as_mut() {
+        held.text(value);
+    }
 }
 
 struct Annotation {

@@ -30,6 +30,18 @@ fn pack_format(components: usize) -> TextureFormat {
     }
 }
 
+pub(crate) fn bytes(slots: crate::slots::Slots, channels: usize) -> u64 {
+    let texels = slots.grid().iter().fold(1u64, |held, count| {
+        held * u64::from(*count) * u64::from(PADDED_SIDE)
+    });
+    let source = (0..grana_volume::pack_count(channels))
+        .map(|pack| {
+            texels * (grana_volume::texels(components(channels, pack)) * size_of::<u16>()) as u64
+        })
+        .sum::<u64>();
+    source + slots.capacity() as u64 * STRUCTURE_BYTES
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ResidentBrick {
     pub time: u32,
@@ -303,6 +315,7 @@ pub(crate) struct Atlas {
     evictions: u64,
     now: u32,
     identity: HashMap<(u32, usize, usize), u32>,
+    bytes: u64,
 }
 
 impl Atlas {
@@ -437,7 +450,12 @@ impl Atlas {
             evictions: 0,
             now: 0,
             identity: HashMap::new(),
+            bytes: bytes(slots, channel_count),
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn group(&self) -> &BindGroup {

@@ -100,6 +100,10 @@ impl Chunk {
         }
     }
 
+    fn bytes(&self) -> u64 {
+        self.corners.bytes() + self.styles.bytes()
+    }
+
     fn write(
         &mut self,
         device: &Device,
@@ -169,6 +173,10 @@ impl StyleTable {
 
     fn group(&self) -> Option<&BindGroup> {
         self.group.as_ref()
+    }
+
+    fn bytes(&self) -> u64 {
+        self.styles.bytes() + self.plane.size()
     }
 }
 
@@ -332,6 +340,11 @@ impl Sections {
                 .collect::<Vec<_>>();
             self.style.write(device, queue, layouts, &rows);
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        let chunks = self.chunks.iter().map(Chunk::bytes).sum::<u64>();
+        self.index.size() + chunks + self.style.bytes()
     }
 
     fn visibility(&mut self, scene: &SceneFrame<'_>) -> Visibility {

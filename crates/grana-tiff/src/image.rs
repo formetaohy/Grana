@@ -271,6 +271,23 @@ impl Image {
             }
             None => (fallback, [0.0; 3], derived),
         };
+        let declared_tables = match lookup(grana_archive::COLOR_TABLES) {
+            Some(text) => grana_archive::color_tables_from_text(text)
+                .map_err(|detail| Error::metadata(path, detail))?,
+            None => Vec::new(),
+        };
+        if let Some((channel, _)) = declared_tables
+            .iter()
+            .find(|(channel, _)| *channel >= sizes[1] as usize)
+        {
+            return Err(Error::metadata(
+                path,
+                format!(
+                    "the grana annotation colours the channel {channel} and the image holds {} channels",
+                    sizes[1]
+                ),
+            ));
+        }
         let mut channels = Vec::with_capacity(sizes[1] as usize);
         for index in 0..sizes[1] {
             let info = ome.and_then(|ome| ome.channels.get(index as usize));
@@ -281,17 +298,23 @@ impl Image {
             let tint = info
                 .and_then(|channel| channel.tint)
                 .unwrap_or_else(|| sample_tint(samples, index));
-            let color_table = match levels[0].planes.chunky() {
-                true => page.color.color_table(),
-                false => {
-                    let raster = levels[0].planes.index(0, index, 0);
-                    let slot = levels[0].slots[raster];
-                    files
-                        .file(slot.file)
-                        .page(slot.page, 0)?
-                        .color
-                        .color_table()
-                }
+            let color_table = match declared_tables
+                .iter()
+                .find(|(held, _)| *held == index as usize)
+            {
+                Some((_, table)) => Some(table.clone()),
+                None => match levels[0].planes.chunky() {
+                    true => page.color.color_table(),
+                    false => {
+                        let raster = levels[0].planes.index(0, index, 0);
+                        let slot = levels[0].slots[raster];
+                        files
+                            .file(slot.file)
+                            .page(slot.page, 0)?
+                            .color
+                            .color_table()
+                    }
+                },
             };
             if let Some(color_table) = color_table {
                 channels.push(

@@ -264,7 +264,7 @@ impl Renderer {
             time: frame.time,
             content: residence.content(),
         });
-        resources.upload.encode(device, queue, encoder);
+        resources.upload.flush(device, queue);
         let tables = plan::tables(&resources.bricks, outlook.levels);
         let reach = crate::frame::reach(frame.camera, &tables);
         let (step, ray_bounds) =

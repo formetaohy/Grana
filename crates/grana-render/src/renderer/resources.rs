@@ -7,11 +7,16 @@ use grana_volume::{
 use crate::atlas::ResidentBrick;
 use crate::brick::BrickRecord;
 use crate::occupancy::{CELL_WORDS, Occupancy};
-use crate::reserve::{Allocation, Reservation};
+use crate::reserve::Plan;
 
 use super::*;
 
 const APRON: u32 = 1;
+
+pub(super) enum Shortfall {
+    Memory,
+    Detail(String),
+}
 
 pub(super) struct Resources {
     pub(super) pyramid: Pyramid,
@@ -30,7 +35,7 @@ pub(super) struct Resources {
     pub(super) scene: crate::table::SceneTable,
     pub(super) channels: usize,
     pub(super) slot_bytes: u64,
-    pub(super) reservation: Reservation,
+    pub(super) surface: u64,
     pub(super) summary: Option<signature::SceneSummary>,
 }
 
@@ -41,48 +46,18 @@ impl Resources {
         pipelines: &Pipelines,
         sampler: &Sampler,
         dummy: &TextureView,
-        allocation: Allocation,
         pyramid: &Pyramid,
-    ) -> Result<Self, String> {
-        let least = crate::reserve::least(pyramid, slot_bytes(pyramid));
-        let mut allocation = allocation;
-        loop {
-            let attempt = grana_gpu::scoped(device, || {
-                Self::allocate(
-                    device, layouts, pipelines, sampler, dummy, allocation, pyramid,
-                )
-            });
-            match attempt {
-                Ok(Ok(resources)) => return Ok(resources),
-                Ok(Err(detail)) => return Err(detail),
-                Err(wgpu::Error::OutOfMemory { .. }) => {
-                    let Some(next) = allocation.shrink(least) else {
-                        return Err(match allocation {
-                            Allocation::Display(_) => format!(
-                                "the graphics device cannot hold the smallest brick residency of {:.1} MiB",
-                                least as f64 / (1u64 << 20) as f64
-                            ),
-                            Allocation::Export { .. } => {
-                                "the graphics device cannot hold the brick residency this export needs"
-                                    .to_string()
-                            }
-                        });
-                    };
-                    allocation = next;
-                    if let Allocation::Display(budget) = allocation {
-                        grana_log::warn!(
-                            target: "grana::render",
-                            budget,
-                            "the graphics device is short of memory, so the brick residency shrinks"
-                        );
-                    }
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "the renderer could not allocate its dataset resources: {error}"
-                    ));
-                }
-            }
+        plan: &Plan,
+    ) -> Result<Self, Shortfall> {
+        match grana_gpu::scoped(device, || {
+            Self::allocate(device, layouts, pipelines, sampler, dummy, pyramid, plan)
+        }) {
+            Ok(Ok(resources)) => Ok(resources),
+            Ok(Err(detail)) => Err(Shortfall::Detail(detail)),
+            Err(wgpu::Error::OutOfMemory { .. }) => Err(Shortfall::Memory),
+            Err(error) => Err(Shortfall::Detail(format!(
+                "the renderer could not allocate its dataset resources: {error}"
+            ))),
         }
     }
 
@@ -92,8 +67,8 @@ impl Resources {
         pipelines: &Pipelines,
         sampler: &Sampler,
         dummy: &TextureView,
-        allocation: Allocation,
         pyramid: &Pyramid,
+        plan: &Plan,
     ) -> Result<Self, String> {
         let channels = pyramid.channel_count();
         assert!(
@@ -104,13 +79,6 @@ impl Resources {
             !pyramid.levels().is_empty(),
             "a pyramid holds at least one level"
         );
-        let slot_bytes = slot_bytes(pyramid);
-        let reservation = Reservation::of(
-            pyramid,
-            allocation,
-            slot_bytes,
-            device.limits().max_texture_dimension_3d,
-        )?;
         let atlas = Atlas::new(
             device,
             crate::atlas::AtlasBinding {
@@ -120,12 +88,12 @@ impl Resources {
                 sampler,
             },
             channels,
-            reservation.slots(),
+            plan.slots(),
         );
         let slots = atlas.slots();
         let occupancy = Occupancy::new(device, slots);
         let bake = Bake::new(device, layouts, atlas.structure(), slots, pipelines);
-        let arena = BrickArena::new(device, pyramid, reservation.record_limit())
+        let arena = BrickArena::new(device, pyramid, plan.record_limit())
             .expect("the record share holds the coarsest level");
         let level_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.level.group"),
@@ -145,14 +113,10 @@ impl Resources {
         });
         let mut planner = Planner::new(device, layouts, slots, pipelines);
         planner.bind_arena(device, layouts, &arena);
-        let counts = pyramid
-            .levels()
-            .iter()
-            .map(|level| BrickGrid::new(level.extent()).count())
-            .collect();
-        let shadow = Shadow::new(device, layouts, pipelines, counts);
+        let shadow = Shadow::new(device, layouts, pipelines, pyramid);
         let scene = crate::table::SceneTable::new(device, layouts, channels);
-        Ok(Self {
+        let upload = crate::upload::Upload::new(device);
+        let resources = Self {
             pyramid: pyramid.clone(),
             atlas,
             arena,
@@ -161,33 +125,38 @@ impl Resources {
             occupancy_group,
             bake,
             baked: BakeQueue::new(),
-            upload: crate::upload::Upload::new(),
+            upload,
             staged: Vec::new(),
             level_group,
             planner,
             shadow,
             scene,
             channels,
-            slot_bytes,
-            reservation,
+            slot_bytes: plan.slot_bytes(),
+            surface: plan.surface(),
             summary: None,
-        })
+        };
+        assert_eq!(
+            resources.bytes() + planner::readback_bytes(slots),
+            plan.dataset(),
+            "the renderer's resources hold exactly the bytes its plan charges"
+        );
+        Ok(resources)
+    }
+
+    pub(super) fn bytes(&self) -> u64 {
+        self.atlas.bytes()
+            + self.arena.bytes()
+            + self.occupancy.bytes()
+            + self.bake.bytes()
+            + self.planner.bytes()
+            + self.shadow.bytes()
+            + self.scene.bytes()
+            + crate::upload::Upload::bytes()
     }
 
     pub(super) fn slots(&self) -> usize {
         self.atlas.slots()
-    }
-
-    pub(super) fn reserved(&self) -> u64 {
-        self.reservation.bytes()
-    }
-
-    pub(super) fn requested(&self) -> u64 {
-        self.reservation.requested()
-    }
-
-    pub(super) fn surface_bytes(&self) -> u64 {
-        self.reservation.surface()
     }
 
     pub(super) fn drop_hollows(&mut self, forgotten: &[u32]) {
@@ -198,6 +167,10 @@ impl Resources {
             ..
         } = self;
         forget_hollows(bricks, arena, upload, forgotten);
+    }
+
+    pub(super) fn surface_bytes(&self) -> u64 {
+        self.surface
     }
 
     pub(super) fn first_level(&self) -> usize {
@@ -620,16 +593,6 @@ impl Placement<'_> {
         }
         Some(BrickGrid::new(extent).index(coord))
     }
-}
-
-pub(super) fn slot_bytes(pyramid: &Pyramid) -> u64 {
-    let channels = pyramid.channel_count();
-    let source = (0..pack_count(channels))
-        .map(|pack| texels(components(channels, pack)) as u64)
-        .sum::<u64>()
-        * (PADDED_SIDE as u64).pow(3)
-        * size_of::<u16>() as u64;
-    source + crate::atlas::STRUCTURE_BYTES
 }
 
 fn forget_hollows(

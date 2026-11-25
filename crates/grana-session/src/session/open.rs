@@ -718,22 +718,14 @@ impl Session {
                     if !self.stale(generation) {
                         self.in_flight.remove(&request);
                         let now = Instant::now();
-                        let failure = match self.failed.entry(request) {
-                            Entry::Occupied(entry) => entry.into_mut(),
-                            Entry::Vacant(entry) => entry.insert(Failure {
-                                attempts: 0,
-                                retry_at: now,
-                                asked: false,
-                            }),
-                        };
-                        failure.attempts += 1;
-                        failure.asked = !retryable;
-                        failure.retry_at = now + Failure::backoff(failure.attempts);
+                        let previous = self.failed.get(&request).copied();
+                        self.failed
+                            .insert(request, Backoff::failed(previous, now, retryable));
                         self.abandoned.push(request);
                         if !retryable {
                             grana_log::warn!(target: "grana::session", %detail, "a volume region cannot be read");
                         }
-                        if failure.attempts == 1 {
+                        if previous.is_none() {
                             self.message = Some(Message::error(format!(
                                 "a volume region could not be read: {detail}"
                             )));

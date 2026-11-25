@@ -98,21 +98,61 @@ const RETRY_ATTEMPTS: u32 = 8;
 
 const DECODE_REPORT: Duration = Duration::from_secs(1);
 
-struct Failure {
-    attempts: u32,
-    retry_at: Instant,
-    asked: bool,
+#[derive(Clone, Copy)]
+enum Backoff {
+    Waiting { attempts: u32, at: Instant },
+    Halted,
 }
 
-impl Failure {
+impl Backoff {
     fn backoff(attempts: u32) -> Duration {
         RETRY_FLOOR
             .saturating_mul(1 << attempts.saturating_sub(1).min(RETRY_STEPS))
             .min(RETRY_CEILING)
     }
 
-    fn waiting(&self) -> bool {
-        !self.asked && self.attempts < RETRY_ATTEMPTS
+    fn waiting(now: Instant) -> Self {
+        Self::Waiting {
+            attempts: 0,
+            at: now,
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        matches!(self, Self::Waiting { at, .. } if *at <= now)
+    }
+
+    fn wait(&self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Waiting { at, .. } if *at > now => Some(*at - now),
+            Self::Waiting { .. } | Self::Halted => None,
+        }
+    }
+
+    fn failed(previous: Option<Self>, now: Instant, retryable: bool) -> Self {
+        let attempts = match previous {
+            None => 1,
+            Some(Self::Waiting { attempts, .. }) => attempts.saturating_add(1),
+            Some(Self::Halted) => return Self::Halted,
+        };
+        if !retryable || attempts >= RETRY_ATTEMPTS {
+            return Self::Halted;
+        }
+        Self::Waiting {
+            attempts,
+            at: now + Self::backoff(attempts),
+        }
+    }
+
+    fn attempt(&mut self, now: Instant) -> bool {
+        let Self::Waiting { attempts, at } = self else {
+            return false;
+        };
+        if *at > now {
+            return false;
+        }
+        *at = now + Self::backoff(*attempts);
+        true
     }
 }
 
@@ -165,7 +205,7 @@ pub struct Session {
     reads_started: u64,
     reads_delivered: u64,
     decode_reported: Option<Instant>,
-    failed: HashMap<BrickRequest, Failure>,
+    failed: HashMap<BrickRequest, Backoff>,
     bricks: Vec<(BrickRequest, PackedBrick)>,
     pending: Option<Pending>,
     inquiry: Option<Inquiry>,
@@ -727,14 +767,9 @@ impl Session {
     }
     pub fn retry_unreadable(&mut self) {
         let now = Instant::now();
-        let mut due = Vec::new();
-        for (request, failure) in &mut self.failed {
-            failure.attempts = 0;
-            failure.asked = false;
-            failure.retry_at = now;
-            due.push(*request);
+        for state in self.failed.values_mut() {
+            *state = Backoff::waiting(now);
         }
-        self.retries.extend(due);
         self.retry_view = true;
     }
     pub fn take_retry_view(&mut self) -> bool {
@@ -742,15 +777,12 @@ impl Session {
     }
     fn advance_retries(&mut self) {
         let now = Instant::now();
-        let mut due = Vec::new();
-        for (request, failure) in &mut self.failed {
-            if !failure.waiting() || now < failure.retry_at {
-                continue;
-            }
-            failure.asked = true;
-            failure.retry_at = now + Failure::backoff(failure.attempts);
-            due.push(*request);
-        }
+        let due = self
+            .failed
+            .iter()
+            .filter(|(_, state)| state.due(now))
+            .map(|(request, _)| *request)
+            .collect::<Vec<_>>();
         self.retries.extend(due);
     }
     pub fn retrying(&self) -> bool {
@@ -896,7 +928,6 @@ impl Session {
         plan: u64,
         demand: &[BrickRequest],
         prefetch: &[BrickRequest],
-        unreadable: &[BrickRequest],
     ) {
         if self.loading.is_some() {
             return;
@@ -915,8 +946,7 @@ impl Session {
             reads_started,
             ..
         } = self;
-        let marked = unreadable.iter().copied().collect::<HashSet<_>>();
-        failed.retain(|request, _| request.time != time || marked.contains(request));
+        failed.retain(|request, _| request.time >= time);
         let Some(loader) = source.as_ref() else {
             return;
         };
@@ -935,14 +965,13 @@ impl Session {
                 if request.time < time || in_flight.contains(request) {
                     continue;
                 }
-                if let Some(failure) = failed.get(request)
-                    && !failure.asked
-                    && now < failure.retry_at
-                {
-                    continue;
-                }
                 let cost = bytes(request);
                 if held >= MAX_IN_FLIGHT || used.saturating_add(cost) > READ_BYTES {
+                    continue;
+                }
+                if let Some(state) = failed.get_mut(request)
+                    && !state.attempt(now)
+                {
                     continue;
                 }
                 held += 1;
@@ -967,8 +996,7 @@ impl Session {
         let now = Instant::now();
         self.failed
             .values()
-            .filter(|failure| failure.waiting())
-            .map(|failure| failure.retry_at.saturating_duration_since(now))
+            .filter_map(|state| state.wait(now))
             .min()
     }
     pub fn set_time(&mut self, time: u32) {
@@ -1011,6 +1039,74 @@ fn report_pools() {
             hit_rate = meter.hit_rate(),
             evicted = meter.evicted(),
             "the cache pool reports its reuse"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_retried_failure_backs_off_until_it_halts() {
+        let mut now = Instant::now();
+        let mut state = Backoff::failed(None, now, true);
+        let mut waits = Vec::new();
+        while let Some(wait) = state.wait(now) {
+            waits.push(wait);
+            now += wait;
+            assert!(state.attempt(now), "a due retry is attempted");
+            assert!(!state.due(now), "an issued attempt holds its backoff");
+            state = Backoff::failed(Some(state), now, true);
+        }
+        assert_eq!(waits.first().copied(), Some(RETRY_FLOOR));
+        assert!(
+            waits.windows(2).all(|pair| pair[1] > pair[0]),
+            "each failed retry waits longer than the one before it"
+        );
+        assert_eq!(waits.len(), RETRY_ATTEMPTS as usize - 1);
+        assert!(matches!(state, Backoff::Halted));
+        assert!(!state.due(now) && state.wait(now).is_none());
+        let mut halted = state;
+        assert!(
+            !halted.attempt(now),
+            "a halted region never retries by itself"
+        );
+        assert!(matches!(Backoff::failed(None, now, false), Backoff::Halted));
+        let mut reset = Backoff::waiting(now);
+        assert!(reset.due(now), "a manual retry is due at once");
+        assert!(reset.attempt(now));
+    }
+
+    #[test]
+    fn a_retried_region_keeps_the_backoff_it_earned() {
+        let mut session = Session::new();
+        let extent = grana_volume::Extent::new(8, 8, 8);
+        let volume = grana_volume::Volume::new(
+            extent,
+            Spacing::new(1.0, 1.0, 1.0),
+            vec![grana_volume::Channel::new(
+                "signal",
+                [0.3, 0.6, 1.0],
+                grana_volume::VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+            )],
+        );
+        let series = grana_volume::VolumeSeries::new(vec![volume], 1.0);
+        assert!(matches!(
+            session.open_series("backoff", series),
+            crate::Transfer::Started
+        ));
+        let brick = BrickRequest::new(0, 0, grana_volume::BrickCoord::new(0, 0, 0));
+        session
+            .failed
+            .insert(brick, Backoff::failed(None, Instant::now(), true));
+        session.request(0, 0, &[], &[]);
+        assert!(
+            matches!(
+                session.failed.get(&brick),
+                Some(Backoff::Waiting { attempts: 1, .. })
+            ),
+            "a retry round trip drops the failure it earned"
         );
     }
 }

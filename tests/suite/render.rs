@@ -1316,14 +1316,14 @@ fn fits_the_volume_level_to_the_residency_budget() {
             gpu.queue(),
             wgpu::TextureFormat::Rgba8Unorm,
             &crate::support::ledger(),
-            16 << 20,
+            128 << 20,
             gpu.pipelines(),
         );
         renderer
             .set_dataset(
                 gpu.device(),
                 &pyramid,
-                budget(16 << 20, [SIDE, SIDE]),
+                budget(128 << 20, [SIDE, SIDE]),
                 [SIDE, SIDE],
             )
             .expect("the test budget holds the volume");
@@ -1346,14 +1346,14 @@ fn fits_the_volume_level_to_the_residency_budget() {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         &crate::support::ledger(),
-        1 << 20,
+        45 << 20,
         gpu.pipelines(),
     );
     renderer
         .set_dataset(
             gpu.device(),
             &pyramid,
-            budget(1 << 20, [SIDE, SIDE]),
+            budget(45 << 20, [SIDE, SIDE]),
             [SIDE, SIDE],
         )
         .expect("the test budget holds the volume");
@@ -2823,14 +2823,14 @@ fn prefetches_the_carried_frame_into_vacant_slots() {
         gpu.queue(),
         wgpu::TextureFormat::Rgba8Unorm,
         &crate::support::ledger(),
-        8 << 20,
+        128 << 20,
         gpu.pipelines(),
     );
     renderer
         .set_dataset(
             gpu.device(),
             &pyramid,
-            budget(8 << 20, [SIDE, SIDE]),
+            budget(128 << 20, [SIDE, SIDE]),
             [SIDE, SIDE],
         )
         .expect("the test budget holds the volume");
@@ -2934,7 +2934,7 @@ fn settle_time(
     }
 }
 
-const HOLLOW_BUDGET: u64 = 2 << 20;
+const HOLLOW_BUDGET: u64 = 128 << 20;
 const CLOSE_DISTANCE: f32 = 80.0;
 const OVERVIEW_DISTANCE: f32 = 240.0;
 

@@ -2152,9 +2152,10 @@ fn round_trips_an_indexed_channel_through_every_archive() {
         let read = held
             .color_table()
             .unwrap_or_else(|| panic!("{name} keeps the colour table of its indexed channel"));
-        assert!(
-            read.colors().len() >= color_table.colors().len(),
-            "{name} keeps at least the colours of its indexed channel"
+        assert_eq!(
+            read.colors().len(),
+            color_table.colors().len(),
+            "{name} keeps exactly the colours of its indexed channel"
         );
         for (held, expected) in read.colors().iter().zip(color_table.colors()) {
             for channel in 0..3 {

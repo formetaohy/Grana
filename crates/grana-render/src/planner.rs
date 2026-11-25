@@ -52,6 +52,20 @@ pub(crate) fn plan_words(capacity: usize) -> usize {
     DEMAND_BASE + capacity
 }
 
+pub(crate) fn plan_bytes(capacity: usize) -> u64 {
+    (plan_words(capacity) * size_of::<u32>()) as u64
+}
+
+pub(crate) fn bytes(capacity: usize) -> u64 {
+    BAND as u64 * (plan_bytes(capacity) + size_of::<ScheduleData>() as u64)
+}
+
+pub(crate) const READBACK_SLOTS: usize = 4;
+
+pub(crate) fn readback_bytes(capacity: usize) -> u64 {
+    READBACK_SLOTS as u64 * BAND as u64 * plan_bytes(capacity)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Ladder {
     pub base: usize,
@@ -101,7 +115,7 @@ impl Plan {
     fn new(device: &Device, layouts: &Layouts, label: &'static str, capacity: usize) -> Self {
         let buffer = device.create_buffer(&BufferDescriptor {
             label: Some(label),
-            size: (plan_words(capacity) * size_of::<u32>()) as u64,
+            size: plan_bytes(capacity),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -267,6 +281,10 @@ impl Planner {
         for plan in &mut self.view.bands {
             plan.bind_arena(device, layouts, arena);
         }
+    }
+
+    pub fn bytes(&self) -> u64 {
+        bytes(self.view.bands[0].capacity())
     }
 
     pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {

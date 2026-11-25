@@ -112,6 +112,10 @@ impl Convergence {
         self.settled
     }
 
+    pub(crate) fn bytes(&self) -> u64 {
+        self.limit.size() + self.bins.size() + self.readback.bytes()
+    }
+
     pub(crate) fn error(&self) -> f32 {
         self.error
     }

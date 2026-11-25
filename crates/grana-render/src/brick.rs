@@ -11,6 +11,10 @@ pub(crate) const HOLLOW_FLAG: u32 = 2;
 
 pub(crate) const RECORD_BYTES: u64 = size_of::<BrickRecord>() as u64;
 
+pub(crate) fn size(records: usize) -> u64 {
+    records as u64 * RECORD_BYTES
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(crate) struct BrickRecord {
@@ -95,7 +99,7 @@ impl BrickArena {
         }
         let buffer = device.create_buffer(&BufferDescriptor {
             label: Some("grana.brick.records"),
-            size: records as u64 * RECORD_BYTES,
+            size: size(records),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -117,6 +121,10 @@ impl BrickArena {
 
     pub fn records(&self) -> usize {
         self.records
+    }
+
+    pub fn bytes(&self) -> u64 {
+        size(self.records)
     }
 
     pub fn base(&self, level: usize) -> u32 {

@@ -9,8 +9,6 @@ use crate::hollow::Cursor;
 use crate::planner::{Demand, decode_plan};
 use crate::schema::Versions;
 
-const FEEDBACK_SLOTS: usize = 4;
-
 const PREFETCH_LIMIT: usize = 1024;
 
 const RESTORE_BUCKET: u32 = 0;
@@ -352,9 +350,9 @@ impl Residence {
             device,
             "grana.feedback",
             (BAND * self.words) as u64 * size_of::<u32>() as u64,
-            FEEDBACK_SLOTS,
+            planner::READBACK_SLOTS,
         ));
-        self.frames = vec![None; FEEDBACK_SLOTS];
+        self.frames = vec![None; planner::READBACK_SLOTS];
         self.denial = vec![0; pyramid.level_count()];
         self.grids = pyramid
             .levels()
@@ -363,6 +361,10 @@ impl Residence {
             .collect();
         self.epoch += 1;
         self.forget();
+    }
+
+    pub(crate) fn bytes(&self) -> u64 {
+        self.feedback.as_ref().map_or(0, Readback::bytes)
     }
 
     pub(crate) fn forget(&mut self) {

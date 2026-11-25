@@ -1,6 +1,7 @@
 use bytemuck::{Pod, Zeroable, cast_slice};
 use glam::{Mat4, Vec3};
 use grana_gpu::Pipelines;
+use grana_volume::{BrickGrid, Pyramid};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferDescriptor,
     BufferUsages, CommandEncoder, CompareFunction, ComputePipeline, ComputePipelineDescriptor,
@@ -186,6 +187,24 @@ pub fn extent(space: &ShadowSpace, voxel: f32) -> [u32; 3] {
     ]
 }
 
+fn bound(pyramid: &Pyramid) -> u32 {
+    let finest = pyramid.level(0);
+    let diagonal = finest
+        .world_extent()
+        .iter()
+        .fold(0.0f32, |held, extent| held + extent * extent)
+        .sqrt();
+    let voxel = finest.voxel().into_iter().fold(f32::INFINITY, f32::min);
+    ((diagonal / voxel).ceil().max(1.0) as u32).min(SIDE)
+}
+
+pub(crate) fn bytes(pyramid: &Pyramid) -> u64 {
+    let objects = u64::from(OBJECT_SIDE).pow(2) * size_of::<f32>() as u64;
+    let regions = crate::tau::REGION_LIMIT as u64 * size_of::<[u32; 4]>() as u64;
+    let tau = u64::from(bound(pyramid)).pow(3) * size_of::<u32>() as u64;
+    objects + regions + size_of::<TauHead>() as u64 + tau
+}
+
 pub(crate) struct Shadow {
     objects: TextureView,
     read: BindGroup,
@@ -197,6 +216,8 @@ pub(crate) struct Shadow {
     sampler: wgpu::Sampler,
     compare: wgpu::Sampler,
     dims: [u32; 3],
+    bound: u32,
+    bytes: u64,
     tau_key: Option<u64>,
     dirty: Vec<Vec<u32>>,
     seen: Vec<Vec<bool>>,
@@ -210,8 +231,14 @@ impl Shadow {
         device: &Device,
         layouts: &Layouts,
         pipelines: &Pipelines,
-        counts: Vec<usize>,
+        pyramid: &Pyramid,
     ) -> Self {
+        let counts = pyramid
+            .levels()
+            .iter()
+            .map(|level| BrickGrid::new(level.extent()).count())
+            .collect::<Vec<_>>();
+        let bound = bound(pyramid);
         let objects = depth(device, "grana.shadow.objects", OBJECT_SIDE);
         let sampler = linear(device);
         let compare = device.create_sampler(&SamplerDescriptor {
@@ -271,6 +298,8 @@ impl Shadow {
             sampler,
             compare,
             dims,
+            bound,
+            bytes: bytes(pyramid),
             tau_key: None,
             dirty: counts
                 .iter()
@@ -295,6 +324,7 @@ impl Shadow {
     }
 
     pub fn resize(&mut self, device: &Device, layouts: &Layouts, dims: [u32; 3]) {
+        let dims = dims.map(|extent| extent.clamp(1, self.bound));
         if self.dims == dims {
             return;
         }
@@ -310,6 +340,10 @@ impl Shadow {
         self.tau_write = tau_write;
         self.dims = dims;
         self.forget();
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn group(&self) -> &BindGroup {

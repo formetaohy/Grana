@@ -35,6 +35,10 @@ pub(crate) struct BakeEntry {
     pub reserved: u32,
 }
 
+pub(crate) fn bytes(slots: usize) -> u64 {
+    (slots * size_of::<BakeEntry>()) as u64
+}
+
 pub(crate) struct Bake {
     pipeline: ComputePipeline,
     entries: Buffer,
@@ -65,7 +69,7 @@ impl Bake {
         });
         let entries = device.create_buffer(&BufferDescriptor {
             label: Some("grana.bake.entries"),
-            size: (capacity * size_of::<BakeEntry>()) as u64,
+            size: bytes(capacity),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -93,6 +97,10 @@ impl Bake {
 
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    pub fn bytes(&self) -> u64 {
+        bytes(self.capacity)
     }
 
     pub fn stage(&self, queue: &Queue, entries: &[BakeEntry]) {

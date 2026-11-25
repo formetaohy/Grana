@@ -123,6 +123,10 @@ impl Present {
         self.format
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.uniforms.size()
+    }
+
     pub fn bind(&self, device: &Device, source: &TextureView, previous: &TextureView) -> BindGroup {
         device.create_bind_group(&BindGroupDescriptor {
             label: Some("grana.present.group"),

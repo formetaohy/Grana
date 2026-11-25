@@ -46,6 +46,14 @@ const _: () = {
     assert!(size_of::<NeutralData>() == 432);
 };
 
+pub(crate) fn bytes(channels: usize) -> u64 {
+    let frames = 2 * size_of::<FrameData>() as u64;
+    let neutral = size_of::<NeutralData>() as u64;
+    let rows = 2 * (CHANNEL_LIMIT * size_of::<ChannelData>()) as u64;
+    let lut = LUT_SIZE as u64 * channels as u64 * size_of::<[u16; 4]>() as u64;
+    frames + neutral + rows + lut
+}
+
 pub(crate) struct SceneTable {
     frame: Buffer,
     channels: Table<ChannelData>,
@@ -132,6 +140,10 @@ impl SceneTable {
 
     pub fn group(&self) -> &BindGroup {
         &self.group
+    }
+
+    pub fn bytes(&self) -> u64 {
+        bytes(self.channels_count)
     }
 
     pub fn shadow_group(&self) -> &BindGroup {

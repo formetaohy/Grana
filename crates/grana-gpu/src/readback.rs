@@ -50,6 +50,13 @@ impl Readback {
         !self.pending.is_empty()
     }
 
+    pub fn bytes(&self) -> u64 {
+        self.slots
+            .iter()
+            .map(|slot| slot.buffer.size())
+            .sum::<u64>()
+    }
+
     pub fn reserve(&mut self) -> Option<usize> {
         let slot = self.slots.iter().position(|slot| !slot.reserved)?;
         self.slots[slot].reserved = true;

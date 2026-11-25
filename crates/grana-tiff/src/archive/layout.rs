@@ -399,7 +399,16 @@ fn annotations(spec: &ImageSpec<'_>) -> String {
     let mut xml = String::from(
         " <StructuredAnnotations>\n  <MapAnnotation ID=\"Annotation:grana\" Namespace=\"urn:grana:archive\">\n",
     );
-    for (key, value) in grana_archive::annotations(spec.levels, spec.placement, spec.calibration) {
+    let mut entries = grana_archive::annotations(spec.levels, spec.placement, spec.calibration);
+    let tables = spec
+        .channels
+        .iter()
+        .map(|channel| channel.color_table)
+        .collect::<Vec<_>>();
+    if let Some(text) = grana_archive::color_table_text(&tables) {
+        entries.push((grana_archive::COLOR_TABLES.to_string(), text));
+    }
+    for (key, value) in entries {
         xml.push_str(&format!(
             "   <Value><M>{}</M><S>{}</S></Value>\n",
             escape(&key),

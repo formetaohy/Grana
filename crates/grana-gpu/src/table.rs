@@ -43,4 +43,8 @@ impl<T: Pod> Table<T> {
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
     }
+
+    pub fn bytes(&self) -> u64 {
+        (self.capacity * size_of::<T>()) as u64
+    }
 }

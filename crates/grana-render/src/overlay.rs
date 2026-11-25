@@ -61,6 +61,7 @@ const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
 
 struct Sheet {
     group: BindGroup,
+    bytes: u64,
 }
 
 struct Draw {
@@ -245,6 +246,12 @@ impl Overlays {
         queue.write_buffer(buffer, 0, bytes);
     }
 
+    pub fn bytes(&self) -> u64 {
+        let sheets = self.sheets.values().map(|sheet| sheet.bytes).sum::<u64>();
+        let vertices = self.buffer.as_ref().map_or(0, Buffer::size);
+        self.camera.size() + vertices + sheets
+    }
+
     pub fn draw(&self, encoder: &mut CommandEncoder, target: &TextureView, viewport: [u32; 4]) {
         let Some(buffer) = self.buffer.as_ref().filter(|_| !self.draws.is_empty()) else {
             return;
@@ -353,5 +360,8 @@ fn sheet(
             },
         ],
     });
-    Sheet { group }
+    Sheet {
+        group,
+        bytes: crate::target::bytes(SHEET_FORMAT, [width, height]),
+    }
 }
