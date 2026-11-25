@@ -470,6 +470,7 @@ pub(crate) struct Counts<'a> {
     pyramid: &'a Pyramid,
     scale: f32,
     first: usize,
+    hollow: Option<crate::hollow::Cursor<'a>>,
     bands: Vec<crate::culling::Counts>,
 }
 
@@ -481,6 +482,7 @@ impl<'a> Counts<'a> {
         aspect: f32,
         height: u32,
         first: usize,
+        hollow: Option<crate::hollow::Cursor<'a>>,
     ) -> Self {
         assert!(aspect > 0.0, "a view has a positive aspect");
         let scale = camera.pixels_per_world_at(height as f32);
@@ -491,6 +493,7 @@ impl<'a> Counts<'a> {
             pyramid,
             scale,
             first,
+            hollow,
             bands: Vec::new(),
         }
     }
@@ -524,7 +527,9 @@ impl<'a> Counts<'a> {
             }
             _ => f32::INFINITY,
         };
-        self.frustum.counts(source, lower, upper)
+        let grid = BrickGrid::new(source.extent()).counts();
+        let mask = self.hollow.and_then(|hollow| hollow.mask(level, grid));
+        self.frustum.counts(source, lower, upper, mask.as_ref())
     }
 }
 
@@ -548,21 +553,7 @@ pub(crate) fn volume_demand(
         count > 0 && base + count <= pyramid.level_count(),
         "a ladder spans levels the pyramid holds"
     );
-    Counts::new(pyramid, camera, region, aspect, height, base).volume(base, count)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Measured {
-    pub(crate) pose: u64,
-    pub(crate) visible: usize,
-}
-
-pub(crate) fn fresh(measure: &[Option<Measured>], level: usize, pose: u64) -> Option<Measured> {
-    measure
-        .get(level)
-        .copied()
-        .flatten()
-        .filter(|held| held.pose == pose)
+    Counts::new(pyramid, camera, region, aspect, height, base, None).volume(base, count)
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {

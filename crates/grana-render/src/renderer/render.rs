@@ -68,7 +68,6 @@ struct Prepared {
     started: timing::Started,
     reserved: Option<usize>,
     residency: ViewKey,
-    pose: u64,
     shadow: plan::ShadowPlan,
     replan: bool,
     rebuilt: bool,
@@ -236,6 +235,7 @@ impl Renderer {
             awaits: shot.awaits,
             assured: shot.assured,
             prefetch: frame.delivery.prefetches(),
+            hollow: Some(crate::hollow::Cursor::new(&resources.atlas, frame.time)),
         });
         let channel = channel_style(scene.channels);
         if residence.style_outdated(channel) {
@@ -408,7 +408,6 @@ impl Renderer {
             started,
             reserved,
             residency: outlook.key,
-            pose: outlook.pose,
             shadow: planned,
             replan: outlook.replan,
             rebuilt: stale,
@@ -605,13 +604,7 @@ impl Renderer {
             return;
         };
         *plans += 1;
-        residence.stage(
-            encoder,
-            slot,
-            &resources.planner,
-            prepared.residency,
-            prepared.pose,
-        );
+        residence.stage(encoder, slot, &resources.planner, prepared.residency);
     }
 
     fn accumulate(

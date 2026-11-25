@@ -2,6 +2,8 @@ use super::signature::{SceneSummary, ShadowKeys, ShadowVolume, digest};
 use super::view::View;
 use super::*;
 use crate::brick::BrickTable;
+use crate::hollow::Cursor;
+use crate::planner::Counts;
 use crate::schema::Versions;
 use crate::table::SceneTable;
 
@@ -11,10 +13,9 @@ pub(super) struct Input<'a> {
     pub(super) region: Region,
     pub(super) view: View,
     pub(super) target: usize,
-    pub(super) measure: &'a [Option<Measured>],
+    pub(super) hollow: Option<Cursor<'a>>,
     pub(super) denial: &'a [usize],
     pub(super) budget: usize,
-    pub(super) pose: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -31,34 +32,33 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
         region,
         view,
         target,
-        measure,
+        hollow,
         denial,
         budget,
-        pose,
     } = input;
     let level_count = pyramid.level_count();
     let budget = budget.max(1);
     let projection = camera.projection();
+    let mut counts = Counts::new(
+        pyramid,
+        camera,
+        region,
+        view.aspect,
+        view.height,
+        target,
+        hollow,
+    );
     let mut fit = None;
     for base in target..level_count {
         let count = ladder_count(projection, level_count, base);
-        let estimate = volume_demand(
-            pyramid,
-            camera,
-            region,
-            view.aspect,
-            view.height,
-            base,
-            count,
-        );
+        let estimate = counts.volume(base, count);
         let mut wanted = [0usize; BAND];
         let mut needed = 0usize;
         for (band, slot) in wanted.iter_mut().enumerate().take(count) {
             let level = base + band;
             let denied = denial.get(level).copied().unwrap_or(0);
-            let visible = fresh(measure, level, pose).map_or(estimate[band], |held| held.visible);
-            *slot = visible + denied;
-            needed += visible + denied;
+            *slot = estimate[band] + denied;
+            needed += estimate[band] + denied;
         }
         if needed <= budget {
             fit = Some((base, count, wanted, false));
@@ -68,21 +68,12 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
     let (base, count, wanted, truncated) = fit.unwrap_or_else(|| {
         let base = level_count - 1;
         let count = ladder_count(projection, level_count, base);
-        let estimate = volume_demand(
-            pyramid,
-            camera,
-            region,
-            view.aspect,
-            view.height,
-            base,
-            count,
-        );
+        let estimate = counts.volume(base, count);
         let mut wanted = [0usize; BAND];
         for (band, slot) in wanted.iter_mut().enumerate().take(count) {
             let level = base + band;
             let denied = denial.get(level).copied().unwrap_or(0);
-            let visible = fresh(measure, level, pose).map_or(estimate[band], |held| held.visible);
-            *slot = visible + denied;
+            *slot = estimate[band] + denied;
         }
         (base, count, wanted, true)
     });

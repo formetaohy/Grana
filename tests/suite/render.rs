@@ -2793,3 +2793,82 @@ fn settle_time(
         );
     }
 }
+
+const HOLLOW_BUDGET: u64 = 256 << 10;
+const CLOSE_DISTANCE: f32 = 80.0;
+const OVERVIEW_DISTANCE: f32 = 240.0;
+
+#[test]
+fn keeps_the_fitted_level_across_a_camera_move() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volumes = ladder_volumes();
+    let pyramid = ladder_pyramid(&volumes);
+    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
+    let channels = channels(&pyramid, &transfers);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
+        HOLLOW_BUDGET,
+        gpu.pipelines(),
+    );
+    renderer
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            budget(HOLLOW_BUDGET, [SIDE, SIDE]),
+            [SIDE, SIDE],
+        )
+        .expect("the hollow budget holds the volume");
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+    let mut state = camera.state();
+    state.distance = CLOSE_DISTANCE;
+    camera.restore(state);
+    let close = ladder_view(&view_texture, &camera, &scene);
+    let fitted = stream_levels(&gpu, &mut renderer, &close, &volumes);
+    assert_eq!(
+        fitted.view.level, 0,
+        "the close view settles on level {} instead of the finest one",
+        fitted.view.level
+    );
+    let bricks = BrickGrid::new(pyramid.level(0).extent()).count();
+    assert!(
+        fitted.view.visible * 3 < bricks,
+        "the close view counts {} of {bricks} bricks as occupied, so it holds too few hollow bricks to fit a level",
+        fitted.view.visible
+    );
+    let mut overview = camera.clone();
+    let mut state = overview.state();
+    state.distance = OVERVIEW_DISTANCE;
+    overview.restore(state);
+    let view = ladder_view(&view_texture, &overview, &scene);
+    let moved = renderer
+        .draw(gpu.device(), gpu.queue(), frame(&view))
+        .expect("the moved frame draws");
+    assert_eq!(
+        moved.view.level, fitted.view.level,
+        "the first frame after the camera move drops from level {} to level {}",
+        fitted.view.level, moved.view.level
+    );
+    let settled = stream_levels(&gpu, &mut renderer, &view, &volumes);
+    assert_eq!(
+        settled.view.level, fitted.view.level,
+        "the overview settles on level {} after the move from level {}",
+        settled.view.level, fitted.view.level
+    );
+}

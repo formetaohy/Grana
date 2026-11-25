@@ -1,13 +1,12 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 
-use super::super::residency::{Mode, Resolution, SliceKey, ViewState, quantise};
+use super::super::residency::{Mode, Resolution, ViewState};
 use super::super::signature::digest;
 use super::super::view::View;
 use super::super::*;
 use super::{Input, levels};
-use crate::planner::{Demand, Measured, decode_plan};
+use crate::hollow::Cursor;
+use crate::planner::{Demand, decode_plan};
 use crate::schema::Versions;
 
 const FEEDBACK_SLOTS: usize = 4;
@@ -49,7 +48,7 @@ impl ResidencyDemand {
 
 pub(crate) struct Residence {
     feedback: Option<Readback>,
-    frames: Vec<Option<(ViewKey, u64)>>,
+    frames: Vec<Option<ViewKey>>,
     words: usize,
     bytes: u64,
     epoch: u64,
@@ -73,7 +72,6 @@ pub(crate) struct Residence {
     restaged: bool,
     passes: Option<Passes>,
     target: Option<usize>,
-    measure: Vec<Option<Measured>>,
     grids: Vec<BrickGrid>,
     view: ViewInfo,
 }
@@ -278,13 +276,13 @@ pub(crate) struct Adapt<'a> {
     pub(crate) awaits: bool,
     pub(crate) assured: bool,
     pub(crate) prefetch: bool,
+    pub(crate) hollow: Option<Cursor<'a>>,
 }
 
 pub(crate) struct Outlook {
     pub(crate) ladder: Ladder,
     pub(crate) levels: Levels,
     pub(crate) key: ViewKey,
-    pub(crate) pose: u64,
     pub(crate) replan: bool,
     pub(crate) settled: bool,
     pub(crate) truncated: bool,
@@ -319,7 +317,6 @@ impl Residence {
             restaged: false,
             passes: None,
             target: None,
-            measure: Vec::new(),
             grids: Vec::new(),
             view: ViewInfo::default(),
         }
@@ -335,7 +332,6 @@ impl Residence {
             FEEDBACK_SLOTS,
         ));
         self.frames = vec![None; FEEDBACK_SLOTS];
-        self.measure = vec![None; pyramid.level_count()];
         self.denial = vec![0; pyramid.level_count()];
         self.grids = pyramid
             .levels()
@@ -367,7 +363,6 @@ impl Residence {
         self.restaged = false;
         self.passes = None;
         self.target = None;
-        self.measure.fill(None);
         self.view = ViewInfo::default();
     }
 
@@ -386,7 +381,6 @@ impl Residence {
         self.batches.clear();
         self.refreshes.clear();
         self.denial.fill(0);
-        self.measure.fill(None);
         self.target = None;
         self.bump();
     }
@@ -415,7 +409,6 @@ impl Residence {
         self.denial.fill(0);
         self.prefetch_rate = 1.0;
         self.frames.fill(None);
-        self.measure.fill(None);
         self.view = ViewInfo::default();
     }
 
@@ -510,6 +503,7 @@ impl Residence {
             awaits,
             assured,
             prefetch,
+            hollow,
         } = adapt;
         let target = volume_target(TargetView {
             pyramid,
@@ -519,17 +513,15 @@ impl Residence {
             current: self.target,
         });
         let quantum = Resolution::of(pyramid, target, camera, size[1]);
-        let pose = pose(camera, size, region, quantum);
         let planned = levels(Input {
             pyramid,
             camera,
             region,
             view,
             target,
-            measure: &self.measure,
+            hollow,
             denial: &self.denial,
             budget,
-            pose,
         });
         for count in &mut self.denial {
             *count /= 2;
@@ -562,7 +554,6 @@ impl Residence {
             ladder: planned.ladder,
             levels: planned.levels,
             key,
-            pose,
             replan,
             settled,
             truncated: planned.truncated,
@@ -584,7 +575,6 @@ impl Residence {
         slot: usize,
         planner: &Planner,
         key: ViewKey,
-        pose: u64,
     ) {
         if let Some(feedback) = self.feedback.as_ref() {
             for (band, view) in planner.view.bands.iter().enumerate() {
@@ -597,7 +587,7 @@ impl Residence {
                 );
             }
         }
-        self.frames[slot] = Some((key, pose));
+        self.frames[slot] = Some(key);
         self.planned = Some(key);
         if self.demand.as_ref().is_none_or(|held| !held.covers(&key)) {
             self.demand = None;
@@ -624,8 +614,8 @@ impl Residence {
             prefetch,
             pending,
         } = stage;
-        while let Some((key, pose, bands)) = self.decode(device, pyramid, planner)? {
-            self.accept(pyramid, key, pose, bands, atlas);
+        while let Some((key, bands)) = self.decode(device, pyramid, planner)? {
+            self.accept(pyramid, key, bands, atlas);
         }
         Ok(self.emit(pyramid, atlas, time, prefetch, pending))
     }
@@ -635,7 +625,7 @@ impl Residence {
         device: &Device,
         pyramid: &Pyramid,
         planner: &Planner,
-    ) -> Result<Option<(ViewKey, u64, Vec<Demand>)>, String> {
+    ) -> Result<Option<(ViewKey, Vec<Demand>)>, String> {
         let Self {
             feedback,
             frames,
@@ -647,32 +637,19 @@ impl Residence {
             return Ok(None);
         };
         let decoded = feedback.take_with(device, |slot, bytes| {
-            let (key, pose) = frames[slot].take()?;
+            let key = frames[slot].take()?;
             let bands = parse_bands(bytes, words, key.levels.ladder, key.time, pyramid, planner)?;
-            Some((key, pose, bands))
+            Some((key, bands))
         })?;
         Ok(decoded.flatten())
     }
 
-    fn accept(
-        &mut self,
-        pyramid: &Pyramid,
-        key: ViewKey,
-        pose: u64,
-        bands: Vec<Demand>,
-        atlas: &mut Atlas,
-    ) {
+    fn accept(&mut self, pyramid: &Pyramid, key: ViewKey, bands: Vec<Demand>, atlas: &mut Atlas) {
         if key.epoch != self.epoch {
             return;
         }
         atlas.advance_holds();
         for band in &bands {
-            if let Some(slot) = self.measure.get_mut(band.info.level) {
-                *slot = Some(Measured {
-                    pose,
-                    visible: band.info.visible,
-                });
-            }
             atlas.touch(key.time, band.info.level, band.indices.iter().copied());
         }
         self.settled = bands
@@ -902,32 +879,6 @@ fn demands_complete(demand: &Demand, assured: bool) -> bool {
     demand.requests.is_empty()
         && demand.info.resident == demand.info.demand
         && (!assured || demand.info.visible == demand.info.demand)
-}
-
-fn pose(camera: &Camera, size: [u32; 2], region: Region, quantum: Resolution) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    quantum.position(camera.eye().to_array()).hash(&mut hasher);
-    quantum
-        .position(camera.pivot().to_array())
-        .hash(&mut hasher);
-    quantise(camera.fov_y(), quantum.angle).hash(&mut hasher);
-    camera.projection().index().hash(&mut hasher);
-    camera
-        .slice()
-        .map(|slice| SliceKey::of(slice, quantum))
-        .hash(&mut hasher);
-    size.hash(&mut hasher);
-    region.enabled().hash(&mut hasher);
-    quantum
-        .position(region.center().to_array())
-        .hash(&mut hasher);
-    quantum.position(region.half().to_array()).hash(&mut hasher);
-    for axis in 0..3 {
-        quantum
-            .direction(region.axis(axis).to_array())
-            .hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 struct Prefetch<'a> {

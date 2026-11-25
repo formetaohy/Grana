@@ -1,6 +1,8 @@
 use glam::Vec3;
 use grana_volume::{BRICK_SIDE, BrickGrid, Level, Region};
 
+use crate::hollow::Mask;
+
 const WHOLE: usize = 0;
 const FIRST: usize = 1;
 const MIDDLE: usize = 2;
@@ -36,6 +38,13 @@ impl Bands {
     }
 }
 
+struct Query<'a> {
+    level: Level,
+    grid: [u32; 3],
+    bands: Bands,
+    hollow: Option<&'a Mask<'a>>,
+}
+
 pub(crate) struct Frustum {
     planes: [[f32; 4]; 6],
     eye: Vec3,
@@ -51,28 +60,32 @@ impl Frustum {
         }
     }
 
-    pub(crate) fn counts(&self, level: Level, lower: f32, upper: f32) -> Counts {
-        let counts = BrickGrid::new(level.extent()).counts();
-        if counts.contains(&0) {
-            return Counts::default();
-        }
-        let bands = Bands::new(lower, upper);
-        Counts(self.visit(level, [0; 3], counts, &bands, ALL).0)
-    }
-
-    fn visit(
+    pub(crate) fn counts(
         &self,
         level: Level,
-        low: [u32; 3],
-        high: [u32; 3],
-        bands: &Bands,
-        open: u8,
+        lower: f32,
+        upper: f32,
+        hollow: Option<&Mask<'_>>,
     ) -> Counts {
-        let extent = level.extent();
+        let grid = BrickGrid::new(level.extent()).counts();
+        if grid.contains(&0) {
+            return Counts::default();
+        }
+        let query = Query {
+            level,
+            grid,
+            bands: Bands::new(lower, upper),
+            hollow,
+        };
+        Counts(self.visit(&query, [0; 3], grid, ALL).0)
+    }
+
+    fn visit(&self, query: &Query<'_>, low: [u32; 3], high: [u32; 3], open: u8) -> Counts {
+        let extent = query.level.extent();
         let limits = [extent.x(), extent.y(), extent.z()];
         let first = low.map(|value| value * BRICK_SIDE);
         let last = [0, 1, 2].map(|axis| (high[axis] * BRICK_SIDE).min(limits[axis]));
-        let (low_world, high_world) = level.cell_bounds(first, last);
+        let (low_world, high_world) = query.level.cell_bounds(first, last);
         let low_world = Vec3::from(low_world);
         let high_world = Vec3::from(high_world);
         if self.beyond_frustum(low_world, high_world) || self.outside_region(low_world, high_world)
@@ -87,17 +100,23 @@ impl Frustum {
             self.within_frustum(low_world, high_world) && self.within_region(low_world, high_world);
         let mut counts = [0usize; KINDS];
         let mut descend = 0u8;
+        let mut live = None;
         for (kind, slot) in counts.iter_mut().enumerate() {
             if open & (1 << kind) == 0 {
                 continue;
             }
-            let lower = bands.lower[kind];
-            let upper = bands.upper[kind];
+            let lower = query.bands.lower[kind];
+            let upper = query.bands.upper[kind];
             if far < lower || near >= upper {
                 continue;
             }
             if contained && near >= lower && far < upper {
-                *slot += bricks;
+                let occupied = *live.get_or_insert_with(|| {
+                    query
+                        .hollow
+                        .map_or(bricks, |mask| bricks - mask.count(low, high))
+                });
+                *slot += occupied;
                 continue;
             }
             descend |= 1 << kind;
@@ -106,9 +125,15 @@ impl Frustum {
             return Counts(counts);
         }
         if bricks == 1 {
-            for (kind, slot) in counts.iter_mut().enumerate() {
-                if descend & (1 << kind) != 0 {
-                    *slot += 1;
+            let occupied = query.hollow.is_none_or(|mask| {
+                let index = low[0] + query.grid[0] * (low[1] + query.grid[1] * low[2]);
+                !mask.holds(index as usize)
+            });
+            if occupied {
+                for (kind, slot) in counts.iter_mut().enumerate() {
+                    if descend & (1 << kind) != 0 {
+                        *slot += 1;
+                    }
                 }
             }
             return Counts(counts);
@@ -122,7 +147,7 @@ impl Frustum {
         let mut right = low;
         right[axis] = middle;
         for (low, high) in [(low, left), (right, high)] {
-            let part = self.visit(level, low, high, bands, descend);
+            let part = self.visit(query, low, high, descend);
             for (count, other) in counts.iter_mut().zip(part.0) {
                 *count += other;
             }

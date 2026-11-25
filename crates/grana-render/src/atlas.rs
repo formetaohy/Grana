@@ -126,12 +126,44 @@ impl Space {
 
 #[derive(Default)]
 struct HollowFrame {
-    indices: Vec<u32>,
+    words: Vec<u64>,
+    count: usize,
+}
+
+impl HollowFrame {
+    fn holds(&self, index: usize) -> bool {
+        self.words
+            .get(index / u64::BITS as usize)
+            .is_some_and(|word| word & (1u64 << (index % u64::BITS as usize)) != 0)
+    }
+
+    fn set(&mut self, index: usize) {
+        let word = index / u64::BITS as usize;
+        if self.words.len() <= word {
+            self.words.resize(word + 1, 0);
+        }
+        let bit = 1u64 << (index % u64::BITS as usize);
+        if self.words[word] & bit == 0 {
+            self.words[word] |= bit;
+            self.count += 1;
+        }
+    }
+
+    fn clear(&mut self, index: usize) {
+        let word = index / u64::BITS as usize;
+        if self.words.len() <= word {
+            return;
+        }
+        let bit = 1u64 << (index % u64::BITS as usize);
+        if self.words[word] & bit != 0 {
+            self.words[word] &= !bit;
+            self.count -= 1;
+        }
+    }
 }
 
 struct Hollows {
     frames: HashMap<(u32, usize), HollowFrame>,
-    positions: HashMap<(u32, usize, usize), u32>,
     remembered: Vec<u32>,
 }
 
@@ -139,51 +171,39 @@ impl Hollows {
     fn new() -> Self {
         Self {
             frames: HashMap::new(),
-            positions: HashMap::new(),
             remembered: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
         self.frames.clear();
-        self.positions.clear();
         self.remembered.clear();
     }
 
     fn holds(&self, time: u32, level: usize, index: usize) -> bool {
-        self.positions.contains_key(&(time, level, index))
+        self.frames
+            .get(&(time, level))
+            .is_some_and(|frame| frame.holds(index))
     }
 
     fn assign(&mut self, time: u32, level: usize, index: usize) -> Vec<u32> {
-        if self.positions.contains_key(&(time, level, index)) {
+        if self.holds(time, level, index) {
             return Vec::new();
         }
         let forgotten = self.remember(time);
-        let positions = &mut self.positions;
-        let frame = self.frames.entry((time, level)).or_default();
-        positions.insert((time, level, index), frame.indices.len() as u32);
-        frame.indices.push(index as u32);
+        self.frames.entry((time, level)).or_default().set(index);
         forgotten
     }
 
     fn release(&mut self, time: u32, level: usize, index: usize) -> bool {
-        let Some(position) = self.positions.remove(&(time, level, index)) else {
+        let Some(frame) = self.frames.get_mut(&(time, level)) else {
             return false;
         };
-        let empty = {
-            let Some(frame) = self.frames.get_mut(&(time, level)) else {
-                return true;
-            };
-            let last = frame.indices.len() - 1;
-            frame.indices.swap(position as usize, last);
-            frame.indices.pop();
-            if let Some(moved) = frame.indices.get(position as usize) {
-                self.positions
-                    .insert((time, level, *moved as usize), position);
-            }
-            frame.indices.is_empty()
-        };
-        if empty {
+        if !frame.holds(index) {
+            return false;
+        }
+        frame.clear(index);
+        if frame.count == 0 {
             self.frames.remove(&(time, level));
         }
         true
@@ -198,16 +218,21 @@ impl Hollows {
         while self.remembered.len() > HOLLOW_FRAMES {
             let dropped = self.remembered.remove(0);
             self.frames.retain(|(held, _), _| *held != dropped);
-            self.positions.retain(|(held, _, _), _| *held != dropped);
             forgotten.push(dropped);
         }
         forgotten
     }
 
-    fn indices(&self, time: u32, level: usize) -> Option<&[u32]> {
+    fn words(&self, time: u32, level: usize) -> Option<&[u64]> {
         self.frames
             .get(&(time, level))
-            .map(|frame| frame.indices.as_slice())
+            .map(|frame| frame.words.as_slice())
+    }
+}
+
+impl crate::hollow::Source for Atlas {
+    fn hollow(&self, time: u32, level: usize) -> Option<&[u64]> {
+        self.hollow.words(time, level)
     }
 }
 
@@ -512,12 +537,17 @@ impl Atlas {
             });
             cursor = slot.next;
         }
-        if let Some(indices) = self.hollow.indices(time, level) {
-            for index in indices {
-                out.push(Resident {
-                    index: *index as usize,
-                    slot: None,
-                });
+        if let Some(words) = self.hollow.words(time, level) {
+            for (position, word) in words.iter().enumerate() {
+                let mut bits = *word;
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    out.push(Resident {
+                        index: position * u64::BITS as usize + bit,
+                        slot: None,
+                    });
+                    bits &= bits - 1;
+                }
             }
         }
     }

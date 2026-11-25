@@ -8,6 +8,7 @@ mod culling;
 mod detail;
 mod fragment;
 mod frame;
+mod hollow;
 mod image;
 mod jitter;
 mod layout;
