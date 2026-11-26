@@ -69,7 +69,6 @@ pub(crate) struct Residence {
     missing: Missing,
     restaged: bool,
     passes: Option<Passes>,
-    target: Option<usize>,
     grids: Vec<BrickGrid>,
     view: ViewInfo,
 }
@@ -307,7 +306,6 @@ impl Residence {
             missing: Missing::default(),
             restaged: false,
             passes: None,
-            target: None,
             grids: Vec::new(),
             view: ViewInfo::default(),
         }
@@ -357,7 +355,6 @@ impl Residence {
         self.missing.clear();
         self.restaged = false;
         self.passes = None;
-        self.target = None;
         self.view = ViewInfo::default();
     }
 
@@ -376,7 +373,6 @@ impl Residence {
         self.batches.clear();
         self.refreshes.clear();
         self.denial.fill(0);
-        self.target = None;
         self.bump();
     }
 
@@ -394,7 +390,6 @@ impl Residence {
         self.demand = None;
         self.missing.clear();
         self.restaged = false;
-        self.target = None;
         self.planned = None;
         self.prefetched.clear();
         self.prefetch_key = None;
@@ -505,7 +500,6 @@ impl Residence {
             camera,
             height: view.height as f32,
             first: arena.first(),
-            current: self.target,
         });
         let quantum = Resolution::of(pyramid, target, camera, size[1]);
         let planned = levels(Input {
@@ -520,9 +514,6 @@ impl Residence {
         });
         for count in &mut self.denial {
             *count /= 2;
-        }
-        if !assured {
-            self.target = Some(target);
         }
         let key = ViewKey::of(
             self.epoch,

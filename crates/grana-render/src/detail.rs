@@ -37,7 +37,6 @@ fn target(pyramid: &Pyramid, camera: &Camera, size: [u32; 2]) -> usize {
         camera,
         height: size[1] as f32,
         first: 0,
-        current: None,
     })
 }
 

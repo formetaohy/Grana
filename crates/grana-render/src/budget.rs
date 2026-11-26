@@ -162,8 +162,5 @@ pub(crate) struct Split {
 }
 
 pub(crate) fn fragment_allowance(grant: u64, size: [u32; 2], demand: Demand) -> u64 {
-    let lean = crate::fragment::layered(size, 1);
-    grant
-        .saturating_sub(Frames::of(size, demand).textures)
-        .max(lean)
+    grant.saturating_sub(Frames::of(size, demand).textures)
 }

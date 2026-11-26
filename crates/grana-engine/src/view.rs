@@ -331,7 +331,6 @@ pub fn frame(
         };
         let choice = targets.splats[ordinal];
         ordinal += 1;
-        topology.mix(detail.map_or(0, TriangleBudget::raw));
         let mut seeded = Vec::new();
         let seed_sigma = seed_radius / grana_object::RADIUS_PER_SIGMA;
         let seed_color = srgb_to_linear(SEED_COLOR);

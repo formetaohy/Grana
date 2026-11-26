@@ -3,7 +3,10 @@ use std::time::{Duration, Instant};
 use glam::Vec3;
 use grana_display::Camera;
 use grana_engine::{Cache, Engine, Lens};
-use grana_object::{IntensityTable, SampleStatistics, Spot, SpotSet};
+use grana_geometry::{Bounds, Mesh, MeshVertex};
+use grana_object::{
+    IntensityTable, SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, Truncation,
+};
 use grana_render::Delivery;
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_session::Session;
@@ -176,6 +179,83 @@ fn a_tight_splat_residency_coarsens_the_drawn_tier() {
         fitted.splats[0].bytes(),
         bytes / 2
     );
+}
+
+#[test]
+fn a_budget_change_that_keeps_the_mesh_level_keeps_the_topology() {
+    let scene = cube_scene();
+    let mut cache = Cache::new();
+    let views = [4.0, 5.0].map(|distance| {
+        let mut camera = Camera::new(35.0);
+        let mut state = camera.state();
+        state.distance = distance;
+        camera.restore(state);
+        let targets = grana_engine::plan_with(
+            &scene,
+            Some(Lens {
+                camera: &camera,
+                height: 320,
+            }),
+            &mut cache,
+        );
+        let rendered =
+            grana_engine::frame(&scene, &targets, &mut cache, u64::MAX).expect("the cube renders");
+        (targets, rendered.versions)
+    });
+    assert_ne!(
+        views[0].0, views[1].0,
+        "the two distances name one triangle budget"
+    );
+    assert_eq!(
+        views[0].1.topology(),
+        views[1].1.topology(),
+        "a budget change that keeps the mesh level renames the topology"
+    );
+}
+
+fn cube_scene() -> Scene {
+    let level = Level::new(Extent::new(8, 8, 8), Spacing::new(1.0, 1.0, 1.0));
+    let intensity = Intensity::new(0.0, 1.0);
+    let channels = vec![ChannelInfo::new(
+        "signal",
+        [1.0, 1.0, 1.0],
+        Statistics::declared(intensity, VoxelSemantics::Scalar),
+        VoxelFormat::U8,
+    )];
+    let pyramid = Pyramid::new(vec![level], 1, channels, 1, 1.0, Calibration::Recorded);
+    let vertices = (0..8u32)
+        .map(|bits| {
+            let at = [0, 1, 2].map(|axis| if (bits >> axis) & 1 == 0 { -0.5 } else { 0.5 });
+            MeshVertex::new(at, [0.0, 0.0, 1.0], 0)
+        })
+        .collect::<Vec<_>>();
+    let indices = vec![
+        0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6,
+        1, 3, 5, 3, 7, 5,
+    ];
+    let statistics = SurfaceStatistics::new(
+        8,
+        1.0,
+        6.0,
+        [0.0; 3],
+        Bounds::new([-0.5; 3], [0.5; 3]),
+        None,
+        Truncation::Complete,
+    );
+    let surfaces = SurfaceSet::new(
+        0,
+        crate::support::ids(1),
+        Mesh::new(vertices, indices),
+        vec![statistics],
+        IntensityTable::new(
+            1,
+            vec![Some(SampleStatistics::new(0.5, 0.0, 1.0, 0.0, 1.0))],
+        ),
+    );
+    let mut scene = Scene::new(Dataset::synthetic("cube", pyramid));
+    let set = scene.add_object(ObjectKind::Surfaces, 0);
+    scene.install(set, 0, ObjectFrame::Surfaces(surfaces));
+    scene
 }
 
 fn proxy_scene(frames: u32) -> Scene {

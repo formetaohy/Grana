@@ -402,7 +402,6 @@ pub(crate) struct TargetView<'a> {
     pub(crate) camera: &'a Camera,
     pub(crate) height: f32,
     pub(crate) first: usize,
-    pub(crate) current: Option<usize>,
 }
 
 pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
@@ -411,7 +410,6 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
         camera,
         height,
         first,
-        current,
     } = view;
     let levels = pyramid.level_count();
     let pixel_world = match camera.projection() {
@@ -430,10 +428,7 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
             break;
         }
     }
-    hold_level(levels, target, current, footprint, |index| {
-        minimum_spacing(pyramid, index)
-    })
-    .max(first)
+    target
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
@@ -441,27 +436,6 @@ fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
     let low = Vec3::from(low);
     let high = Vec3::from(high);
     (eye.clamp(low, high) - eye).length()
-}
-
-const LEVEL_HYSTERESIS: f32 = 1.2;
-
-fn hold_level(
-    levels: usize,
-    target: usize,
-    current: Option<usize>,
-    footprint: f32,
-    spacing: impl Fn(usize) -> f32,
-) -> usize {
-    let Some(current) = current.filter(|current| *current < levels) else {
-        return target;
-    };
-    if target < current && footprint >= spacing(current) / LEVEL_HYSTERESIS {
-        return current;
-    }
-    if target > current && footprint <= spacing(target) * LEVEL_HYSTERESIS {
-        return current;
-    }
-    target
 }
 
 fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
@@ -503,7 +477,6 @@ mod tests {
             camera: &camera,
             height,
             first: 0,
-            current: None,
         })
     }
 

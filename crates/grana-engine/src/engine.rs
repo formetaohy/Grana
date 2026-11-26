@@ -14,8 +14,6 @@ use crate::image::ViewportImage;
 use crate::splat::SplatMembers;
 use crate::view::{self, Cache, PickRows, RenderedScene};
 
-const PLAN_BAND: f32 = 1.4;
-
 #[derive(Clone, Copy, PartialEq)]
 struct Content {
     scene: u64,
@@ -66,17 +64,14 @@ struct Prepared {
 struct Plan {
     topology: u64,
     classification: u64,
-    camera: CameraState,
-    scale: f32,
     targets: Arc<view::Targets>,
 }
 
 impl Plan {
-    fn accepts(&self, keys: view::Key, camera: CameraState, scale: f32, moving: bool) -> bool {
+    fn holds(&self, keys: view::Key, targets: &view::Targets) -> bool {
         self.topology == keys.topology()
             && self.classification == keys.classification()
-            && (self.camera == camera
-                || (moving && (scale / self.scale).ln().abs() <= PLAN_BAND.ln()))
+            && self.targets.as_ref() == targets
     }
 }
 
@@ -266,30 +261,21 @@ impl Engine {
         if self.image.as_ref().is_none_or(|image| image.size != size) {
             self.image = Some(ViewportImage::new(device, size, self.renderer.format()));
         }
-        let moving = self
-            .content
-            .is_some_and(|previous| previous.camera != content.camera);
-        let scale = view
-            .camera
-            .world_per_point(size[1] as f32, view.camera.distance());
+        let targets = view::plan_with(
+            view.scene,
+            Some(view::Lens {
+                camera: view.camera,
+                height: size[1],
+            }),
+            &mut self.cache,
+        );
         let detail = match &self.plan {
-            Some(plan) if plan.accepts(keys, content.camera, scale, moving) => {
-                Arc::clone(&plan.targets)
-            }
+            Some(plan) if plan.holds(keys, &targets) => Arc::clone(&plan.targets),
             _ => {
-                let targets = Arc::new(view::plan_with(
-                    view.scene,
-                    Some(view::Lens {
-                        camera: view.camera,
-                        height: size[1],
-                    }),
-                    &mut self.cache,
-                ));
+                let targets = Arc::new(targets);
                 self.plan = Some(Plan {
                     topology: keys.topology(),
                     classification: keys.classification(),
-                    camera: content.camera,
-                    scale,
                     targets: Arc::clone(&targets),
                 });
                 targets

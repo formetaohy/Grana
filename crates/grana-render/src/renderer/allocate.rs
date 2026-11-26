@@ -47,8 +47,8 @@ pub(super) fn targets(
         target.volume = None;
         target.geometry = None;
     }
-    if let Some(preferred) = needed.layers {
-        let plan = fragment::degrade(size, needed.fragments, &device.limits(), preferred)?;
+    if let Some(layers) = needed.layers {
+        let plan = fragment::fit(size, needed.fragments, &device.limits(), layers)?;
         if target.oit.as_ref().is_none_or(|oit| !oit.fits(plan)) {
             target.oit = Some(Oit::new(device, layouts, plan));
         }

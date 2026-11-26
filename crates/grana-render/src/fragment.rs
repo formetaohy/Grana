@@ -74,34 +74,11 @@ pub fn fit(
     size: [u32; 2],
     allowance: u64,
     limits: &Limits,
-    required: u64,
-) -> Result<Fragment, String> {
-    plan(size, allowance, limits, required, LAYER_LIMIT)
-}
-
-pub(crate) fn degrade(
-    size: [u32; 2],
-    allowance: u64,
-    limits: &Limits,
-    preferred: u64,
+    layers: u64,
 ) -> Result<Fragment, String> {
     assert!(
-        (1..=LAYER_LIMIT).contains(&preferred),
-        "a fragment store prefers one to {LAYER_LIMIT} layers"
-    );
-    plan(size, allowance, limits, 1, preferred)
-}
-
-fn plan(
-    size: [u32; 2],
-    allowance: u64,
-    limits: &Limits,
-    required: u64,
-    preferred: u64,
-) -> Result<Fragment, String> {
-    assert!(
-        (1..=LAYER_LIMIT).contains(&required),
-        "a fragment store plans one to {LAYER_LIMIT} layers"
+        (1..=LAYER_LIMIT).contains(&layers),
+        "a fragment store holds one to {LAYER_LIMIT} layers"
     );
     assert!(
         size[0] > 0 && size[1] > 0,
@@ -116,40 +93,35 @@ fn plan(
     }
     let pixels = u64::from(size[0]) * u64::from(size[1]);
     let capacity = capacity(size);
-    let fixed = capacity * COUNT_BYTES + pixels * RESIDUAL_BYTES;
-    let slot = capacity * SLOT_BYTES;
-    let budgeted = allowance.saturating_sub(fixed) / slot;
     let addressable = limits
         .max_buffer_size
         .min(limits.max_storage_buffer_binding_size)
         / (capacity * COLOR_BYTES);
-    let layers = budgeted.min(addressable).min(preferred).min(LAYER_LIMIT);
-    if layers >= required {
-        return Ok(Fragment {
-            size,
-            capacity,
-            layers,
-        });
-    }
-    let needed = fixed + required * slot;
-    if addressable < required {
-        Err(format!(
-            "a {} × {} transparent view needs {:.0} MiB per buffer for {required} layers, above the {:.0} MiB buffer limit of this device",
+    if addressable < layers {
+        return Err(format!(
+            "a {} × {} transparent view needs {:.0} MiB per buffer for {layers} layers, above the {:.0} MiB buffer limit of this device",
             size[0],
             size[1],
-            (capacity * COLOR_BYTES * required) as f64 / (1 << 20) as f64,
+            (capacity * COLOR_BYTES * layers) as f64 / (1 << 20) as f64,
             limits
                 .max_buffer_size
                 .min(limits.max_storage_buffer_binding_size) as f64
                 / (1 << 20) as f64,
-        ))
-    } else {
-        Err(format!(
-            "a {} × {} transparent view needs {:.0} MiB for {required} layers, above the {:.0} MiB fragment budget",
+        ));
+    }
+    let needed = capacity * COUNT_BYTES + pixels * RESIDUAL_BYTES + layers * capacity * SLOT_BYTES;
+    if needed > allowance {
+        return Err(format!(
+            "a {} × {} transparent view needs {:.0} MiB for {layers} layers, above the {:.0} MiB fragment budget",
             size[0],
             size[1],
             needed as f64 / (1 << 20) as f64,
             allowance as f64 / (1 << 20) as f64,
-        ))
+        ));
     }
+    Ok(Fragment {
+        size,
+        capacity,
+        layers,
+    })
 }
