@@ -22,6 +22,11 @@ pub struct Spec {
     birth: f32,
     miss: f32,
     false_alarm: f32,
+    spread: f32,
+    growth: f32,
+    swirl: f32,
+    crowded: f32,
+    noise: f32,
 }
 
 impl Spec {
@@ -41,7 +46,68 @@ impl Spec {
             birth: 0.15,
             miss: 0.02,
             false_alarm: 0.1,
+            spread: 0.15,
+            growth: 0.04,
+            swirl: 0.015,
+            crowded: 0.5,
+            noise: 0.03,
         }
+    }
+
+    pub fn uniform(self) -> Self {
+        Self {
+            spread: 0.0,
+            growth: 0.0,
+            swirl: 0.0,
+            crowded: 0.0,
+            noise: 0.0,
+            ..self
+        }
+    }
+
+    pub fn with_spread(mut self, spread: f32) -> Self {
+        assert!(
+            spread.is_finite() && spread >= 0.0,
+            "a phantom radius spread is a non-negative log scale"
+        );
+        self.spread = spread;
+        self
+    }
+
+    pub fn with_growth(mut self, growth: f32) -> Self {
+        assert!(
+            growth.is_finite() && growth >= 0.0,
+            "a phantom growth rate is a non-negative fraction"
+        );
+        self.growth = growth;
+        self
+    }
+
+    pub fn with_swirl(mut self, swirl: f32) -> Self {
+        assert!(
+            swirl.is_finite() && swirl.abs() < 0.5,
+            "a phantom swirl is a small per-frame rotation"
+        );
+        self.swirl = swirl;
+        self
+    }
+
+    pub fn with_crowded(mut self, crowded: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&crowded),
+            "a phantom crowding is a fraction of births"
+        );
+        self.crowded = crowded;
+        self
+    }
+
+    pub fn with_noise(mut self, noise: f32) -> Self {
+        assert!(
+            (0.0..1.0).contains(&noise),
+            "a phantom detection noise is a fraction of the radius"
+        );
+        self.noise = noise;
+        self
     }
 
     pub fn with_cells(mut self, cells: usize) -> Self {
@@ -109,8 +175,14 @@ struct Cell {
     label: u32,
     position: [f32; 3],
     velocity: [f32; 3],
-    radii: [f32; 3],
+    scale: f32,
+    rate: f32,
     siblings: u32,
+}
+
+fn radii(spec: Spec, scale: f32) -> [f32; 3] {
+    let radius = spec.radius * scale;
+    [radius, radius, radius * spec.anisotropy]
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,15 +194,16 @@ pub struct Phantom {
 impl Phantom {
     pub fn of(spec: Spec) -> Self {
         let mut rng = StdRng::seed_from_u64(spec.seed);
-        let radii = [spec.radius, spec.radius, spec.radius * spec.anisotropy];
         let mut live = (0..spec.cells)
             .map(|index| {
+                let scale = scale_of(&mut rng, spec);
                 let label = index as u32 + 1;
                 Cell {
                     label,
-                    position: spawn(&mut rng, spec.extent, radii),
+                    position: spawn(&mut rng, spec.extent, radii(spec, scale)),
                     velocity: drift(&mut rng, spec.step),
-                    radii,
+                    scale,
+                    rate: rate_of(&mut rng, spec),
                     siblings: 0,
                 }
             })
@@ -143,23 +216,25 @@ impl Phantom {
             let mut markers = Vec::with_capacity(live.len());
             let mut found = Vec::with_capacity(live.len());
             for cell in &live {
-                markers.push(Marker::new(cell.label, time, cell.position, cell.radii));
+                let truth = radii(spec, cell.scale);
+                markers.push(Marker::new(cell.label, time, cell.position, truth));
                 if rng.random::<f32>() >= spec.miss {
-                    found.push(TrackDetection::new(
+                    found.push(measure(
+                        &mut rng,
+                        spec,
                         ObjectId::new(cell.label),
                         cell.position,
-                        cell.radii,
+                        truth,
                     ));
                 }
             }
             if rng.random::<f32>() < spec.false_alarm {
                 let id = ObjectId::new(next);
                 next += 1;
-                found.push(TrackDetection::new(
-                    id,
-                    spawn(&mut rng, spec.extent, radii),
-                    radii,
-                ));
+                let scale = scale_of(&mut rng, spec);
+                let truth = radii(spec, scale);
+                let position = spawn(&mut rng, spec.extent, truth);
+                found.push(measure(&mut rng, spec, id, position, truth));
             }
             frames.push(markers);
             detections.push(found);
@@ -169,16 +244,18 @@ impl Phantom {
             divide(&mut rng, spec, &mut live, &mut parents, &mut next);
             retire(&mut rng, spec, &mut live);
             if rng.random::<f32>() < spec.birth && live.len() < spec.capacity {
+                let scale = scale_of(&mut rng, spec);
                 live.push(Cell {
                     label: next,
-                    position: spawn(&mut rng, spec.extent, radii),
+                    position: birthplace(&mut rng, spec, &live, radii(spec, scale)),
                     velocity: drift(&mut rng, spec.step),
-                    radii,
+                    scale,
+                    rate: rate_of(&mut rng, spec),
                     siblings: 0,
                 });
                 next += 1;
             }
-            separate(spec.extent, &mut live);
+            separate(spec, &mut live);
             for cell in &mut live {
                 cell.siblings = 0;
             }
@@ -224,6 +301,60 @@ fn spawn(rng: &mut StdRng, extent: [f32; 3], radii: [f32; 3]) -> [f32; 3] {
     })
 }
 
+fn birthplace(rng: &mut StdRng, spec: Spec, live: &[Cell], born: [f32; 3]) -> [f32; 3] {
+    if live.is_empty() || rng.random::<f32>() >= spec.crowded {
+        return spawn(rng, spec.extent, born);
+    }
+    let host = live[rng.random_range(0..live.len())];
+    let direction = drift(rng, 1.0);
+    let length = direction
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    if length <= f32::EPSILON {
+        return host.position;
+    }
+    let reach = 2.5 * (born[0] + radii(spec, host.scale)[0]);
+    let mut position = host.position;
+    for axis in 0..3 {
+        let margin = 3.0 * born[axis];
+        position[axis] = (host.position[axis] + direction[axis] / length * reach)
+            .clamp(margin, (spec.extent[axis] - margin).max(margin));
+    }
+    position
+}
+
+fn measure(
+    rng: &mut StdRng,
+    spec: Spec,
+    id: ObjectId,
+    position: [f32; 3],
+    radii: [f32; 3],
+) -> TrackDetection {
+    let centroid = [0, 1, 2]
+        .map(|axis| position[axis] + rng.random_range(-1.0..=1.0) * spec.noise * radii[axis]);
+    let sized = radii.map(|radius| radius * (1.0 + rng.random_range(-spec.noise..=spec.noise)));
+    TrackDetection::new(id, centroid, sized)
+}
+
+fn scale_of(rng: &mut StdRng, spec: Spec) -> f32 {
+    if spec.spread == 0.0 {
+        return 1.0;
+    }
+    (gaussian(rng) * spec.spread).exp()
+}
+
+fn rate_of(rng: &mut StdRng, spec: Spec) -> f32 {
+    rng.random_range(0.0..=spec.growth)
+}
+
+fn gaussian(rng: &mut StdRng) -> f32 {
+    let first: f32 = rng.random_range(f32::MIN_POSITIVE..=1.0);
+    let second: f32 = rng.random_range(0.0..=1.0);
+    (-2.0 * first.ln()).sqrt() * (2.0 * std::f32::consts::PI * second).cos()
+}
+
 fn drift(rng: &mut StdRng, step: f32) -> [f32; 3] {
     [0, 1, 2].map(|_| rng.random_range(-step..=step))
 }
@@ -231,9 +362,10 @@ fn drift(rng: &mut StdRng, step: f32) -> [f32; 3] {
 fn advance(rng: &mut StdRng, spec: Spec, live: &mut [Cell]) {
     for cell in live.iter_mut() {
         let jitter = drift(rng, 0.25 * spec.step);
+        let cell_radii = radii(spec, cell.scale);
         let mut moved = [0.0; 3];
         for axis in 0..3 {
-            let margin = 3.0 * cell.radii[axis];
+            let margin = 3.0 * cell_radii[axis];
             let high = spec.extent[axis] - margin;
             let mut at = cell.position[axis] + cell.velocity[axis] + jitter[axis];
             if at < margin || at > high {
@@ -243,6 +375,26 @@ fn advance(rng: &mut StdRng, spec: Spec, live: &mut [Cell]) {
             moved[axis] = at;
         }
         cell.position = moved;
+    }
+    if spec.swirl != 0.0 {
+        let centre = [spec.extent[0] * 0.5, spec.extent[1] * 0.5];
+        let cosine = spec.swirl.cos();
+        let sine = spec.swirl.sin();
+        for cell in live.iter_mut() {
+            let x = cell.position[0] - centre[0];
+            let y = cell.position[1] - centre[1];
+            cell.position[0] = centre[0] + x * cosine - y * sine;
+            cell.position[1] = centre[1] + x * sine + y * cosine;
+            let vx = cell.velocity[0];
+            let vy = cell.velocity[1];
+            cell.velocity[0] = vx * cosine - vy * sine;
+            cell.velocity[1] = vx * sine + vy * cosine;
+        }
+    }
+    if spec.growth > 0.0 {
+        for cell in live.iter_mut() {
+            cell.scale *= (1.0 + cell.rate).cbrt();
+        }
     }
 }
 
@@ -259,7 +411,8 @@ fn divide(
         .collect::<Vec<_>>();
     for index in dividing.into_iter().rev() {
         let parent = live.swap_remove(index);
-        let radii = parent.radii.map(|value| value / 2.0f32.cbrt());
+        let scale = parent.scale / 2.0f32.cbrt();
+        let daughter_radii = radii(spec, scale);
         let axis = rng.random_range(0..3);
         for side in [-1.0f32, 1.0] {
             let label = *next;
@@ -267,14 +420,17 @@ fn divide(
             parents.insert(label, parent.label);
             let mut position = parent.position;
             let mut velocity = parent.velocity;
-            position[axis] = (parent.position[axis] + side * radii[axis])
-                .clamp(radii[axis], spec.extent[axis] - radii[axis]);
+            position[axis] = (parent.position[axis] + side * daughter_radii[axis]).clamp(
+                daughter_radii[axis],
+                spec.extent[axis] - daughter_radii[axis],
+            );
             velocity[axis] += side * 0.3 * spec.step;
             live.push(Cell {
                 label,
                 position,
                 velocity,
-                radii,
+                scale,
+                rate: rate_of(rng, spec),
                 siblings: parent.label,
             });
         }
@@ -290,7 +446,7 @@ fn retire(rng: &mut StdRng, spec: Spec, live: &mut Vec<Cell>) {
     }
 }
 
-fn separate(extent: [f32; 3], live: &mut [Cell]) {
+fn separate(spec: Spec, live: &mut [Cell]) {
     for _ in 0..8 {
         let mut moved = false;
         for first in 0..live.len() {
@@ -305,8 +461,9 @@ fn separate(extent: [f32; 3], live: &mut [Cell]) {
                 if live[first].siblings != 0 && live[first].siblings == live[second].siblings {
                     continue;
                 }
-                let minimum =
-                    1.05 * (equivalent(live[first].radii) + equivalent(live[second].radii));
+                let minimum = 1.05
+                    * (equivalent(radii(spec, live[first].scale))
+                        + equivalent(radii(spec, live[second].scale)));
                 if distance >= minimum {
                     continue;
                 }
@@ -316,9 +473,9 @@ fn separate(extent: [f32; 3], live: &mut [Cell]) {
                 let push = 0.5 * (minimum - distance);
                 let sign = if offset[axis] < 0.0 { -1.0 } else { 1.0 };
                 for (cell, side) in [(first, -sign), (second, sign)] {
-                    let margin = live[cell].radii[axis];
+                    let margin = radii(spec, live[cell].scale)[axis];
                     live[cell].position[axis] = (live[cell].position[axis] + side * push)
-                        .clamp(margin, (extent[axis] - margin).max(margin));
+                        .clamp(margin, (spec.extent[axis] - margin).max(margin));
                 }
                 moved = true;
             }

@@ -3595,6 +3595,125 @@ fn lit(brick: &grana_volume::BrickData) -> bool {
     }
 }
 
+fn write_sparse_archive(path: &std::path::Path) {
+    let levels = [Level::new(
+        Extent::new(512, 256, 1),
+        Spacing::new(0.2, 0.2, 1.0),
+    )];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [0.2, 0.7, 1.0],
+        data: Intensity::new(0.0, 4096.0),
+        window: Intensity::new(0.0, 4096.0),
+        color_table: None,
+    }];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let extent = block.extent;
+        let origin = block.origin;
+        let mut values = vec![0u16; block.voxels()];
+        for z in 0..extent[2] {
+            for y in 0..extent[1] {
+                for x in 0..extent[0] {
+                    let index = x as usize
+                        + extent[0] as usize * (y as usize + extent[1] as usize * z as usize);
+                    values[index] = if origin[0] + x < 256 { 4000 } else { 0 };
+                }
+            }
+        }
+        Ok(VoxelData::U16(values))
+    };
+    let mut progress = |_, _| {};
+    grana_tiff::write_archive(
+        path,
+        &mut ImageSpec {
+            name: "sparse",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0, 0.0, 0.0],
+            frames: 1,
+            interval: None,
+            sample: VoxelFormat::U16,
+            calibration: Calibration::Assumed,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the sparse archive writes");
+}
+
+fn whiten_photometric(path: &std::path::Path) -> usize {
+    let mut bytes = std::fs::read(path).expect("the archive reads");
+    assert_eq!(
+        &bytes[0..4],
+        b"II+\0",
+        "the archive is a little endian bigtiff"
+    );
+    let mut patched = 0;
+    let mut at = u64::from_le_bytes(bytes[8..16].try_into().expect("a header field")) as usize;
+    while at != 0 {
+        let entries = u64::from_le_bytes(bytes[at..at + 8].try_into().expect("a count")) as usize;
+        for index in 0..entries {
+            let entry = at + 8 + index * 20;
+            let tag = u16::from_le_bytes(bytes[entry..entry + 2].try_into().expect("a tag"));
+            let value = u16::from_le_bytes(
+                bytes[entry + 12..entry + 14]
+                    .try_into()
+                    .expect("an inline value"),
+            );
+            if tag == 262 && value == 1 {
+                bytes[entry + 12] = 0;
+                patched += 1;
+            }
+        }
+        let next = at + 8 + entries * 20;
+        at = u64::from_le_bytes(bytes[next..next + 8].try_into().expect("a link")) as usize;
+    }
+    std::fs::write(path, &bytes).expect("the inverted archive writes");
+    patched
+}
+
+#[test]
+fn a_sparse_min_is_white_archive_inverts_stored_tiles_and_fills_missing_white() {
+    let temp = Temp::new("suite-ome-tiff-min-is-white");
+    let path = temp.path().join("white.ome.tif");
+    write_sparse_archive(&path);
+    assert_eq!(
+        whiten_photometric(&path),
+        1,
+        "the archive carries one page whose photometric flips"
+    );
+    let archive = grana_tiff::Image::open(&path, 0).expect("the inverted archive opens");
+    let stored = archive
+        .read_region(0, 0, 0, 10..11, 0..1, 0..1)
+        .expect("the stored tile reads");
+    let VoxelData::U16(values) = &stored else {
+        panic!("the inverted archive stores sixteen bit samples");
+    };
+    assert_eq!(
+        values[0],
+        u16::MAX - 4000,
+        "a stored sample inverts against the sixteen bit maximum"
+    );
+    let source = Source::file(path.clone());
+    let image = Image::open_with_cache(&source, None).expect("the inverted image opens");
+    let brick = image
+        .read_brick(
+            0,
+            0,
+            BrickCoord::new(9, 0, 0),
+            &Warps::new(vec![Warp::IDENTITY]),
+        )
+        .expect("the sparse brick reads");
+    let VoxelData::U16(values) = &brick.channels()[0] else {
+        panic!("the inverted fixture stores sixteen bit samples");
+    };
+    assert!(
+        values.iter().all(|value| *value == u16::MAX),
+        "a brick the archive does not store reads as white through the inversion"
+    );
+}
+
 #[test]
 fn a_sparse_ome_tiff_archive_reports_the_tiles_it_does_not_store() {
     let temp = Temp::new("suite-ome-tiff-sparse");

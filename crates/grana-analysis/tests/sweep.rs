@@ -19,9 +19,7 @@ fn link(phantom: &Phantom) -> TrackSet {
         .expect("the tracker solves the phantom")
 }
 
-#[test]
-#[ignore = "a measurement harness run explicitly with --ignored"]
-fn sweeps_division_and_dropout_configurations() {
+fn sweep(label: &str, uniform: bool) {
     let divisions = [0.06, 0.1, 0.2, 0.3, 0.4];
     let misses = [0.03, 0.1, 0.2, 0.3];
     let mut means = [0.0f64; 4];
@@ -29,14 +27,16 @@ fn sweeps_division_and_dropout_configurations() {
     for division in divisions {
         let mut row = String::new();
         for miss in misses {
-            let phantom = Phantom::of(
-                Spec::new(24, 7)
-                    .with_cells(10)
-                    .with_step(0.2)
-                    .with_division(division)
-                    .with_miss(miss)
-                    .with_false_alarm(0.2),
-            );
+            let mut spec = Spec::new(24, 7)
+                .with_cells(10)
+                .with_step(0.2)
+                .with_division(division)
+                .with_miss(miss)
+                .with_false_alarm(0.2);
+            if uniform {
+                spec = spec.uniform();
+            }
+            let phantom = Phantom::of(spec);
             let evaluation = Evaluation::of(phantom.truth(), &link(&phantom), 1.0);
             let divisions_branch = evaluation.divisions();
             row.push_str(&format!(
@@ -59,10 +59,17 @@ fn sweeps_division_and_dropout_configurations() {
     }
     let count = count as f64;
     println!(
-        "MEAN TRA {:.4} DET {:.4} linkage {:.4} divF1 {:.4} over {count} configurations",
+        "{label} MEAN TRA {:.4} DET {:.4} linkage {:.4} divF1 {:.4} over {count} configurations",
         means[0] / count,
         means[1] / count,
         means[2] / count,
         means[3] / count,
     );
+}
+
+#[test]
+#[ignore = "a measurement harness run explicitly with --ignored"]
+fn sweeps_division_and_dropout_configurations() {
+    sweep("HETEROGENEOUS", false);
+    sweep("UNIFORM", true);
 }

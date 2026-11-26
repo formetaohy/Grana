@@ -9,7 +9,7 @@ use crate::color::{ColorModel, ColorValues};
 use crate::directory::Directory;
 use crate::error::Error;
 use crate::layout::{Block, Layout};
-use crate::sample::SampleType;
+use crate::sample::{SampleFormat, SampleType};
 use crate::store::Store;
 use crate::tag::{
     TAG_BITS_PER_SAMPLE, TAG_COLOR_MAP, TAG_COMPRESSION, TAG_EXTRA_SAMPLES, TAG_FILL_ORDER,
@@ -507,6 +507,16 @@ impl Page {
                 ));
             }
         })
+    }
+
+    pub(crate) fn blank(&self) -> NoData {
+        if !(self.color.inverted() && self.components == 1) {
+            return NoData::zero(self.format);
+        }
+        match self.sample_type.format {
+            SampleFormat::Signed | SampleFormat::ComplexSigned => NoData::zero(self.format),
+            _ => NoData::of(self.format, f64::from(self.sample_type.maximum())),
+        }
     }
 
     fn missing(&self, pixels: usize, samples: usize) -> VoxelData {

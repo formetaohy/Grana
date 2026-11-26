@@ -423,6 +423,7 @@ impl Image {
             (ranges[0].start, ranges[0].end),
             (ranges[1].start, ranges[1].end),
         ];
+        let mut blank = NoData::zero(held.format);
         for channel in 0..held.planes.channels() {
             for z in ranges[2].clone() {
                 let plane = held.planes.index(time, channel, z);
@@ -431,6 +432,7 @@ impl Image {
                 };
                 let file = self.files.file(slot.file);
                 let page = file.page(slot.page, held.depth)?;
+                blank = page.blank();
                 let layout = file.layout(slot.page, held.depth)?;
                 let sample = if page.planar { channel } else { 0 };
                 let blocks = layout.covering(&region, held.extent.x(), held.extent.y(), sample);
@@ -439,7 +441,7 @@ impl Image {
                 }
             }
         }
-        Ok(Some(NoData::zero(held.format)))
+        Ok(Some(blank))
     }
 
     pub fn read_region(
