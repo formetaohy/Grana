@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use grana_display::{Shading, TransferFunction, VolumeStyle};
-use grana_measure::ObjectColoc;
+use grana_measure::{Grouping, ObjectColoc};
 use grana_object::{ObjectId, ObjectIds, RelationFrame, TrackId, TrackSet};
 use grana_volume::{Clip, Intensity, Region};
 
@@ -101,6 +101,7 @@ pub struct SetState {
     pub object_color: ColorState<ObjectColor>,
     pub track_color: ColorState<TrackColor>,
     pub classifier: Option<grana_measure::ClassifierState>,
+    pub grouping: Grouping,
     pub object_coloc: Option<Arc<ObjectColoc>>,
     pub label_export: Option<LabelExport>,
     pub localization: Option<LocalizationSource>,

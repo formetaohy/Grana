@@ -138,7 +138,7 @@ impl Image {
                 detail: "the brick lies outside the level".to_string(),
             });
         }
-        if let Some(fill) = self.missing(time, level, coord, warps)? {
+        if let Some(fill) = self.empty(time, level, coord, warps)? {
             return Ok(BrickData::new(
                 (0..self.pyramid.channel_count())
                     .map(|_| grana_volume::blank_brick(fill))
@@ -152,7 +152,7 @@ impl Image {
         Ok(BrickData::new(bricks))
     }
 
-    fn missing(
+    pub fn empty(
         &self,
         time: u32,
         level: usize,

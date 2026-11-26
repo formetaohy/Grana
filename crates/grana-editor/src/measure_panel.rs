@@ -2,7 +2,9 @@ use std::fmt::Write;
 
 use glam::Vec2;
 use grana_i18n::Language;
-use grana_measure::{Aggregate, Column, Filter, Group, MeasureView, Measured, PlotAxis, Scope};
+use grana_measure::{
+    Aggregate, Column, Filter, Group, Grouping, MeasureView, Measured, PlotAxis, Quantile, Scope,
+};
 use grana_scene::{Item, ObjectSetId, Selection};
 use grana_session::Command;
 use grana_ui::{
@@ -18,6 +20,8 @@ const ROW_HEIGHT: f32 = 28.0;
 const HEADER_HEIGHT: f32 = 32.0;
 const MIN_COLUMN_WIDTH: f32 = 58.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
+const CLASSES: [u32; 7] = [2, 3, 4, 5, 6, 7, 8];
+const CLASSES_DEFAULT: u32 = 3;
 
 pub fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -442,7 +446,7 @@ fn plot_bar<'a>(
         MeasureView::Ripley | MeasureView::NearestNeighbour => {
             items.extend(target_combo(ctx, state));
         }
-        MeasureView::Enrichment => {}
+        MeasureView::Enrichment => items.extend(class_controls(ctx, state)),
         MeasureView::Distribution | MeasureView::Trend => {
             items.push(field_label(ctx, grana_i18n::measure::value(language)));
             items.push(combo(
@@ -536,6 +540,110 @@ fn plot_bar<'a>(
             .at(rect)
             .children(items),
     ]
+}
+
+fn class_controls<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    if state.measure.group() != Group::Object {
+        return Vec::new();
+    }
+    let Some(set) = state
+        .measure
+        .set()
+        .and_then(|id| state.scene.objects.get(id))
+    else {
+        return Vec::new();
+    };
+    let language = ctx.language();
+    let names = state
+        .scene
+        .dataset
+        .channels()
+        .iter()
+        .map(|channel| channel.name().to_string())
+        .collect::<Vec<_>>();
+    let measurements = set.measurements();
+    let mut sources = vec![grana_i18n::measure::column(language, "classifier")];
+    sources.extend(
+        measurements
+            .iter()
+            .map(|measurement| grana_i18n::measure::column(language, &measurement.label(&names))),
+    );
+    let grouping = set.grouping().clone();
+    let selected = match &grouping {
+        Grouping::Threshold(_) => 0,
+        Grouping::Quantile(quantile) => measurements
+            .iter()
+            .position(|measurement| *measurement == quantile.measurement())
+            .map_or(0, |index| index + 1),
+    };
+    let id = set.id();
+    let classes = match &grouping {
+        Grouping::Threshold(_) => CLASSES_DEFAULT,
+        Grouping::Quantile(quantile) => quantile.classes(),
+    };
+    let mut items = vec![field_label(
+        ctx,
+        grana_i18n::measure::class_source(language),
+    )];
+    items.push(combo(
+        ctx,
+        "measure.class.source",
+        168.0,
+        selected,
+        &sources,
+        move |index| match index {
+            0 => Message::Command(Command::SetGrouping {
+                set: id,
+                grouping: Grouping::default(),
+            }),
+            _ => match measurements
+                .get(index - 1)
+                .copied()
+                .and_then(|measurement| Quantile::new(measurement, classes))
+            {
+                Some(quantile) => Message::Command(Command::SetGrouping {
+                    set: id,
+                    grouping: Grouping::Quantile(quantile),
+                }),
+                None => Message::Noop,
+            },
+        },
+    ));
+    if let Grouping::Quantile(quantile) = &grouping {
+        let mut counts = CLASSES.to_vec();
+        if !counts.contains(&quantile.classes()) {
+            counts.push(quantile.classes());
+            counts.sort_unstable();
+        }
+        let labels = counts
+            .iter()
+            .map(|classes| classes.to_string())
+            .collect::<Vec<_>>();
+        let selected = counts
+            .iter()
+            .position(|classes| *classes == quantile.classes())
+            .unwrap_or(0);
+        let measurement = quantile.measurement();
+        items.push(combo(
+            ctx,
+            "measure.class.count",
+            64.0,
+            selected,
+            &labels,
+            move |index| match counts
+                .get(index)
+                .copied()
+                .and_then(|classes| Quantile::new(measurement, classes).map(Grouping::Quantile))
+            {
+                Some(grouping) => Message::Command(Command::SetGrouping { set: id, grouping }),
+                None => Message::Noop,
+            },
+        ));
+    }
+    items
 }
 
 fn target_combo<'a>(

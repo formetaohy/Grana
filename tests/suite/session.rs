@@ -1042,6 +1042,11 @@ fn round_trips_a_project() {
         scene.objects.set_visibility(spots, visibility.clone()),
         "a statistics filter excludes the second spot"
     );
+    let grouping = grana_measure::Grouping::Quantile(
+        grana_measure::Quantile::new(grana_measure::Measurement::Diameter, 3)
+            .expect("three classes bin the diameters"),
+    );
+    scene.set_grouping(spots, grouping.clone());
     scene.restore(scene.state());
     assert_eq!(
         scene
@@ -1099,6 +1104,10 @@ fn round_trips_a_project() {
     assert_eq!(loaded.measure.set, Some(spots.raw()));
     assert_eq!(loaded.measure.target, Some(other.raw()));
     assert_eq!(loaded.measure.view, grana_measure::MeasureView::Ripley);
+    assert_eq!(
+        loaded.scene.sets[0].grouping, grouping,
+        "a project keeps the rule that maps rows to class codes"
+    );
     assert_ne!(
         loaded.scene.sets[0].visibility,
         grana_scene::Visibility::All,

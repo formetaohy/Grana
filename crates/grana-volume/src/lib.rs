@@ -39,7 +39,9 @@ pub use fingerprint::Fingerprint;
 pub use intensity::Intensity;
 pub use level::Level;
 pub use no_data::NoData;
-pub use pack::{PACK, PACK_LIMIT, Pack, PackedBrick, components, pack_count, packed_bytes, texels};
+pub use pack::{
+    PACK, PACK_LIMIT, Pack, PackedBrick, components, fill_maximum, pack_count, packed_bytes, texels,
+};
 pub use pyramid::Pyramid;
 pub use region::Region;
 pub use resample::{Filter, nearest_index, resample};

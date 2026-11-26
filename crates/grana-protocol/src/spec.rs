@@ -5,8 +5,8 @@ use grana_display::{
     VolumeStyle,
 };
 use grana_measure::{
-    Aggregate, ChildField, ColocMetric, Filter, Group, MeasureView, RelationField, Scope,
-    Statistic, Table,
+    Aggregate, CLASS_MAXIMUM, CLASS_MINIMUM, ChildField, ColocMetric, Filter, Group, Grouping,
+    MeasureView, Quantile, RelationField, Scope, Statistic, Table, Threshold,
 };
 use grana_mesh::Format as MeshFormat;
 use grana_object::{
@@ -1148,6 +1148,8 @@ pub struct SetSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classifier: Option<ClassifierSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grouping: Option<GroupSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_coloc: Option<PairSpec>,
     pub source: SourceSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1398,6 +1400,13 @@ pub struct ClassifierSpec {
     pub negatives: u32,
     #[serde(default, skip_serializing_if = "is_f32_zero")]
     pub accuracy: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum GroupSpec {
+    Threshold { threshold: f32 },
+    Quantile { column: String, classes: u32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2130,6 +2139,69 @@ impl ClassifierSpec {
             .any(|feature| feature.trim().is_empty())
         {
             return invalid("trains on an empty measurement name".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl GroupSpec {
+    pub fn of(grouping: &Grouping, keys: &[String]) -> Option<Self> {
+        Some(match grouping {
+            Grouping::Threshold(threshold) if *threshold == Threshold::DEFAULT => return None,
+            Grouping::Threshold(threshold) => Self::Threshold {
+                threshold: threshold.value(),
+            },
+            Grouping::Quantile(quantile) => Self::Quantile {
+                column: quantile.measurement().key(keys),
+                classes: quantile.classes(),
+            },
+        })
+    }
+
+    pub fn grouping(&self, set: &ObjectSet, keys: &[String]) -> Result<Grouping, ProtocolError> {
+        let invalid = |detail: String| {
+            ProtocolError::Invalid(format!("the grouping of {} {detail}", set.name()))
+        };
+        Ok(match self {
+            Self::Threshold { threshold } => Grouping::Threshold(
+                Threshold::new(*threshold)
+                    .ok_or_else(|| invalid("thresholds outside the unit interval".to_string()))?,
+            ),
+            Self::Quantile { column, classes } => Grouping::Quantile(
+                Quantile::new(
+                    set.measurements()
+                        .into_iter()
+                        .find(|measurement| measurement.key(keys) == *column)
+                        .ok_or_else(|| {
+                            invalid(format!("bins {column}, which the set does not measure"))
+                        })?,
+                    *classes,
+                )
+                .ok_or_else(|| invalid(format!("bins into {classes} classes")))?,
+            ),
+        })
+    }
+
+    pub(super) fn checked(&self, what: &str) -> Result<(), ProtocolError> {
+        let invalid = |detail: String| {
+            Err(ProtocolError::Invalid(format!(
+                "the grouping of {what} {detail}"
+            )))
+        };
+        match self {
+            Self::Threshold { threshold } => {
+                if Threshold::new(*threshold).is_none() {
+                    return invalid("thresholds outside the unit interval".to_string());
+                }
+            }
+            Self::Quantile { column, classes } => {
+                if column.trim().is_empty() {
+                    return invalid("bins an unnamed column".to_string());
+                }
+                if !(CLASS_MINIMUM..=CLASS_MAXIMUM).contains(classes) {
+                    return invalid(format!("bins into {classes} classes"));
+                }
+            }
         }
         Ok(())
     }

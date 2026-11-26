@@ -6,7 +6,7 @@ use glam::Vec3;
 use grana_archive::{Channel as WriteChannel, Fill, ImageSpec};
 use grana_image::{Image, Source};
 use grana_interop::{Detection, Edge, Lineage, geff};
-use grana_object::{IntensityTable, SampleStatistics, Spot};
+use grana_object::{IntensityTable, LinkConfidence, SampleStatistics, SolvedConfidence, Spot};
 use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
@@ -2810,7 +2810,11 @@ fn round_trips_a_typed_geff_lineage() {
         Edge::new(5, 6),
         Edge::new(5, 7),
         Edge::new(6, 8),
-        Edge::new(8, 9),
+        Edge::solved(
+            8,
+            9,
+            SolvedConfidence::new(0.625).expect("a solved link carries a probability"),
+        ),
     ];
     let lineage = Lineage::new(detections, edges).expect("the lineage is consistent");
     let axes = geff::Axes::new([0.25, 0.25, 0.5], 2.0);
@@ -2832,6 +2836,28 @@ fn round_trips_a_typed_geff_lineage() {
             .filter(|link| link.kind() == grana_object::Link::Gap)
             .count(),
         1
+    );
+    let solved = set
+        .links()
+        .iter()
+        .filter(|link| link.confidence() != LinkConfidence::Manual)
+        .collect::<Vec<_>>();
+    assert_eq!(solved.len(), 1, "one edge carries a solved confidence");
+    assert_eq!(solved[0].kind(), grana_object::Link::Gap);
+    assert_eq!(
+        solved[0].confidence(),
+        LinkConfidence::Solved(
+            SolvedConfidence::new(0.625).expect("a solved link carries a probability")
+        ),
+        "the solved edge confidence survives the round trip"
+    );
+    assert_eq!(
+        set.links()
+            .iter()
+            .filter(|link| link.confidence() == LinkConfidence::Manual)
+            .count(),
+        4,
+        "an edge without a confidence reads back as manual"
     );
     assert_eq!(
         read.tracklets()
@@ -2870,6 +2896,22 @@ fn round_trips_a_typed_geff_lineage() {
     assert!(
         geff::read(&path, 0.5).is_err(),
         "the graph rejects edge kinds that contradict its topology"
+    );
+    let path = temp.path().join("invalid-confidence.geff");
+    geff::write(&path, &lineage, &axes).expect("the graph writes");
+    let store = std::sync::Arc::new(
+        zarrs::filesystem::FilesystemStore::new(&path).expect("the graph opens as a store"),
+    );
+    let confidences = zarrs::array::Array::open(store, "/edges/props/confidence/values")
+        .expect("the edge confidences open");
+    let mut invalid = [0.0f64; 7];
+    invalid[6] = 1.5;
+    confidences
+        .store_chunk(&[0], &invalid)
+        .expect("the edge confidences overwrite");
+    assert!(
+        geff::read(&path, 0.5).is_err(),
+        "the graph rejects an edge confidence outside (0, 1]"
     );
 }
 

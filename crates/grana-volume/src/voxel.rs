@@ -35,9 +35,50 @@ pub enum VoxelData {
 #[derive(Clone, Copy, Debug)]
 pub struct VoxelUnits<'a> {
     data: &'a VoxelData,
+    units: Units,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Units {
     minimum: f32,
     scale: f32,
     no_data: Option<NoData>,
+}
+
+impl Units {
+    fn new(intensity: Intensity, no_data: Option<NoData>) -> Self {
+        let span = intensity.span();
+        Self {
+            minimum: intensity.min(),
+            scale: if span > 0.0 { UNIT_MAXIMUM / span } else { 0.0 },
+            no_data,
+        }
+    }
+
+    fn unit(self, value: f32) -> f32 {
+        if self.scale > 0.0 && value.is_finite() {
+            ((value - self.minimum) * self.scale).clamp(0.0, UNIT_MAXIMUM)
+        } else {
+            0.0
+        }
+    }
+
+    fn held<T: VoxelValue>(self, value: T) -> bool {
+        self.no_data
+            .is_some_and(|no_data| value.is_no_data(no_data))
+    }
+
+    fn filled(self, fill: NoData) -> f32 {
+        if self.no_data.is_some_and(|no_data| no_data.same(fill)) {
+            0.0
+        } else {
+            self.unit(fill.sample())
+        }
+    }
+}
+
+pub(crate) fn fill_unit(intensity: Intensity, no_data: Option<NoData>, fill: NoData) -> f32 {
+    Units::new(intensity, no_data).filled(fill)
 }
 
 pub trait VoxelValue: Copy + 'static {
@@ -403,12 +444,9 @@ impl VoxelData {
     }
 
     pub fn units(&self, intensity: Intensity, no_data: Option<NoData>) -> VoxelUnits<'_> {
-        let span = intensity.span();
         VoxelUnits {
             data: self,
-            minimum: intensity.min(),
-            scale: if span > 0.0 { UNIT_MAXIMUM / span } else { 0.0 },
-            no_data,
+            units: Units::new(intensity, no_data),
         }
     }
 
@@ -600,27 +638,18 @@ impl VoxelUnits<'_> {
             range.start < range.end && range.end <= self.data.voxel_count(),
             "a unit visit covers voxels inside the data"
         );
-        let minimum = self.minimum;
-        let scale = self.scale;
-        let no_data = self.no_data;
-        let unit = move |value: f32| {
-            if scale > 0.0 && value.is_finite() {
-                ((value - minimum) * scale).clamp(0.0, UNIT_MAXIMUM)
-            } else {
-                0.0
-            }
-        };
+        let units = self.units;
         match self.data {
-            VoxelData::U8(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::U16(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::U32(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::U64(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::I8(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::I16(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::I32(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::I64(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::F32(data) => visit_range(data, range, no_data, unit, visit),
-            VoxelData::F64(data) => visit_range(data, range, no_data, unit, visit),
+            VoxelData::U8(data) => visit_range(data, range, units, visit),
+            VoxelData::U16(data) => visit_range(data, range, units, visit),
+            VoxelData::U32(data) => visit_range(data, range, units, visit),
+            VoxelData::U64(data) => visit_range(data, range, units, visit),
+            VoxelData::I8(data) => visit_range(data, range, units, visit),
+            VoxelData::I16(data) => visit_range(data, range, units, visit),
+            VoxelData::I32(data) => visit_range(data, range, units, visit),
+            VoxelData::I64(data) => visit_range(data, range, units, visit),
+            VoxelData::F32(data) => visit_range(data, range, units, visit),
+            VoxelData::F64(data) => visit_range(data, range, units, visit),
         }
     }
 }
@@ -692,15 +721,14 @@ fn blit_rows<T: Copy>(
 fn visit_range<T: VoxelValue>(
     data: &[T],
     range: Range<usize>,
-    no_data: Option<NoData>,
-    unit: impl Fn(f32) -> f32,
+    units: Units,
     mut visit: impl FnMut(f32),
 ) {
     data[range].iter().for_each(|value| {
-        if no_data.is_some_and(|no_data| value.is_no_data(no_data)) {
+        if units.held(*value) {
             visit(0.0);
         } else {
-            visit(unit(value.to_f32()));
+            visit(units.unit(value.to_f32()));
         }
     });
 }

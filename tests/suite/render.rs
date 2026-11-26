@@ -3104,3 +3104,151 @@ fn keeps_the_fitted_level_across_a_camera_move() {
         settled.view.level, fitted.view.level
     );
 }
+
+fn frame_sized<'a, 'b: 'a>(
+    target: &'a wgpu::TextureView,
+    size: [u32; 2],
+    camera: &'a Camera,
+    scene: &'a SceneFrame<'b>,
+) -> Frame<'a, 'b> {
+    Frame {
+        target,
+        size,
+        camera,
+        viewport: [0, 0, size[0], size[1]],
+        time: 0,
+        region: Region::none(),
+        clip: Clip::none(),
+        exposure: 1.0,
+        scene,
+        delivery: grana_render::Delivery::Immediate,
+    }
+}
+
+#[test]
+fn carries_its_bricks_across_a_resize_that_reseats_the_atlas() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = bricked_volume(None);
+    let fine = volume.pyramid().level(0);
+    let pyramid = Pyramid::new(
+        vec![fine],
+        1,
+        volume.pyramid().channels().to_vec(),
+        1,
+        1.0,
+        Calibration::Recorded,
+    );
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let channels = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &channels,
+        shading: Shading {
+            ambient: 0.15,
+            diffuse: 1.0,
+            shadows: 1.0,
+            ..Shading::default()
+        },
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let narrow = [SIDE, SIDE];
+    let roomy = [SIDE * 8, SIDE * 8];
+    let total = budget(96 << 20, roomy);
+    let mut renderer = Renderer::new(
+        gpu.device(),
+        gpu.queue(),
+        wgpu::TextureFormat::Rgba8Unorm,
+        &crate::support::ledger(),
+        total,
+        gpu.pipelines(),
+    );
+    renderer
+        .set_dataset(gpu.device(), &pyramid, total, narrow)
+        .expect("the test budget holds the volume");
+    let narrow_target = texture(&gpu, narrow[0]);
+    let narrow_view = narrow_target.create_view(&Default::default());
+    let roomy_target = texture(&gpu, roomy[0]);
+    let roomy_view = roomy_target.create_view(&Default::default());
+    settle_with(
+        &gpu,
+        &mut renderer,
+        || frame_sized(&narrow_view, narrow, &camera, &scene),
+        &volume,
+    );
+    let slots = renderer.slots();
+    let residency = renderer.budget();
+    let uploads = renderer.statistics().uploads;
+    assert!(uploads > 0, "the settled view streams its bricks");
+    renderer.restart();
+    renderer
+        .draw(
+            gpu.device(),
+            gpu.queue(),
+            frame_sized(&narrow_view, narrow, &camera, &scene),
+        )
+        .expect("the reference frame draws");
+    let reference = read_pixels(&gpu, &narrow_target, narrow);
+    settle_with(
+        &gpu,
+        &mut renderer,
+        || frame_sized(&roomy_view, roomy, &camera, &scene),
+        &volume,
+    );
+    assert_ne!(
+        renderer.budget(),
+        residency,
+        "the roomy view reseats the atlas with the same {residency} byte residency, so the resize never reached it"
+    );
+    assert_eq!(
+        renderer.statistics().uploads,
+        uploads,
+        "the resize streamed bricks it already held"
+    );
+    let roomy_residency = renderer.budget();
+    settle_with(
+        &gpu,
+        &mut renderer,
+        || frame_sized(&narrow_view, narrow, &camera, &scene),
+        &volume,
+    );
+    assert_ne!(
+        renderer.budget(),
+        roomy_residency,
+        "the narrow view reseats the atlas back with the same {roomy_residency} byte residency it held"
+    );
+    assert_eq!(
+        renderer.slots(),
+        slots,
+        "the narrow view reseats the atlas back to the slots it held"
+    );
+    assert_eq!(
+        renderer.statistics().uploads,
+        uploads,
+        "resizing back streamed bricks it already held"
+    );
+    renderer.restart();
+    renderer
+        .draw(
+            gpu.device(),
+            gpu.queue(),
+            frame_sized(&narrow_view, narrow, &camera, &scene),
+        )
+        .expect("the carried frame draws");
+    let carried = read_pixels(&gpu, &narrow_target, narrow);
+    assert_eq!(
+        max_difference(&reference, &carried),
+        0,
+        "the carried bricks shade differently from the bricks the renderer streamed"
+    );
+}

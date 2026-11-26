@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use grana_measure::{
-    Aggregate, Child, ChildField, ColocMetric, Frame, FrameSource, Group, Kind, Measured,
+    Aggregate, Child, ChildField, ColocMetric, Frame, FrameSource, Group, Grouping, Kind, Measured,
     ObjectColoc, Objects, RelationRow, Table, channel_keys,
 };
 use grana_object::{RelationFrame, TrackSet};
@@ -162,6 +162,7 @@ pub struct TableRequest {
     tracks: Option<TrackSet>,
     frame_interval: f32,
     classifier: Option<grana_measure::Classifier>,
+    grouping: Grouping,
     coloc: Option<Arc<ObjectColoc>>,
     basis: Option<Arc<Table>>,
     retained: Vec<String>,
@@ -227,6 +228,7 @@ impl TableRequest {
             tracks: set.tracks().map(|layer| layer.set().clone()),
             frame_interval: scene.dataset.frame_interval(),
             classifier: set.classifier().cloned(),
+            grouping: set.grouping().clone(),
             coloc: set.shared_object_coloc(),
             basis: None,
             retained: Vec::new(),
@@ -254,6 +256,7 @@ impl TableRequest {
             tracks,
             frame_interval,
             classifier,
+            grouping,
             coloc,
             basis,
             retained,
@@ -275,21 +278,7 @@ impl TableRequest {
             match group {
                 Group::Object => {
                     let scores = classifier.scores(&table, &keys);
-                    let classes = scores
-                        .iter()
-                        .map(|score| {
-                            score.map(|value| {
-                                if value >= grana_measure::CLASS_THRESHOLD {
-                                    1.0
-                                } else {
-                                    0.0
-                                }
-                            })
-                        })
-                        .collect();
-                    table = table
-                        .with_column(classifier.column(), scores)
-                        .with_column(grana_measure::class_column(), classes);
+                    table = table.with_column(classifier.column(), scores);
                 }
                 Group::Track | Group::Timepoint | Group::Molecule => {
                     let column = classifier.aggregate_column(aggregate);
@@ -304,6 +293,11 @@ impl TableRequest {
                     table = table.with_column(column, values);
                 }
             }
+        }
+        if group == Group::Object
+            && let Some(classes) = grouping.codes(&table, &keys)
+        {
+            table = table.with_column(grouping.column(), classes);
         }
         if let Some(coloc) = &coloc {
             for metric in ColocMetric::ALL {

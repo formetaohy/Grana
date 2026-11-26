@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_geometry::PackedMesh;
 use grana_interop::geff;
 use grana_interop::{Detection, Edge, Lineage, Mesh, Objects, Related, Shape};
-use grana_object::TrackSet;
+use grana_object::{LinkConfidence, TrackSet};
 use grana_scene::{ObjectFrame, ObjectKind, Origin, Scene};
 
 use super::export::Writer;
@@ -414,7 +414,12 @@ fn lineage(
                         .and_then(|node| ids.get(&(node.time(), node.id()))),
                 );
                 if let (Some(source), Some(target)) = ends {
-                    edges.push(Edge::new(*source, *target));
+                    edges.push(match link.confidence() {
+                        LinkConfidence::Solved(confidence) => {
+                            Edge::solved(*source, *target, confidence)
+                        }
+                        LinkConfidence::Manual => Edge::new(*source, *target),
+                    });
                 }
             }
         }

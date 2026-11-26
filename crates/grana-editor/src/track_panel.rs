@@ -1515,23 +1515,15 @@ fn combo<'a>(
 }
 
 fn draw_link(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, link: TrackLink, tint: Color) {
-    let confidence = link.confidence().value().map(|value| value as f32);
-    let alpha = confidence.map_or(0.45, |value| 0.18 + 0.5 * value);
-    let width = confidence.map_or(1.1, |value| 0.6 + 0.7 * value);
+    let stroke = grana_figure::link_stroke(link.confidence());
+    let color = tint.with_alpha(stroke.alpha);
     if link.kind() == Link::Gap {
-        dashed(painter, from, to, width, tint.with_alpha(alpha));
+        dashed(painter, from, to, stroke.width, color);
     } else {
-        painter.segment(from, to, width, tint.with_alpha(alpha));
+        painter.segment(from, to, stroke.width, color);
     }
     if link.kind() == Link::Merge {
-        painter.ring(
-            from,
-            2.0,
-            1.0,
-            0.0,
-            std::f32::consts::TAU,
-            tint.with_alpha(alpha),
-        );
+        painter.ring(from, 2.0, 1.0, 0.0, std::f32::consts::TAU, color);
     }
 }
 

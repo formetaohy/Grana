@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use grana_measure::{ChildField, ChildMetric, Measurement, RelationField};
+use grana_measure::{ChildField, ChildMetric, Grouping, Measurement, RelationField};
 use grana_volume::CHANNEL_LIMIT;
 
 use crate::object_set::ObjectSetId;
@@ -397,6 +397,16 @@ impl SceneState {
         {
             return Err(fault(
                 "a classifier names a measurement its set does not carry",
+            ));
+        }
+        if let Grouping::Quantile(quantile) = &set.grouping
+            && !set
+                .kind
+                .measurements(channels)
+                .contains(&quantile.measurement())
+        {
+            return Err(fault(
+                "a grouping bins a measurement its set does not carry",
             ));
         }
         if set

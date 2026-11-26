@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_measure::{Aggregate, Group, Kind, Mask, MeasureView, Plot, Table, Window};
+use grana_measure::{
+    Aggregate, Group, Grouping, Kind, Mask, MeasureView, Measurement, Plot, Quantile, Statistic,
+    Table, Window,
+};
 use grana_object::{
     IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
 };
@@ -837,19 +840,31 @@ fn measures_multi_class_neighbourhood_enrichment() {
                 Spot::new(*position, 0.02, if *class == 2.0 { 0.8 } else { 0.2 })
             })
             .collect(),
-        IntensityTable::new(1, vec![None; layout.len()]),
+        IntensityTable::new(
+            1,
+            layout
+                .iter()
+                .map(|(_, class)| {
+                    let mean = 100.0 * (class + 1.0);
+                    Some(SampleStatistics::new(
+                        mean,
+                        mean,
+                        mean,
+                        0.0,
+                        f64::from(mean),
+                    ))
+                })
+                .collect(),
+        ),
     );
-    let source = measure_source(Kind::Spots, &[CHANNEL], [objects.clone()]);
+    let volume = spheres(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0), &[], 0);
+    let mut scene = Scene::new(Dataset::synthetic("enrichment", volume.pyramid()));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(set, 0, ObjectFrame::from_spots(objects));
     let window = Window::new([0.0; 3], [2.0; 3]).expect("the wide cube is a window");
-    let unclassified = Table::build(
-        Arc::clone(&source),
-        None,
-        1.0,
-        Group::Object,
-        Aggregate::MEAN,
-        None,
-    )
-    .expect("the unclassified table builds");
+    let unclassified = scene
+        .table(set, Group::Object, Aggregate::MEAN)
+        .expect("the unclassified table builds");
     assert!(
         unclassified
             .plot(
@@ -862,15 +877,36 @@ fn measures_multi_class_neighbourhood_enrichment() {
             .is_none(),
         "a table without a class column holds no neighbourhood enrichment"
     );
-    let table = Table::build(source, None, 1.0, Group::Object, Aggregate::MEAN, None)
-        .expect("the classified table builds")
-        .with_column(
-            grana_measure::class_column(),
-            layout
-                .iter()
-                .map(|(_, class)| grana_measure::Measured::new(*class, 1))
-                .collect(),
-        );
+    let binning = Grouping::Quantile(
+        Quantile::new(
+            Measurement::Intensity {
+                channel: 0,
+                statistic: Statistic::Mean,
+            },
+            3,
+        )
+        .expect("three classes bin the intensities"),
+    );
+    assert!(
+        scene.set_grouping(set, binning),
+        "the binning replaces the classifier grouping"
+    );
+    let table = scene
+        .table(set, Group::Object, Aggregate::MEAN)
+        .expect("the binned table builds");
+    let class = table
+        .column(grana_measure::CLASS_KEY)
+        .expect("the binning writes a class column");
+    let codes = table
+        .materialize(class)
+        .iter()
+        .filter_map(|value| value.present())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        codes,
+        layout.iter().map(|(_, class)| *class).collect::<Vec<_>>(),
+        "the tertiles bin the intensities into the laid out classes"
+    );
     let mask = Mask::all(table.rows());
     let plot = table
         .plot(MeasureView::Enrichment, [0, 0], &mask, window, None)
@@ -948,10 +984,6 @@ fn measures_multi_class_neighbourhood_enrichment() {
     assert!(lines[4].starts_with("1,0,3.0000,"));
     assert!(lines[9].starts_with("2,2,3.0000,"));
     assert!(lines[1..].iter().all(|line| line.ends_with(",1")));
-    let volume = spheres(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0), &[], 0);
-    let mut scene = Scene::new(Dataset::synthetic("enrichment", volume.pyramid()));
-    let set = scene.add_object(ObjectKind::Spots, 0);
-    scene.install(set, 0, ObjectFrame::from_spots(objects));
     scene
         .train_classifier(
             set,
@@ -959,6 +991,10 @@ fn measures_multi_class_neighbourhood_enrichment() {
             &(0..9).collect::<Vec<_>>(),
         )
         .expect("the contrast separates the two classes");
+    assert!(
+        scene.set_grouping(set, Grouping::default()),
+        "the classifier grouping replaces the binning"
+    );
     let measured = scene
         .table(set, Group::Object, Aggregate::MEAN)
         .expect("the classified set measures its table");

@@ -6,7 +6,7 @@ use grana_display::{Camera, OutputSize, Slice};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, ObjectKind, Scene};
 use grana_volume::{
-    BrickData, BrickGrid, BrickRequest, Calibration, ChannelInfo, Extent, Intensity, Level,
+    BrickData, BrickGrid, BrickRequest, Calibration, ChannelInfo, Extent, Intensity, Level, NoData,
     PADDED_SIDE, Pyramid, Region, Spacing, Statistics, Volume, VoxelData, VoxelFormat,
     VoxelSemantics,
 };
@@ -27,6 +27,14 @@ impl Bricks for VolumeBricks {
         let grid = BrickGrid::new(self.pyramid.level(request.level).extent());
         Ok(self.volume.brick(&grid, request.coord))
     }
+
+    fn empty(
+        &self,
+        _request: BrickRequest,
+        _warps: &grana_warp::Warps,
+    ) -> Result<Option<NoData>, String> {
+        Ok(None)
+    }
 }
 
 struct EmptyBricks {
@@ -45,6 +53,14 @@ impl Bricks for EmptyBricks {
                 .map(|_| VoxelData::U16(vec![0u16; voxels]))
                 .collect(),
         ))
+    }
+
+    fn empty(
+        &self,
+        _request: BrickRequest,
+        _warps: &grana_warp::Warps,
+    ) -> Result<Option<NoData>, String> {
+        Ok(Some(NoData::U16(0)))
     }
 }
 

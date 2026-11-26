@@ -61,6 +61,7 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::Shading => ("lighting", "光照"),
         Action::ResetRendering => ("rendering reset", "重置渲染"),
         Action::Classifier => ("object classifier", "对象分类器"),
+        Action::ClassGrouping => ("class grouping", "类别分组"),
         Action::MeasureGroup => ("statistics group", "统计分组"),
         Action::MeasureAggregate => ("statistics aggregate", "统计聚合"),
         Action::MeasureScope => ("statistics range", "统计范围"),

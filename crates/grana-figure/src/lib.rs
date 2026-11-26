@@ -2,6 +2,7 @@ mod annotation;
 mod figure;
 mod labels;
 pub mod lineage;
+mod link;
 mod overlay;
 
 pub use annotation::{
@@ -10,6 +11,7 @@ pub use annotation::{
 };
 pub use figure::{Contents, instances, marks};
 pub use labels::{Depth, Label, Placed as PlacedLabel, labels, volume_labels};
+pub use link::{LinkStroke, link_stroke};
 pub use overlay::{Caption, Handle, Legend, Viewport, caption, handles, legends, paint};
 
 pub fn value(value: f32, unit: grana_measure::Unit, decimals: u8) -> String {

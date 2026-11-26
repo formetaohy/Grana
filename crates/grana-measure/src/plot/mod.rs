@@ -198,7 +198,7 @@ impl Table {
                 if self.group() != crate::table::Group::Object {
                     return None;
                 }
-                let column = self.column(crate::classifier::CLASS_KEY)?;
+                let column = self.column(crate::grouping::CLASS_KEY)?;
                 let values = self.materialize(column);
                 let mut frames = BTreeMap::<u32, Vec<crate::spatial::EnrichmentPoint>>::new();
                 for row in 0..self.rows() {

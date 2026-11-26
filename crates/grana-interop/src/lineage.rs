@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use grana_object::{ObjectId, Spot, TrackSet};
+use grana_object::{LinkConfidence, ObjectId, SolvedConfidence, Spot, TrackLink, TrackSet};
 
 use crate::error::Error;
 
@@ -57,15 +57,28 @@ impl Detection {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Edge {
     source: u64,
     target: u64,
+    confidence: LinkConfidence,
 }
 
 impl Edge {
     pub fn new(source: u64, target: u64) -> Self {
-        Self { source, target }
+        Self {
+            source,
+            target,
+            confidence: LinkConfidence::Manual,
+        }
+    }
+
+    pub fn solved(source: u64, target: u64, confidence: SolvedConfidence) -> Self {
+        Self {
+            source,
+            target,
+            confidence: LinkConfidence::Solved(confidence),
+        }
     }
 
     pub fn source(self) -> u64 {
@@ -74,6 +87,10 @@ impl Edge {
 
     pub fn target(self) -> u64 {
         self.target
+    }
+
+    pub fn confidence(self) -> LinkConfidence {
+        self.confidence
     }
 }
 
@@ -197,11 +214,35 @@ impl Lineage {
             .iter()
             .map(|edge| (keys[&edge.source], keys[&edge.target]))
             .collect::<Vec<_>>();
-        TrackSet::linked(frame_interval, &nodes, &edges)
+        let set = TrackSet::linked(frame_interval, &nodes, &edges)
             .map_err(|detail| Error::Format { detail })?
             .ok_or_else(|| Error::Format {
                 detail: "the lineage holds no spot to track".to_string(),
+            })?;
+        let mut confidences = HashMap::with_capacity(self.edges.len());
+        for (edge, (source, target)) in self.edges.iter().zip(&edges) {
+            let parent = set
+                .track_at(source.0, source.1)
+                .expect("an edge starts at a detection of its lineage");
+            let child = set
+                .track_at(target.0, target.1)
+                .expect("an edge ends at a detection of its lineage");
+            if parent != child {
+                confidences.insert((parent, child), edge.confidence);
+            }
+        }
+        let links = set
+            .links()
+            .iter()
+            .map(|link| match confidences[&(link.parent(), link.child())] {
+                LinkConfidence::Solved(confidence) => {
+                    TrackLink::solved(link.parent(), link.child(), link.kind(), confidence)
+                }
+                LinkConfidence::Manual => TrackLink::new(link.parent(), link.child(), link.kind()),
             })
+            .collect::<Vec<_>>();
+        TrackSet::try_with_links(frame_interval, set.tracks().to_vec(), links)
+            .map_err(|detail| Error::Format { detail })
     }
 
     pub fn tracklets(&self) -> Vec<u64> {

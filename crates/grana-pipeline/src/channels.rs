@@ -10,8 +10,8 @@ use grana_optics::{KernelBank, Psf};
 use grana_restore::{Job as RestoreJob, Restorer};
 use grana_scene::{DerivedSpec, MaskChannel, Operation, Registration, Scene};
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, ChannelSet, Extent, Intensity, Level, Pyramid, VoxelData,
-    blank_brick, pad_brick,
+    BrickCoord, BrickData, BrickGrid, ChannelSet, Extent, Intensity, Level, NoData, Pyramid,
+    VoxelData, blank_brick, pad_brick,
 };
 use grana_warp::{Warp, Warps};
 
@@ -441,11 +441,7 @@ impl Channels {
             "a brick belongs to the source grid the renderer streams"
         );
         let stored = self.stored_channels();
-        let placed = Warps::new(
-            (0..stored)
-                .map(|channel| self.aligned(channel, warps))
-                .collect(),
-        );
+        let placed = self.placed(warps);
         if !channels.covers(self.channels()) {
             return self.read_brick_scope(time, level, coord, warps, channels);
         }
@@ -477,6 +473,25 @@ impl Channels {
             ));
         }
         Ok(BrickData::new(channels))
+    }
+
+    pub fn empty(
+        &self,
+        time: u32,
+        level: usize,
+        coord: BrickCoord,
+        warps: &Warps,
+    ) -> Result<Option<NoData>, ChannelsError> {
+        assert!(
+            self.metric.is_none(),
+            "a brick belongs to the source grid the renderer streams"
+        );
+        if !self.derived.is_empty() {
+            return Ok(None);
+        }
+        self.reader
+            .empty(time, level, coord, &self.placed(warps))
+            .map_err(ChannelsError::Image)
     }
 
     fn read_brick_scope(
@@ -532,6 +547,14 @@ impl Channels {
             "a stored read names a stored channel"
         );
         self.read_stored(time, level, channel, ranges, warp)
+    }
+
+    fn placed(&self, warps: &Warps) -> Warps {
+        Warps::new(
+            (0..self.stored_channels())
+                .map(|channel| self.aligned(channel, warps))
+                .collect(),
+        )
     }
 
     fn aligned(&self, channel: usize, warps: &Warps) -> Warp {

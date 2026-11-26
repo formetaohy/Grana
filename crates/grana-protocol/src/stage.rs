@@ -404,6 +404,18 @@ impl Protocol {
                 let classifier = classifier.classifier(set, &keys)?;
                 builder.scene.install_classifier(id, classifier);
             }
+            let grouping = {
+                let set = builder
+                    .scene
+                    .objects
+                    .get(id)
+                    .expect("the staged object set exists");
+                match &spec.grouping {
+                    Some(grouping) => grouping.grouping(set, &keys)?,
+                    None => grana_measure::Grouping::default(),
+                }
+            };
+            builder.scene.set_grouping(id, grouping);
             if let Some(curation) = &spec.curation {
                 builder.apply_curation(id, Some(curation), &spec.name)?;
             }

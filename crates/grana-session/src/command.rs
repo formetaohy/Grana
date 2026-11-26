@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use grana_display::{Coloring, Material, Shading, TransferFunction, VolumeMode};
 use grana_measure::{
-    Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Lasso, MeasureView,
-    Measurement, PlotAxis, Scope,
+    Aggregate, ColocPair, ColocSettings, ColocThresholds, Filter, Group, Grouping, Lasso,
+    MeasureView, Measurement, PlotAxis, Scope,
 };
 use grana_mesh::Format as MeshFormat;
 use grana_object::{MaskMode, MaskTool, ObjectAnchor, ObjectId, TrackId, TrackParams};
@@ -338,6 +338,10 @@ pub enum Command {
         features: Vec<Measurement>,
     },
     ClearClassifier(ObjectSetId),
+    SetGrouping {
+        set: ObjectSetId,
+        grouping: Grouping,
+    },
     SetMeasureGroup(Group),
     SetMeasureAggregate(Aggregate),
     SetMeasureScope(Scope),
@@ -541,6 +545,7 @@ pub enum Action {
     Shading,
     ResetRendering,
     Classifier,
+    ClassGrouping,
     MeasureGroup,
     MeasureAggregate,
     MeasureScope,
@@ -772,6 +777,9 @@ impl Command {
             }
             Self::ClearClassifier(set) => {
                 Nature::Edit(Edit::targeted(Action::Classifier, set.raw()))
+            }
+            Self::SetGrouping { set, .. } => {
+                Nature::Edit(Edit::targeted(Action::ClassGrouping, set.raw()))
             }
             Self::SetColocPair(_) => Nature::Edit(Edit::new(Action::ColocPair)),
             Self::SetColocThresholds(_) => Nature::Edit(Edit::new(Action::ColocThresholds)),

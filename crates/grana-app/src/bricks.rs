@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use grana_offline::Bricks;
 use grana_pipeline::Channels;
-use grana_volume::{BrickData, BrickRequest, ChannelSet};
+use grana_volume::{BrickData, BrickRequest, ChannelSet, NoData};
 
 pub struct ImageBricks {
     channels: Arc<Channels>,
@@ -26,6 +26,16 @@ impl Bricks for ImageBricks {
                 warps,
                 ChannelSet::ALL,
             )
+            .map_err(|error| error.to_string())
+    }
+
+    fn empty(
+        &self,
+        request: BrickRequest,
+        warps: &grana_warp::Warps,
+    ) -> Result<Option<NoData>, String> {
+        self.channels
+            .empty(request.time, request.level, request.coord, warps)
             .map_err(|error| error.to_string())
     }
 }

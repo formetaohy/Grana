@@ -155,6 +155,28 @@ impl Resources {
             + crate::upload::Upload::bytes()
     }
 
+    pub(super) fn carry(&mut self, device: &Device, queue: &Queue, old: &Self) {
+        let carried = old.atlas.survivors(self.slots(), self.arena.first());
+        if carried.is_empty() {
+            return;
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("grana.residency.carry"),
+        });
+        for (_, slot) in &carried {
+            old.atlas.copy_slot(&mut encoder, *slot, &self.atlas);
+        }
+        queue.submit([encoder.finish()]);
+        self.atlas.adopt(&carried);
+        let Self {
+            occupancy, upload, ..
+        } = self;
+        for (_, slot) in &carried {
+            occupancy.adopt(*slot, old.occupancy.columns(*slot));
+            occupancy.flush(upload, *slot);
+        }
+    }
+
     pub(super) fn slots(&self) -> usize {
         self.atlas.slots()
     }

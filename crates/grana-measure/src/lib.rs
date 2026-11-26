@@ -7,6 +7,7 @@ mod correlation;
 pub mod csv;
 mod filter;
 mod frame;
+mod grouping;
 mod lasso;
 mod mask;
 mod math;
@@ -24,10 +25,7 @@ mod spatial;
 mod table;
 
 pub use child::{Child, ChildField, ChildMetric};
-pub use classifier::{
-    CLASS_KEY, CLASS_LABEL, CLASS_THRESHOLD, Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL,
-    class_column,
-};
+pub use classifier::{Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL};
 pub use cluster::{ClusterSample, ClusteredWelch};
 pub use coloc::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_DEFAULT, COLOC_BLOCK_MAX,
@@ -39,6 +37,10 @@ pub use coloc::{
 pub use column::{Column, Unit, area_key, length_key, speed_key, volume_key};
 pub use filter::Filter;
 pub use frame::{Frame, FrameSource, Kind};
+pub use grouping::{
+    CLASS_KEY, CLASS_LABEL, CLASS_MAXIMUM, CLASS_MINIMUM, Grouping, Quantile, Threshold,
+    class_column,
+};
 pub use lasso::Lasso;
 pub use mask::Mask;
 pub use math::student_two_sided;

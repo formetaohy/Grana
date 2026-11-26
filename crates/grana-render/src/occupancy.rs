@@ -60,6 +60,29 @@ impl Occupancy {
         self.columns[start..start + PACK_LIMIT * CELL_WORDS].fill(0);
     }
 
+    pub fn columns(&self, slot: u32) -> &[u16] {
+        assert!(
+            (slot as usize) < self.slots,
+            "an occupancy slot lies inside the table"
+        );
+        let start = slot as usize * PACK_LIMIT * CELL_WORDS;
+        &self.columns[start..start + PACK_LIMIT * CELL_WORDS]
+    }
+
+    pub fn adopt(&mut self, slot: u32, columns: &[u16]) {
+        assert_eq!(
+            columns.len(),
+            PACK_LIMIT * CELL_WORDS,
+            "an adopted occupancy slot holds a value per cell and per pack"
+        );
+        assert!(
+            (slot as usize) < self.slots,
+            "an occupancy slot lies inside the table"
+        );
+        let start = slot as usize * PACK_LIMIT * CELL_WORDS;
+        self.columns[start..start + columns.len()].copy_from_slice(columns);
+    }
+
     pub fn stage(&mut self, slot: u32, pack: usize, values: &[f32]) {
         assert!(
             (slot as usize) < self.slots,

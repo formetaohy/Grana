@@ -687,6 +687,11 @@ impl Session {
                     scene.clear_classifier(set);
                 }
             }
+            Command::SetGrouping { set, grouping } => {
+                if let Some(scene) = self.scene.as_mut() {
+                    scene.set_grouping(set, grouping);
+                }
+            }
             Command::SetMeasureGroup(group) => {
                 if let Some(scene) = self.scene.as_mut() {
                     self.measure.set_group(group, scene);

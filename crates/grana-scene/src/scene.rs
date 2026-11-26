@@ -28,7 +28,9 @@ use grana_display::{
     Coloring, Extent, Material, Shading, TransferFunction, VolumeMode, categorical,
 };
 use grana_geometry::ray_hit;
-use grana_measure::{Aggregate, Classifier, Group, Measurement, ObjectColoc, RelationRow, Table};
+use grana_measure::{
+    Aggregate, Classifier, Group, Grouping, Measurement, ObjectColoc, RelationRow, Table,
+};
 use grana_object::{
     MaskEdit, ObjectId, ObjectIds, RelationFrame, SurfaceEdit, TrackId, TrackParams, TrackSet,
 };
@@ -1554,6 +1556,19 @@ impl Scene {
 
     pub fn install_classifier(&mut self, id: ObjectSetId, classifier: Classifier) -> bool {
         self.objects.set_classifier(id, Some(classifier))
+    }
+
+    pub fn set_grouping(&mut self, id: ObjectSetId, grouping: Grouping) -> bool {
+        let Some(set) = self.objects.get(id) else {
+            return false;
+        };
+        if let Grouping::Quantile(quantile) = &grouping {
+            assert!(
+                set.measurements().contains(&quantile.measurement()),
+                "a grouping bins a measurement of its object set"
+            );
+        }
+        self.objects.set_grouping(id, grouping)
     }
 
     pub fn install_object_coloc(&mut self, id: ObjectSetId, coloc: ObjectColoc) -> bool {

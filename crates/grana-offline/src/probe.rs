@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_render::Detail;
 use grana_scene::Scene;
-use grana_volume::{BrickGrid, BrickRequest, PackedBrick, Pyramid};
+use grana_volume::{BrickGrid, BrickRequest, PackedBrick, Pyramid, fill_maximum};
 use rayon::prelude::*;
 
 use crate::plan::{self, Plan};
@@ -81,31 +81,33 @@ pub(crate) fn scan(scan: Scan<'_>) -> Result<Option<Probe>, String> {
                         None => fresh.push(*index),
                     }
                 }
-                let read = fresh
+                let probed = fresh
                     .par_iter()
                     .map(|index| {
                         let request =
                             BrickRequest::new(*time, visible.level, grid.coord(*index as usize));
-                        let data = bricks.read(request, &warps)?;
-                        Ok((
-                            *index,
-                            request,
-                            PackedBrick::of(&data, pyramid, request.channels),
-                        ))
+                        let Some(fill) = bricks.empty(request, &warps)? else {
+                            let data = bricks.read(request, &warps)?;
+                            let packed = PackedBrick::of(&data, pyramid, request.channels);
+                            let maximum = packed
+                                .packs()
+                                .map(|(_, block)| block.maximum())
+                                .fold(0.0f32, f32::max);
+                            return Ok((*index, Some((request, packed)), maximum));
+                        };
+                        Ok((*index, None, fill_maximum(pyramid, fill, request.channels)))
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                for (index, request, packed) in read {
-                    let hollow = packed
-                        .packs()
-                        .map(|(_, block)| block.maximum())
-                        .fold(0.0f32, f32::max)
-                        <= 0.0;
+                for (index, packed, maximum) in probed {
+                    let hollow = maximum <= 0.0;
                     known.insert((*time, visible.level, index), hollow);
                     if hollow {
                         continue;
                     }
                     count += 1;
-                    cache.insert(request, packed);
+                    if let Some((request, packed)) = packed {
+                        cache.insert(request, packed);
+                    }
                 }
                 visited += chunk.len() as u32;
                 progress(visited, total);

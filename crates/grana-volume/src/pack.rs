@@ -2,9 +2,10 @@ use std::ops::Range;
 
 use rayon::prelude::*;
 
+use crate::voxel::fill_unit;
 use crate::{
     BRICK_APRON, BRICK_SIDE, BrickData, CELL_AXIS, CELL_COUNT, CELL_SIDE, CHANNEL_LIMIT,
-    ChannelSet, PADDED_SIDE, Pyramid,
+    ChannelSet, NoData, PADDED_SIDE, Pyramid,
 };
 
 pub const PACK: usize = 4;
@@ -50,6 +51,18 @@ pub fn packed_bytes(channels: usize, scope: ChannelSet) -> u64 {
                 + CELL_COUNT as u64 * size_of::<f32>() as u64
         })
         .sum()
+}
+
+pub fn fill_maximum(pyramid: &Pyramid, fill: NoData, scope: ChannelSet) -> f32 {
+    let channels = pyramid.channel_count();
+    (0..pack_count(channels))
+        .filter(|pack| covers(channels, scope, *pack))
+        .flat_map(|pack| (0..components(channels, pack)).map(move |held| pack * PACK + held))
+        .map(|channel| {
+            let info = &pyramid.channels()[channel];
+            fill_unit(info.intensity(), info.no_data(), fill)
+        })
+        .fold(0.0f32, f32::max)
 }
 
 pub struct Pack {

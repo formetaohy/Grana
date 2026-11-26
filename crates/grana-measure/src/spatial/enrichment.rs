@@ -3,11 +3,10 @@ use std::collections::BTreeMap;
 use super::grid::Grid;
 use super::{Census, Window};
 use crate::csv;
+use crate::grouping::{CLASS_MAXIMUM, CLASS_MINIMUM};
 use crate::math::normal_two_sided;
 use crate::random::SplitMix64;
 use crate::significance::benjamini_hochberg;
-
-const MAXIMUM_CLASSES: usize = 64;
 
 const SIGNIFICANCE: f64 = 0.05;
 
@@ -220,7 +219,7 @@ pub(crate) fn enrichment(
             codes.entry(point.class).or_insert(0);
         }
     }
-    if !(2..=MAXIMUM_CLASSES).contains(&codes.len()) {
+    if !(CLASS_MINIMUM as usize..=CLASS_MAXIMUM as usize).contains(&codes.len()) {
         return None;
     }
     let codes = codes.into_keys().collect::<Vec<_>>();

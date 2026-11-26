@@ -10,8 +10,8 @@ use grana_volume::Fingerprint;
 use crate::{
     AnnotationSpec, BackgroundSpec, BleachSpec, ChannelSpec, ClassifierSpec, ColocPairSpec,
     ColocSettingsSpec, ColocSpec, ColorSpec, CurationSpec, DerivedSpec, DriftSpec, FilterSpec,
-    LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec,
-    MeasuredSpec, MetricSpec, NamedViewSpec, OriginSpec, PairSpec, PartSpec, Protocol,
+    GroupSpec, LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec,
+    MeasureSpec, MeasuredSpec, MetricSpec, NamedViewSpec, OriginSpec, PairSpec, PartSpec, Protocol,
     ProtocolError, RatioSpec, RegionSpec, RegistrationSpec, RelationSpec, RenderSpec, RestoreSpec,
     SetSpec, SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, SurfaceEditSpec, TrackSpec,
     TransferSpec, ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
@@ -185,6 +185,7 @@ impl Protocol {
                     classifier: set
                         .classifier()
                         .map(|classifier| ClassifierSpec::of(classifier, &keys)),
+                    grouping: GroupSpec::of(set.grouping(), &keys),
                     object_coloc: set
                         .object_coloc()
                         .and_then(|coloc| channel_pair(coloc.pair(), &channels)),

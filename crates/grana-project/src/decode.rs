@@ -8,8 +8,8 @@ use grana_display::{
 };
 use grana_geometry::{Bounds, Geometry, PackedMesh, SurfaceShape};
 use grana_measure::{
-    Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, MeasureView, Measurement,
-    RelationField, Scope, Statistic, TrackMeasurement,
+    Aggregate, ChildField, ChildMetric, ClassifierState, Filter, Group, Grouping, MeasureView,
+    Measurement, Quantile, RelationField, Scope, Statistic, Threshold, TrackMeasurement,
 };
 use grana_measure::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_MAX, COLOC_PERMUTATIONS_MAX, ColocCell, ColocCost,
@@ -691,6 +691,7 @@ impl Decode for SetState {
         let object_color = ColorState::<ObjectColor>::decode(reader)?;
         let track_color = ColorState::<TrackColor>::decode(reader)?;
         let classifier = Option::<ClassifierState>::decode(reader)?;
+        let grouping = Grouping::decode(reader)?;
         let object_coloc = Option::<Arc<ObjectColoc>>::decode(reader)?;
         let label_export = Option::<LabelExport>::decode(reader)?;
         let localization = Option::<LocalizationSource>::decode(reader)?;
@@ -724,6 +725,7 @@ impl Decode for SetState {
             object_color,
             track_color,
             classifier,
+            grouping,
             object_coloc,
             label_export,
             localization,
@@ -1593,6 +1595,20 @@ impl Decode for ClassifierState {
         };
         grana_measure::Classifier::restore(state.clone()).map_err(|_| FAULT_VALUE)?;
         Ok(state)
+    }
+}
+
+impl Decode for Grouping {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, &'static str> {
+        match reader.u8()? {
+            0 => Ok(Self::Threshold(
+                Threshold::new(reader.f32()?).ok_or(FAULT_VALUE)?,
+            )),
+            1 => Ok(Self::Quantile(
+                Quantile::new(Measurement::decode(reader)?, reader.u32()?).ok_or(FAULT_VALUE)?,
+            )),
+            _ => Err(FAULT_SHAPE),
+        }
     }
 }
 

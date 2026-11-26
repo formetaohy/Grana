@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_measure::{
-    ChildField, ChildMetric, Classifier, Mask, Measurement, ObjectColoc, RelationField,
+    ChildField, ChildMetric, Classifier, Grouping, Mask, Measurement, ObjectColoc, RelationField,
     TrackMeasurement,
 };
 use grana_object::TrackParams;
@@ -167,6 +167,7 @@ pub struct ObjectSet {
     object_coloring: Coloring<ObjectColor>,
     track_coloring: Coloring<TrackColor>,
     classifier: Option<Classifier>,
+    grouping: Grouping,
     object_coloc: Option<Arc<ObjectColoc>>,
     label_export: Option<LabelExport>,
     localization: Option<LocalizationSource>,
@@ -225,6 +226,7 @@ impl ObjectSet {
             object_coloring: Coloring::new(),
             track_coloring: Coloring::new(),
             classifier: None,
+            grouping: Grouping::default(),
             object_coloc: None,
             label_export: None,
             localization: None,
@@ -438,6 +440,10 @@ impl ObjectSet {
         self.classifier.as_ref()
     }
 
+    pub fn grouping(&self) -> &Grouping {
+        &self.grouping
+    }
+
     pub fn object_coloc(&self) -> Option<&ObjectColoc> {
         self.object_coloc.as_deref()
     }
@@ -634,13 +640,26 @@ impl ObjectSet {
         true
     }
 
+    pub(crate) fn set_grouping(&mut self, grouping: Grouping, stamp: Revision) -> bool {
+        if self.grouping == grouping {
+            return false;
+        }
+        self.grouping = grouping;
+        self.revision = stamp;
+        self.document = Revision::mint();
+        true
+    }
+
     pub fn object_coloring(&self) -> &Coloring<ObjectColor> {
         &self.object_coloring
     }
 
+    pub fn measurements(&self) -> Vec<Measurement> {
+        self.kind.measurements(self.channels)
+    }
+
     pub fn colorable_measurements(&self) -> Vec<Measurement> {
-        self.kind
-            .measurements(self.channels)
+        self.measurements()
             .into_iter()
             .filter(|measurement| measurement.colorable())
             .collect()
@@ -1323,6 +1342,7 @@ impl ObjectSet {
             object_color: self.object_coloring.state(),
             track_color: self.track_coloring.state(),
             classifier: self.classifier.as_ref().map(Classifier::state),
+            grouping: self.grouping.clone(),
             object_coloc: self.object_coloc.clone(),
             label_export: self.label_export.clone(),
             localization: self.localization.clone(),
@@ -1366,6 +1386,7 @@ impl ObjectSet {
             object_color,
             track_color,
             classifier,
+            grouping,
             object_coloc,
             label_export,
             localization,
@@ -1420,6 +1441,7 @@ impl ObjectSet {
                 .map(Classifier::restore)
                 .transpose()
                 .expect("a restored classifier keeps its coefficients"),
+            grouping,
             object_coloc: None,
             label_export,
             localization,
@@ -2209,6 +2231,7 @@ impl ObjectSet {
             object_coloring,
             track_coloring: self.track_coloring.clone(),
             classifier: self.classifier.clone(),
+            grouping: self.grouping.clone(),
             object_coloc: None,
             label_export: None,
             localization: self.localization.clone(),
@@ -2403,6 +2426,7 @@ impl ObjectSet {
             object_coloring,
             track_coloring,
             classifier: self.classifier.clone(),
+            grouping: self.grouping.clone(),
             object_coloc: None,
             label_export: None,
             localization: None,

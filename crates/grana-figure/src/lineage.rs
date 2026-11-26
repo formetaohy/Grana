@@ -1,8 +1,10 @@
 use glam::Vec2;
-use grana_object::{Link, TrackLayout, TrackSet};
+use grana_object::{Link, TrackLayout, TrackLink, TrackSet};
 use grana_ui::{
     Align, Color, Corners, Mark, Painter, Palette, Rect, TextStyle, TypeStyle, Ui, Vec2 as UiVec2,
 };
+
+use crate::link::link_stroke;
 
 const MARGIN: f32 = 28.0;
 const HEADER: f32 = 78.0;
@@ -171,7 +173,7 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
                     painter,
                     UiVec2::new(x(parent.end()), y(lane_of_parent)),
                     UiVec2::new(start, y(lane)),
-                    link.kind(),
+                    link,
                     color,
                 );
             }
@@ -229,15 +231,15 @@ fn paint(painter: &mut Painter, size: Vec2, palette: &Palette, lineage: &Lineage
     );
 }
 
-fn draw_link(painter: &mut Painter, from: UiVec2, to: UiVec2, kind: Link, tint: Color) {
-    match kind {
-        Link::Gap => dashed(painter, from, to, 1.0, tint.with_alpha(0.35)),
-        Link::Division => {
-            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
-        }
+fn draw_link(painter: &mut Painter, from: UiVec2, to: UiVec2, link: TrackLink, tint: Color) {
+    let stroke = link_stroke(link.confidence());
+    let color = tint.with_alpha(stroke.alpha);
+    match link.kind() {
+        Link::Gap => dashed(painter, from, to, stroke.width, color),
+        Link::Division => painter.segment(from, to, stroke.width, color),
         Link::Merge => {
-            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
-            painter.ring(from, 2.2, 1.0, 0.0, std::f32::consts::TAU, tint);
+            painter.segment(from, to, stroke.width, color);
+            painter.ring(from, 2.2, 1.0, 0.0, std::f32::consts::TAU, color);
         }
     }
 }

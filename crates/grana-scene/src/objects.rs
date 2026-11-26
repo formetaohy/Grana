@@ -1,4 +1,4 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use grana_display::{CATEGORICAL as PALETTE, Extent};
@@ -1232,6 +1232,18 @@ impl Objects {
             return false;
         };
         set.set_classifier(classifier, stamp)
+    }
+
+    pub(crate) fn set_grouping(
+        &mut self,
+        id: ObjectSetId,
+        grouping: grana_measure::Grouping,
+    ) -> bool {
+        let stamp = self.revisions.mint();
+        let Some(set) = self.get_mut(id) else {
+            return false;
+        };
+        set.set_grouping(grouping, stamp)
     }
 
     pub(crate) fn set_object_coloc(&mut self, id: ObjectSetId, coloc: Option<ObjectColoc>) -> bool {

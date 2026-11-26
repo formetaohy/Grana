@@ -121,10 +121,10 @@ pub(super) fn carried_frame(time: u32, frames: u32) -> u32 {
     (time + 1) % frames
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reset {
+#[derive(Clone, Copy)]
+enum Reset<'a> {
     Dataset,
-    Residency,
+    Residency(&'a Queue),
 }
 
 #[derive(Clone, Copy)]
@@ -465,7 +465,7 @@ impl Renderer {
         ));
     }
 
-    fn grow(&mut self, device: &Device) {
+    fn grow(&mut self, device: &Device, queue: &Queue) {
         let Some((slots, slot_bytes, pyramid)) = self
             .resources
             .as_ref()
@@ -485,7 +485,7 @@ impl Renderer {
                 slots: wanted,
                 ceiling: self.export_ceiling,
             },
-            Reset::Dataset,
+            Reset::Residency(queue),
         ) {
             Ok(installed) if installed > slots => {}
             _ => self.degrade(slot_bytes),
@@ -507,7 +507,12 @@ impl Renderer {
         let carried = held
             .as_ref()
             .filter(|resources| same_layout(&resources.pyramid, pyramid))
-            .map(|resources| resources.atlas.hollow_words());
+            .map(|resources| {
+                (
+                    resources.atlas.hollow_words(),
+                    resources.atlas.unavailable_words(),
+                )
+            });
         let mut peak = held.as_ref().map_or(0, Resources::bytes);
         let outcome = loop {
             let plan = match reserve::Plan::of(pyramid, allocation, self.footprint(), max_dimension)
@@ -553,7 +558,7 @@ impl Renderer {
                 Err(resources::Shortfall::Detail(detail)) => break Err(detail),
             }
         };
-        let (plan, resources) = match outcome {
+        let (plan, mut resources) = match outcome {
             Ok(held) => held,
             Err(detail) => {
                 self.resources = held;
@@ -563,6 +568,13 @@ impl Renderer {
                 return Err(detail);
             }
         };
+        if let Reset::Residency(queue) = reset
+            && let Some(old) = held
+                .as_ref()
+                .filter(|resources| same_layout(&resources.pyramid, pyramid))
+        {
+            resources.carry(device, queue, old);
+        }
         self.residence.setup(device, resources.slots(), pyramid);
         assert_eq!(
             resources.bytes() + self.residence.bytes(),
@@ -574,9 +586,10 @@ impl Renderer {
         self.residency_target = plan.target();
         self.mesh_budget = plan.surface();
         self.resources = Some(resources);
-        if let Some(carried) = carried {
+        if let Some((hollow, unavailable)) = carried {
             let resources = self.resources.as_mut().expect("the dataset is installed");
-            resources.atlas.restore_hollow(carried);
+            resources.atlas.restore_hollow(hollow);
+            resources.atlas.restore_unavailable(unavailable);
         }
         self.apply_seed();
         if let Some(meshes) = self.meshes.as_mut() {
@@ -589,13 +602,13 @@ impl Renderer {
         if shrunk {
             self.ceiling = self.ceiling.min(self.budget);
         }
-        if reset == Reset::Dataset {
-            self.targets.clear();
-            self.meshes = None;
-            self.sections.clear();
-        }
-        if reset == Reset::Residency {
-            return Ok(installed);
+        match reset {
+            Reset::Dataset => {
+                self.targets.clear();
+                self.meshes = None;
+                self.sections.clear();
+            }
+            Reset::Residency(_) => return Ok(installed),
         }
         self.time = 0;
         self.sliced = false;
@@ -630,6 +643,7 @@ impl Renderer {
     fn fit(
         &mut self,
         device: &Device,
+        queue: &Queue,
         size: [u32; 2],
         demand: budget::Demand,
     ) -> Result<(), String> {
@@ -662,7 +676,7 @@ impl Renderer {
                     device,
                     &pyramid,
                     reserve::Allocation::Display(split.residency),
-                    Reset::Residency,
+                    Reset::Residency(queue),
                 )?;
             }
         }
@@ -799,11 +813,11 @@ impl Renderer {
         let size = frame.size;
         if self.reclaim {
             self.reclaim = false;
-            self.grow(device);
+            self.grow(device, queue);
         }
         let transparent = self.transparency(&frame);
         let shot = render::Shot::of(&frame, transparent);
-        self.fit(device, size, shot.demand())?;
+        self.fit(device, queue, size, shot.demand())?;
         let (mut target, created) = self
             .targets
             .take(device, &self.layouts, &self.present, size);

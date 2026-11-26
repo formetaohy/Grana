@@ -226,6 +226,9 @@ impl Protocol {
             if let Some(classifier) = &set.classifier {
                 classifier.checked(&set.name)?;
             }
+            if let Some(grouping) = &set.grouping {
+                grouping.checked(&set.name)?;
+            }
             if let Some(pair) = &set.object_coloc {
                 for name in [&pair.a, &pair.b] {
                     validate(name, "an object colocalization channel")?;

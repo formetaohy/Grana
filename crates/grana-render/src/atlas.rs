@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use grana_volume::PADDED_SIDE;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindingResource, Device,
-    Sampler, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
-    TextureView, TextureViewDescriptor, TextureViewDimension,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindingResource,
+    CommandEncoder, Device, Extent3d, Sampler, TexelCopyTextureInfo, Texture, TextureAspect,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    TextureViewDescriptor, TextureViewDimension,
 };
 
 use grana_volume::CHANNEL_LIMIT;
@@ -131,6 +132,18 @@ impl Space {
         self.free += 1;
     }
 
+    fn occupy(&mut self, slot: u32) {
+        let index = slot as usize;
+        let word = index / u64::BITS as usize;
+        let bit = 1u64 << (index % u64::BITS as usize);
+        assert!(
+            self.words[word] & bit != 0,
+            "an adopted brick slot was free"
+        );
+        self.words[word] &= !bit;
+        self.free -= 1;
+    }
+
     fn restore(&mut self, capacity: usize) {
         *self = Self::new(capacity);
     }
@@ -227,6 +240,16 @@ impl Frames {
         self.frames
             .get(&(time, level))
             .map(|frame| frame.words.as_slice())
+    }
+
+    fn contents(&self) -> Vec<(u32, usize, Vec<u64>)> {
+        let mut contents = self
+            .frames
+            .iter()
+            .map(|((time, level), frame)| (*time, *level, frame.words.clone()))
+            .collect::<Vec<_>>();
+        contents.sort_unstable_by_key(|(time, level, _)| (*time, *level));
+        contents
     }
 
     fn holds_time(&self, time: u32) -> bool {
@@ -396,7 +419,9 @@ impl Atlas {
                     sample_count: 1,
                     dimension: TextureDimension::D3,
                     format: pack_format(*width),
-                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                    usage: TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::COPY_SRC,
                     view_formats: &[],
                 })
             })
@@ -654,6 +679,73 @@ impl Atlas {
         self.hollow.contents()
     }
 
+    pub fn unavailable_words(&self) -> Vec<(u32, usize, Vec<u64>)> {
+        self.unavailable.contents()
+    }
+
+    pub fn survivors(&self, capacity: usize, first_level: usize) -> Vec<(ResidentBrick, u32)> {
+        let mut carried = self
+            .identity
+            .iter()
+            .filter(|((_, level, _), slot)| *level >= first_level && (**slot as usize) < capacity)
+            .map(|((time, level, index), slot)| {
+                (
+                    ResidentBrick {
+                        time: *time,
+                        level: *level,
+                        index: *index,
+                    },
+                    *slot,
+                )
+            })
+            .collect::<Vec<_>>();
+        carried.sort_unstable_by_key(|(brick, slot)| (brick.time, brick.level, *slot));
+        carried
+    }
+
+    pub fn adopt(&mut self, carried: &[(ResidentBrick, u32)]) {
+        for (brick, slot) in carried {
+            assert!(
+                (*slot as usize) < self.slots.len(),
+                "an adopted brick slot lies inside the atlas"
+            );
+            self.space.occupy(*slot);
+            self.link(*slot, *brick, false);
+        }
+    }
+
+    pub fn copy_slot(&self, encoder: &mut CommandEncoder, slot: u32, target: &Atlas) {
+        assert_eq!(
+            self.textures.len(),
+            target.textures.len(),
+            "a carried atlas keeps the packs of the atlas it came from"
+        );
+        let source = self.origin(slot);
+        let destination = target.origin(slot);
+        let extent = Extent3d {
+            width: PADDED_SIDE,
+            height: PADDED_SIDE,
+            depth_or_array_layers: PADDED_SIDE,
+        };
+        for (texture, held) in self.textures.iter().zip(&target.textures) {
+            encoder.copy_texture_to_texture(
+                TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: source,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyTextureInfo {
+                    texture: held,
+                    mip_level: 0,
+                    origin: destination,
+                    aspect: TextureAspect::All,
+                },
+                extent,
+            );
+        }
+    }
+
     pub fn restore_hollow(&mut self, words: Vec<(u32, usize, Vec<u64>)>) {
         for (time, level, bits) in words {
             let frame = self.hollow.frames.frames.entry((time, level)).or_default();
@@ -669,6 +761,23 @@ impl Atlas {
                 .map(|word| word.count_ones() as usize)
                 .sum();
             self.hollow.remember(time);
+        }
+    }
+
+    pub fn restore_unavailable(&mut self, words: Vec<(u32, usize, Vec<u64>)>) {
+        for (time, level, bits) in words {
+            let frame = self.unavailable.frames.entry((time, level)).or_default();
+            if frame.words.len() < bits.len() {
+                frame.words.resize(bits.len(), 0);
+            }
+            for (held, other) in frame.words.iter_mut().zip(bits) {
+                *held |= other;
+            }
+            frame.count = frame
+                .words
+                .iter()
+                .map(|word| word.count_ones() as usize)
+                .sum();
         }
     }
 
@@ -845,20 +954,24 @@ impl Atlas {
     }
 
     pub fn assign(&mut self, slot: u32, brick: ResidentBrick, hold: bool) {
+        assert!(
+            self.slots[slot as usize].brick.is_none(),
+            "an allocated brick slot is vacant"
+        );
+        self.hollow.release(brick.time, brick.level, brick.index);
+        self.unavailable.clear(brick.time, brick.level, brick.index);
+        self.link(slot, brick, hold);
+        self.written(slot);
+    }
+
+    fn link(&mut self, slot: u32, brick: ResidentBrick, hold: bool) {
         let Self {
             slots,
             frames,
             identity,
-            hollow,
-            unavailable,
+            hold_generation,
             ..
         } = self;
-        assert!(
-            slots[slot as usize].brick.is_none(),
-            "an allocated brick slot is vacant"
-        );
-        hollow.release(brick.time, brick.level, brick.index);
-        unavailable.clear(brick.time, brick.level, brick.index);
         identity.insert((brick.time, brick.level, brick.index), slot);
         let frame = frames.entry((brick.time, brick.level)).or_insert(Frame {
             head: ABSENT,
@@ -876,9 +989,8 @@ impl Atlas {
         }
         frame.tail = slot;
         if hold {
-            slots[slot as usize].holds |= 1 << self.hold_generation;
+            slots[slot as usize].holds |= 1 << *hold_generation;
         }
-        self.written(slot);
     }
 
     pub fn texture(&self, pack: usize) -> &Texture {

@@ -91,6 +91,7 @@ labels! {
     nearest_expected => "CSR" / "CSR";
     enrichment => "Enrichment" / "邻域富集";
     enrichment_title => "COZI enrichment" / "COZI 邻域富集";
+    class_source => "Class" / "类别";
     y_index_class => "Y: index class" / "Y: 索引类别";
     x_neighbour_class => "X: neighbour class" / "X: 邻居类别";
     no_classes => "No classes" / "无类别";

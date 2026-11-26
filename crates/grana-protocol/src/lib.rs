@@ -17,13 +17,13 @@ pub use origin::{AlgorithmSpec, ExpectedSpec, OriginSpec};
 pub use spec::{
     AnchorSpec, AnnotationSpec, BackgroundSpec, BleachSpec, CameraSpec, ChannelSpec,
     ClassifierSpec, ColocPairSpec, ColocSettingsSpec, ColocSpec, ColorSpec, CompositionSpec,
-    CurationSpec, DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, HiddenSpec, KeySpec,
-    LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec, MeasureSpec,
-    MeasuredSpec, MetricSpec, MoleculesSpec, NamedViewSpec, NodeSpec, PairSpec, PartSpec,
-    ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RegistrationSpec, RelationSpec,
-    RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SliceSpec, SmoothSpec,
-    SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec, SurfaceEditSpec, TimelineSpec,
-    TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
+    CurationSpec, DerivedSpec, DriftSpec, EditSpec, ExportSpec, FilterSpec, GroupSpec, HiddenSpec,
+    KeySpec, LassoSpec, LatticeSpec, MaskEditSpec, MaskFilterSpec, MaskSpec, MaterialSpec,
+    MeasureSpec, MeasuredSpec, MetricSpec, MoleculesSpec, NamedViewSpec, NodeSpec, PairSpec,
+    PartSpec, ProfileSampleSpec, ProfileSpec, RatioSpec, RegionSpec, RegistrationSpec,
+    RelationSpec, RemovalSpec, RenderSpec, RestoreSpec, SetSpec, ShadingSpec, SliceSpec,
+    SmoothSpec, SnapshotSpec, SortSpec, SourceSpec, StitchSpec, StopSpec, SurfaceEditSpec,
+    TimelineSpec, TrackSpec, TransferSpec, ViewSpec, VolumeSpec, WarpSpec, WindowSpec,
 };
 pub use stage::Staged;
 pub use step::Step;

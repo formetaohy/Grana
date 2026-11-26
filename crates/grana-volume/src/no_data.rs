@@ -54,6 +54,36 @@ impl NoData {
         held == value || (held.is_nan() && value.is_nan())
     }
 
+    pub fn same(self, other: Self) -> bool {
+        match other {
+            Self::U8(value) => value.is_no_data(self),
+            Self::U16(value) => value.is_no_data(self),
+            Self::U32(value) => value.is_no_data(self),
+            Self::U64(value) => value.is_no_data(self),
+            Self::I8(value) => value.is_no_data(self),
+            Self::I16(value) => value.is_no_data(self),
+            Self::I32(value) => value.is_no_data(self),
+            Self::I64(value) => value.is_no_data(self),
+            Self::F32(value) => value.is_no_data(self),
+            Self::F64(value) => value.is_no_data(self),
+        }
+    }
+
+    pub fn sample(self) -> f32 {
+        match self {
+            Self::U8(value) => value.to_f32(),
+            Self::U16(value) => value.to_f32(),
+            Self::U32(value) => value.to_f32(),
+            Self::U64(value) => value.to_f32(),
+            Self::I8(value) => value.to_f32(),
+            Self::I16(value) => value.to_f32(),
+            Self::I32(value) => value.to_f32(),
+            Self::I64(value) => value.to_f32(),
+            Self::F32(value) => value.to_f32(),
+            Self::F64(value) => value.to_f32(),
+        }
+    }
+
     pub fn format(self) -> VoxelFormat {
         match self {
             Self::U8(_) => VoxelFormat::U8,

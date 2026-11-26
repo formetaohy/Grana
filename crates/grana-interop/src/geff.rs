@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
+use grana_object::{LinkConfidence, SolvedConfidence};
 use serde_json::{Map, Value, json};
 use zarrs::array::builder::ArrayBuilderFillValue;
 use zarrs::array::{Array, ArrayBuilder, ArraySubset, data_type};
@@ -21,6 +22,7 @@ const GAP: u8 = 1;
 const DIVISION: u8 = 2;
 const MERGE: u8 = 3;
 
+const CONFIDENCE: &str = "confidence";
 const POLYGON: &str = "polygon";
 const MESH_VERTEX: &str = "grana_mesh_vertex";
 const MESH_NORMAL: &str = "grana_mesh_normal";
@@ -96,6 +98,18 @@ fn store(
         detail: format!("{}: {error}", path.display()),
     })?);
     let limits = bounds(lineage);
+    let edge_confidence = confidences(lineage);
+    let mut edge_props = Map::new();
+    edge_props.insert(
+        "grana_kind".to_string(),
+        property("grana_kind", "uint8", None),
+    );
+    if edge_confidence.is_some() {
+        edge_props.insert(
+            CONFIDENCE.to_string(),
+            property(CONFIDENCE, "float64", None),
+        );
+    }
     let mut attributes = json!({
         "geff": {
             "geff_version": VERSION,
@@ -145,9 +159,7 @@ fn store(
                 "tracklet_id": property("tracklet_id", "uint64", None),
                 "lineage_id": property("lineage_id", "uint64", None),
             },
-            "edge_props_metadata": {
-                "grana_kind": property("grana_kind", "uint8", None),
-            },
+            "edge_props_metadata": edge_props,
             "extra": {
                 "grana": {
                     "frame_interval": axes.interval,
@@ -185,6 +197,9 @@ fn store(
     group(&store, "/edges", Map::new())?;
     group(&store, "/edges/props", Map::new())?;
     group(&store, "/edges/props/grana_kind", Map::new())?;
+    if edge_confidence.is_some() {
+        group(&store, &format!("/edges/props/{CONFIDENCE}"), Map::new())?;
+    }
     let count = lineage.len();
     let ids = lineage
         .detections()
@@ -296,6 +311,26 @@ fn store(
         0u8,
         &kind,
     )?;
+    if let Some(edge_confidence) = &edge_confidence {
+        array(
+            &store,
+            &format!("/edges/props/{CONFIDENCE}/values"),
+            vec![rows],
+            data_type::float64(),
+            0.0f64,
+            &edge_confidence.values,
+        )?;
+        if let Some(missing) = &edge_confidence.missing {
+            array(
+                &store,
+                &format!("/edges/props/{CONFIDENCE}/missing"),
+                vec![rows],
+                data_type::uint8(),
+                0u8,
+                missing,
+            )?;
+        }
+    }
     if let Some(objects) = objects {
         write_shapes(&store, lineage, objects)?;
     }
@@ -376,7 +411,11 @@ pub fn read(path: &Path, default_radius: f32) -> Result<Lineage, Error> {
             detail: "the radii do not cover every node".to_string(),
         });
     }
-    let missing = read_missing(&store, &graph, &names.sphere)?;
+    let missing = read_missing(
+        &store,
+        &graph,
+        &format!("nodes/props/{}/missing", names.sphere),
+    )?;
     if !missing.is_empty() && missing.len() != ids.len() {
         return Err(Error::Format {
             detail: "the missing radii do not cover every node".to_string(),
@@ -430,11 +469,15 @@ pub fn read(path: &Path, default_radius: f32) -> Result<Lineage, Error> {
             detail: "the edge array holds an odd number of ids".to_string(),
         });
     }
-    let edges = links
-        .as_chunks::<2>()
-        .0
+    let pairs = links.as_chunks::<2>().0;
+    let confidences = read_confidences(&store, &graph, metadata, pairs)?;
+    let edges = pairs
         .iter()
-        .map(|pair| Edge::new(pair[0], pair[1]))
+        .zip(confidences)
+        .map(|(pair, confidence)| match confidence {
+            LinkConfidence::Solved(confidence) => Edge::solved(pair[0], pair[1], confidence),
+            LinkConfidence::Manual => Edge::new(pair[0], pair[1]),
+        })
         .collect::<Vec<_>>();
     let recorded = read_kinds(&store, &graph, metadata, &edges)?;
     let tracklets = read_identity(&store, &graph, names.tracklets.as_deref(), ids.len())?;
@@ -1259,18 +1302,55 @@ fn read_axis(
 fn read_missing(
     store: &Arc<FilesystemStore>,
     graph: &Group<FilesystemStore>,
-    name: &str,
+    path: &str,
 ) -> Result<Vec<bool>, Error> {
-    let path = array_path(graph, &format!("nodes/props/{name}/missing"));
-    if Array::open(store.clone(), &path).is_err() {
+    if Array::open(store.clone(), &array_path(graph, path)).is_err() {
         return Ok(Vec::new());
     }
-    Ok(
-        read_u8(store, graph, &format!("nodes/props/{name}/missing"))?
-            .into_iter()
-            .map(|value| value != 0)
-            .collect(),
-    )
+    Ok(read_u8(store, graph, path)?
+        .into_iter()
+        .map(|value| value != 0)
+        .collect())
+}
+
+fn read_confidences(
+    store: &Arc<FilesystemStore>,
+    graph: &Group<FilesystemStore>,
+    metadata: &Map<String, Value>,
+    edges: &[[u64; 2]],
+) -> Result<Vec<LinkConfidence>, Error> {
+    if !declared_edge(metadata, CONFIDENCE) {
+        return Ok(vec![LinkConfidence::Manual; edges.len()]);
+    }
+    let values = read_numbers(store, graph, &format!("edges/props/{CONFIDENCE}/values"))?;
+    if values.len() != edges.len() {
+        return Err(Error::Format {
+            detail: "the edge confidences do not cover every edge".to_string(),
+        });
+    }
+    let missing = read_missing(store, graph, &format!("edges/props/{CONFIDENCE}/missing"))?;
+    if !missing.is_empty() && missing.len() != edges.len() {
+        return Err(Error::Format {
+            detail: "the missing edge confidences do not cover every edge".to_string(),
+        });
+    }
+    values
+        .iter()
+        .enumerate()
+        .map(|(slot, value)| {
+            if missing.get(slot).copied().unwrap_or(false) {
+                return Ok(LinkConfidence::Manual);
+            }
+            SolvedConfidence::new(*value)
+                .map(LinkConfidence::Solved)
+                .ok_or_else(|| Error::Format {
+                    detail: format!(
+                        "the edge {} to {} carries the confidence {value}, which is not a probability",
+                        edges[slot][0], edges[slot][1]
+                    ),
+                })
+        })
+        .collect()
 }
 
 fn read_ids(
@@ -1467,6 +1547,37 @@ fn kinds(lineage: &Lineage) -> Vec<u8> {
             }
         })
         .collect()
+}
+
+struct Confidences {
+    values: Vec<f64>,
+    missing: Option<Vec<u8>>,
+}
+
+fn confidences(lineage: &Lineage) -> Option<Confidences> {
+    if lineage
+        .edges()
+        .iter()
+        .all(|edge| edge.confidence() == LinkConfidence::Manual)
+    {
+        return None;
+    }
+    let mut values = Vec::with_capacity(lineage.edges().len());
+    let mut missing = Vec::with_capacity(lineage.edges().len());
+    for edge in lineage.edges() {
+        match edge.confidence() {
+            LinkConfidence::Solved(confidence) => {
+                values.push(confidence.value());
+                missing.push(0u8);
+            }
+            LinkConfidence::Manual => {
+                values.push(0.0);
+                missing.push(1u8);
+            }
+        }
+    }
+    let missing = missing.iter().any(|flag| *flag != 0).then_some(missing);
+    Some(Confidences { values, missing })
 }
 
 fn property(name: &str, dtype: &str, unit: Option<&str>) -> Value {

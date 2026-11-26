@@ -1,8 +1,9 @@
 use grana_gpu::{Consumer, Ledger};
 use grana_image::{Image, Source};
 use grana_volume::{
-    BrickCoord, BrickGrid, Channel, Extent, Intensity, NoData, PADDED_SIDE, Spacing, Volume,
-    VolumeSeries, VoxelData,
+    BrickCoord, BrickData, BrickGrid, Calibration, Channel, ChannelInfo, ChannelSet, Extent,
+    Intensity, Level, NoData, PADDED_SIDE, PackedBrick, Pyramid, Spacing, Volume, VolumeSeries,
+    VoxelData, VoxelFormat, blank_brick, fill_maximum,
 };
 use grana_warp::Warp;
 
@@ -195,5 +196,53 @@ fn keeps_a_shifted_region_at_its_intensity_across_the_volume_edge() {
     assert!(
         beyond.iter().all(|value| *value == 0.0),
         "a voxel whose taps all leave the volume holds the fill"
+    );
+}
+
+#[test]
+fn a_filled_brick_reaches_the_maximum_the_pack_stages() {
+    fn channel(name: &str, intensity: Intensity, no_data: Option<NoData>) -> ChannelInfo {
+        let info = ChannelInfo::declared(name, [1.0, 1.0, 1.0], intensity, VoxelFormat::U16);
+        match no_data {
+            Some(no_data) => info.with_no_data(no_data),
+            None => info,
+        }
+    }
+    let fill = NoData::U16(30);
+    let level = Level::new(Extent::new(64, 64, 64), Spacing::new(1.0, 1.0, 1.0));
+    let pyramid = Pyramid::new(
+        vec![level],
+        1,
+        vec![
+            channel("over the fill", Intensity::new(0.0, 100.0), None),
+            channel("absent at the fill", Intensity::new(0.0, 100.0), Some(fill)),
+            channel("under the fill", Intensity::new(40.0, 100.0), None),
+            channel("over the fill again", Intensity::new(10.0, 100.0), None),
+            channel(
+                "absent elsewhere",
+                Intensity::new(0.0, 100.0),
+                Some(NoData::U16(0)),
+            ),
+            channel("under the fill again", Intensity::new(31.0, 100.0), None),
+        ],
+        1,
+        1.0,
+        Calibration::Recorded,
+    );
+    let blank = BrickData::new(
+        pyramid
+            .channels()
+            .iter()
+            .map(|_| blank_brick(fill))
+            .collect::<Vec<_>>(),
+    );
+    let staged = PackedBrick::of(&blank, &pyramid, ChannelSet::ALL)
+        .packs()
+        .map(|(_, block)| block.maximum())
+        .fold(0.0f32, f32::max);
+    assert_eq!(
+        fill_maximum(&pyramid, fill, ChannelSet::ALL),
+        staged,
+        "a brick the storage layer leaves empty decides its hollowness from the fill alone"
     );
 }
