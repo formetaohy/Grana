@@ -486,12 +486,19 @@ impl Channels {
             self.metric.is_none(),
             "a brick belongs to the source grid the renderer streams"
         );
-        if !self.derived.is_empty() {
-            return Ok(None);
-        }
-        self.reader
+        let Some(fill) = self
+            .reader
             .empty(time, level, coord, &self.placed(warps))
-            .map_err(ChannelsError::Image)
+            .map_err(ChannelsError::Image)?
+        else {
+            return Ok(None);
+        };
+        let uniform = fill.value() == 0.0
+            && self
+                .derived
+                .iter()
+                .all(|node| matches!(node.kind, Kind::Mask(_) | Kind::Bleach { .. }));
+        Ok(uniform.then_some(fill))
     }
 
     fn read_brick_scope(

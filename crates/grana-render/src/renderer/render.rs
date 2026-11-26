@@ -177,7 +177,11 @@ impl Renderer {
         self.present_region = Some(view.region);
         self.sequence = self.sequence.wrapping_add(1);
         self.motion = Some(view.motion);
-        let stride = self.convergence.stride(target.age);
+        let stride = if shot.assured {
+            1
+        } else {
+            self.convergence.stride(target.age)
+        };
         let fragments = self.fragment_allowance(frame.size);
         let splat_budget = self.splat_budget();
         let Self {

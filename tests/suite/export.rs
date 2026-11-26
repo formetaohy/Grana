@@ -134,6 +134,85 @@ fn export_image(gpu: &Gpu, destination: Destination, transparent: bool) -> [u32;
     }
 }
 
+fn noise_volume() -> Volume {
+    let extent = Extent::new(128, 128, 64);
+    let spacing = Spacing::new(0.5, 0.5, 1.0);
+    let mut values = vec![0u16; extent.voxel_count() as usize];
+    for z in 0..extent.z() {
+        for y in 0..extent.y() {
+            for x in 0..extent.x() {
+                let point = [x as f32, y as f32, z as f32];
+                let inside = (0..3)
+                    .map(|axis| (point[axis] - [64.0, 64.0, 32.0][axis]).powi(2))
+                    .sum::<f32>()
+                    <= 24.0 * 24.0;
+                if !inside {
+                    continue;
+                }
+                let mut hash = x.wrapping_mul(0x8da6_b343)
+                    ^ y.wrapping_mul(0xd816_3841)
+                    ^ z.wrapping_mul(0xcb1a_b31f);
+                hash ^= hash >> 15;
+                hash = hash.wrapping_mul(0x9e37_79b9);
+                hash ^= hash >> 13;
+                values[extent.index(x, y, z) as usize] = (hash % 8192) as u16 + 40_000;
+            }
+        }
+    }
+    Volume::new(
+        extent,
+        spacing,
+        vec![grana_volume::Channel::new(
+            "signal",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(values),
+        )],
+    )
+}
+
+#[test]
+fn reproduces_an_export_byte_for_byte() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-export-determinism");
+    let mut images = Vec::new();
+    for run in 0..2 {
+        let volume = noise_volume();
+        let pyramid = volume.pyramid();
+        let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+        let size = output(WIDTH, false);
+        let mut camera = Camera::new(35.0);
+        camera.fit(scene.dataset.world_size(), aspect(size));
+        let path = temp.path().join(format!("determinism-{run}.png"));
+        let plan = Plan {
+            destination: Destination::Image { path: path.clone() },
+            size,
+            transparent: false,
+            poses: vec![Pose {
+                time: 0,
+                camera: camera.state(),
+            }],
+            fps: 0,
+            region: Region::none(),
+        };
+        match offline(&gpu).run(task(volume, plan), &AtomicBool::new(false), &mut |_, _| {}) {
+            Outcome::Complete { .. } => {}
+            Outcome::Failed { detail } => panic!("the export failed: {detail}"),
+            Outcome::Cancelled => panic!("the export was cancelled"),
+        }
+        images.push(std::fs::read(&path).expect("the export wrote its image"));
+    }
+    assert!(
+        !images[0].is_empty(),
+        "the export wrote pixels into its image"
+    );
+    assert_eq!(
+        images[0], images[1],
+        "two exports of the same scene differ byte for byte"
+    );
+}
+
 #[test]
 fn exports_vector_figures_as_svg_and_pdf() {
     let Some(gpu) = gpu() else {

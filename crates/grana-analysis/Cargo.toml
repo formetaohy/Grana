@@ -19,5 +19,8 @@ grana-object = { workspace = true }
 grana-volume = { workspace = true }
 rayon = { workspace = true }
 
+[dev-dependencies]
+grana-evaluation = { workspace = true }
+
 [lints]
 workspace = true

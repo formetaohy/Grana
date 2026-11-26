@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use glam::Vec3;
 use grana_object::TrackParams;
 
-use super::calibration::{self, Calibration, Family, Hypothesis};
+use super::calibration::{self, Family, Hypothesis};
 use super::candidate::{self, Candidate, Choice};
 use super::chain::Chains;
 use super::detection::Detections;
@@ -46,9 +46,7 @@ pub(super) fn solve(
         let found = candidate::candidates(detections, &chains, params, frame, &sources);
         let hypotheses = hypotheses_of(&found, &node_of, &slot);
         let node_count = sources.len() + targets.len();
-        let mut calibration = Calibration::new(node_count);
-        let weight = calibration.weigh(&hypotheses);
-        let resolved = resolve(&hypotheses, &weight, &mut calibration, node_count);
+        let resolved = resolve(&hypotheses, node_count);
         let created = chains.len();
         let mut claimed = vec![false; targets.len()];
         for (index, confidence) in resolved {
@@ -167,87 +165,54 @@ fn hypotheses_of(
         .collect()
 }
 
-fn resolve(
-    hypotheses: &[Hypothesis],
-    weight: &[f64],
-    calibration: &mut Calibration,
-    node_count: usize,
-) -> Vec<(usize, f64)> {
-    let entries = hypotheses
+fn resolve(hypotheses: &[Hypothesis], node_count: usize) -> Vec<(usize, f64)> {
+    let unweighted = hypotheses
         .iter()
-        .zip(weight)
-        .map(|(hypothesis, held)| entry(hypothesis, *held))
+        .map(|hypothesis| Entry {
+            nodes: hypothesis.nodes,
+            count: hypothesis.count,
+            weight: 1.0,
+        })
         .collect::<Vec<_>>();
-    let incidence = packing::Incidence::new(&entries, node_count);
     let mut held = Vec::new();
-    for group in packing::components(&entries, node_count) {
-        held.extend(settle(
-            hypotheses,
-            &entries,
-            &incidence,
-            weight,
-            &group,
-            calibration,
-            node_count,
-        ));
+    for group in packing::components(&unweighted, node_count) {
+        held.extend(settle(hypotheses, &group, node_count));
     }
     held.sort_unstable_by_key(|(index, _)| *index);
     held
 }
 
-fn entry(hypothesis: &Hypothesis, weight: f64) -> Entry {
-    Entry {
-        nodes: hypothesis.nodes,
-        count: hypothesis.count,
-        weight: calibration::selection(hypothesis, weight),
-    }
-}
-
-fn settle(
-    hypotheses: &[Hypothesis],
-    entries: &[Entry],
-    incidence: &packing::Incidence,
-    weight: &[f64],
-    group: &[usize],
-    calibration: &mut Calibration,
-    node_count: usize,
-) -> Vec<(usize, f64)> {
-    let chosen = incidence.pack(entries, group, node_count);
-    if !group
+fn settle(hypotheses: &[Hypothesis], group: &[usize], node_count: usize) -> Vec<(usize, f64)> {
+    let mut nodes = group
         .iter()
-        .any(|index| calibration::abstains(&hypotheses[*index], weight[*index]))
-    {
-        return chosen
-            .into_iter()
-            .map(|index| (index, calibration::posterior(weight[index])))
-            .collect();
-    }
-    let survivors = group
-        .iter()
-        .copied()
-        .filter(|index| !calibration::abstains(&hypotheses[*index], weight[*index]))
+        .flat_map(|index| hypotheses[*index].nodes[..hypotheses[*index].count as usize].iter())
+        .map(|node| *node as usize)
         .collect::<Vec<_>>();
-    let refined = calibration.weigh(
-        &survivors
-            .iter()
-            .map(|index| hypotheses[*index])
-            .collect::<Vec<_>>(),
-    );
-    let refined_entries = survivors
+    nodes.sort_unstable();
+    nodes.dedup();
+    let mut incidents = vec![Vec::new(); node_count];
+    for (position, &index) in group.iter().enumerate() {
+        for node in &hypotheses[index].nodes[..hypotheses[index].count as usize] {
+            incidents[*node as usize].push(position as u32);
+        }
+    }
+    let marginals = calibration::marginals(hypotheses, group, &incidents, &nodes, node_count);
+    let entries = group
         .iter()
-        .zip(&refined)
-        .map(|(index, held)| entry(&hypotheses[*index], *held))
+        .map(|&index| Entry {
+            nodes: hypotheses[index].nodes,
+            count: hypotheses[index].count,
+            weight: calibration::selection(&hypotheses[index], marginals.probability(index)),
+        })
         .collect::<Vec<_>>();
-    let refined_incidence = packing::Incidence::new(&refined_entries, node_count);
-    let refined_members = (0..refined_entries.len()).collect::<Vec<_>>();
-    refined_incidence
-        .pack(&refined_entries, &refined_members, node_count)
+    let incidence = packing::Incidence::new(&entries, node_count);
+    let members = (0..entries.len()).collect::<Vec<_>>();
+    incidence
+        .pack(&entries, &members, node_count)
         .into_iter()
         .map(|position| {
-            (
-                survivors[position],
-                calibration::posterior(refined[position]),
-            )
+            let index = group[position];
+            (index, marginals.probability(index))
         })
         .collect()
 }

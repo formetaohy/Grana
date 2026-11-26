@@ -3499,6 +3499,7 @@ dependencies = [
  "glam",
  "grana-assign",
  "grana-display",
+ "grana-evaluation",
  "grana-geometry",
  "grana-measure",
  "grana-object",

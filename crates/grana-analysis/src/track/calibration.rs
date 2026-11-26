@@ -3,6 +3,7 @@ const SCORE_PRIOR: f64 = 0.5;
 const DIVISION_PRIOR: f64 = 3.0;
 const MISSING_COST: f64 = 1.5;
 const SPURIOUS_COST: f64 = 1.0;
+const ENUMERATION_LIMIT: usize = 1 << 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Family {
@@ -30,40 +31,9 @@ pub(super) struct Hypothesis {
     pub(super) gap: f64,
 }
 
-pub(super) struct Calibration {
-    odds: Vec<f64>,
-}
-
-impl Calibration {
-    pub(super) fn new(node_count: usize) -> Self {
-        Self {
-            odds: vec![0.0; node_count],
-        }
-    }
-
-    pub(super) fn weigh(&mut self, hypotheses: &[Hypothesis]) -> Vec<f64> {
-        for hypothesis in hypotheses {
-            for node in &hypothesis.nodes[..hypothesis.count as usize] {
-                self.odds[*node as usize] = 0.0;
-            }
-        }
-        for hypothesis in hypotheses {
-            let odds = log_odds(hypothesis).exp();
-            for node in &hypothesis.nodes[..hypothesis.count as usize] {
-                self.odds[*node as usize] += odds;
-            }
-        }
-        hypotheses
-            .iter()
-            .map(|hypothesis| {
-                let log = log_odds(hypothesis);
-                let odds = log.exp();
-                hypothesis.nodes[..hypothesis.count as usize]
-                    .iter()
-                    .map(|node| log - (1.0 + self.odds[*node as usize] - odds).ln())
-                    .sum()
-            })
-            .collect()
+impl Hypothesis {
+    fn members(&self) -> &[u32] {
+        &self.nodes[..self.count as usize]
     }
 }
 
@@ -71,14 +41,126 @@ fn log_odds(hypothesis: &Hypothesis) -> f64 {
     SCORE_GAIN * hypothesis.score - SCORE_PRIOR + hypothesis.family.offset() + hypothesis.gap
 }
 
-pub(super) fn posterior(weight: f64) -> f64 {
-    1.0 / (1.0 + (-weight).exp())
+pub(super) fn selection(hypothesis: &Hypothesis, posterior: f64) -> f64 {
+    let posterior = posterior.clamp(1.0e-9, 1.0 - 1.0e-9);
+    let logit = (posterior / (1.0 - posterior)).ln();
+    f64::from(hypothesis.edges) * (logit + (MISSING_COST / SPURIOUS_COST).ln())
 }
 
-pub(super) fn selection(hypothesis: &Hypothesis, weight: f64) -> f64 {
-    f64::from(hypothesis.edges) * (weight + (MISSING_COST / SPURIOUS_COST).ln())
+pub(super) struct Marginals {
+    probability: Vec<f64>,
 }
 
-pub(super) fn abstains(hypothesis: &Hypothesis, weight: f64) -> bool {
-    selection(hypothesis, weight) <= 0.0
+impl Marginals {
+    pub(super) fn probability(&self, index: usize) -> f64 {
+        self.probability[index]
+    }
+}
+
+pub(super) fn marginals(
+    hypotheses: &[Hypothesis],
+    members: &[usize],
+    incidents: &[Vec<u32>],
+    nodes: &[usize],
+    node_count: usize,
+) -> Marginals {
+    let mut enumeration = Enumeration {
+        hypotheses,
+        members,
+        incidents,
+        nodes,
+        used: vec![false; node_count],
+        taken: Vec::new(),
+        mass: vec![0.0; hypotheses.len()],
+        total: 0.0,
+        steps: 0,
+        exhausted: false,
+    };
+    enumeration.branch(0, 1.0);
+    let mut probability = vec![0.0; hypotheses.len()];
+    if enumeration.exhausted || !enumeration.total.is_finite() || enumeration.total <= 0.0 {
+        return Marginals {
+            probability: mean_field(hypotheses),
+        };
+    }
+    for (position, &index) in members.iter().enumerate() {
+        probability[index] = enumeration.mass[position] / enumeration.total;
+    }
+    Marginals { probability }
+}
+
+fn mean_field(hypotheses: &[Hypothesis]) -> Vec<f64> {
+    hypotheses
+        .iter()
+        .map(|hypothesis| 1.0 / (1.0 + (-log_odds(hypothesis)).exp()))
+        .collect()
+}
+
+struct Enumeration<'a> {
+    hypotheses: &'a [Hypothesis],
+    members: &'a [usize],
+    incidents: &'a [Vec<u32>],
+    nodes: &'a [usize],
+    used: Vec<bool>,
+    taken: Vec<usize>,
+    mass: Vec<f64>,
+    total: f64,
+    steps: usize,
+    exhausted: bool,
+}
+
+impl Enumeration<'_> {
+    fn branch(&mut self, cursor: usize, weight: f64) {
+        if self.exhausted {
+            return;
+        }
+        self.steps += 1;
+        if self.steps > ENUMERATION_LIMIT {
+            self.exhausted = true;
+            return;
+        }
+        let mut position = cursor;
+        while position < self.nodes.len() && self.used[self.nodes[position]] {
+            position += 1;
+        }
+        if position == self.nodes.len() {
+            self.total += weight;
+            for &held in &self.taken {
+                self.mass[held] += weight;
+            }
+            return;
+        }
+        let node = self.nodes[position];
+        self.branch(position + 1, weight);
+        if self.exhausted {
+            return;
+        }
+        for &incident in &self.incidents[node] {
+            self.take(incident as usize, position, weight);
+            if self.exhausted {
+                return;
+            }
+        }
+    }
+
+    fn take(&mut self, position: usize, cursor: usize, weight: f64) {
+        let hypothesis = self.hypotheses[self.members[position]];
+        if hypothesis
+            .members()
+            .iter()
+            .any(|node| self.used[*node as usize])
+        {
+            return;
+        }
+        for &node in hypothesis.members() {
+            self.used[node as usize] = true;
+        }
+        self.taken.push(position);
+        let weight = weight * log_odds(&hypothesis).exp();
+        self.branch(cursor + 1, weight);
+        self.taken.pop();
+        for &node in hypothesis.members() {
+            self.used[node as usize] = false;
+        }
+    }
 }
