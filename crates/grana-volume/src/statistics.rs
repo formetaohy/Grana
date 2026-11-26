@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::{Intensity, NoData, VoxelData, VoxelSemantics};
+use crate::{Histogram, Intensity, NoData, VoxelData, VoxelSemantics};
 
 const DISTINCT_LIMIT: usize = 1024;
 
@@ -9,6 +9,7 @@ pub struct Statistics {
     intensity: Intensity,
     distinct: u32,
     semantics: VoxelSemantics,
+    background: f32,
 }
 
 impl Statistics {
@@ -18,6 +19,7 @@ impl Statistics {
             intensity,
             distinct,
             semantics: infer(intensity, distinct),
+            background: intensity.min(),
         }
     }
 
@@ -26,6 +28,7 @@ impl Statistics {
             intensity,
             distinct: 0,
             semantics,
+            background: intensity.min(),
         }
     }
 
@@ -48,7 +51,10 @@ impl Statistics {
             return Self::of(Intensity::new(0.0, 0.0), 1);
         }
         let distinct = u32::try_from(values.len()).unwrap_or(u32::MAX).max(1);
-        Self::of(Intensity::new(minimum as f32, maximum as f32), distinct)
+        let intensity = Intensity::new(minimum as f32, maximum as f32);
+        let mut histogram = Histogram::over(intensity);
+        data.for_each_present_value(no_data, |value| histogram.add(value));
+        Self::of(intensity, distinct).with_background(histogram.background())
     }
 
     pub fn intensity(self) -> Intensity {
@@ -61,6 +67,19 @@ impl Statistics {
 
     pub fn semantics(self) -> VoxelSemantics {
         self.semantics
+    }
+
+    pub fn background(self) -> f32 {
+        self.background
+    }
+
+    pub fn with_background(mut self, background: f32) -> Self {
+        assert!(
+            background.is_finite(),
+            "a channel background is a finite value"
+        );
+        self.background = background.clamp(self.intensity.min(), self.intensity.max());
+        self
     }
 
     pub fn folded(self, other: Self) -> Self {
@@ -77,6 +96,7 @@ impl Statistics {
             intensity,
             distinct: self.distinct.max(other.distinct),
             semantics,
+            background: self.background.min(other.background),
         }
     }
 }

@@ -152,8 +152,14 @@ impl ChannelInfo {
             self.window.is_none(),
             "an indexed channel shows its whole index domain"
         );
-        self.statistics = Statistics::declared(color_table.indices(), VoxelSemantics::Label);
+        self.statistics =
+            Statistics::declared(color_table.indices(), VoxelSemantics::Label).with_background(0.0);
         self.color_table = Some(color_table);
+        self
+    }
+
+    pub fn with_background(mut self, background: f32) -> Self {
+        self.statistics = self.statistics.with_background(background);
         self
     }
 

@@ -117,7 +117,8 @@ impl VolumeSeries {
                         color_table.indices(),
                         channel.format(),
                     )
-                    .with_color_table(color_table.clone()),
+                    .with_color_table(color_table.clone())
+                    .with_background(channel.background()),
                     None => {
                         let statistics = frames.iter().fold(channel.statistics(), |held, frame| {
                             held.folded(frame.channels()[index].statistics())

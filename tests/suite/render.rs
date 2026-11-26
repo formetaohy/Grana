@@ -1111,12 +1111,24 @@ fn render_volume(
     camera: &Camera,
     visible: bool,
 ) -> Vec<[u8; 4]> {
+    let transfer = TransferFunction::tinted(volume.pyramid().channels()[0].tint());
+    render_volume_with(gpu, volume, style, camera, transfer, visible)
+}
+
+fn render_volume_with(
+    gpu: &Gpu,
+    volume: &Volume,
+    style: VolumeStyle,
+    camera: &Camera,
+    transfer: TransferFunction,
+    visible: bool,
+) -> Vec<[u8; 4]> {
     let pyramid = volume.pyramid();
     let channels = vec![grana_render::ChannelRow {
         visible,
         opacity: 1.0,
         intensity: pyramid.channels()[0].intensity(),
-        transfer: TransferFunction::tinted(pyramid.channels()[0].tint()),
+        transfer,
         volume: style,
     }];
     let scene = SceneFrame {
@@ -1141,6 +1153,57 @@ fn render_volume(
     };
     settle(gpu, &mut renderer, &view, volume);
     read_pixels(gpu, &target, [SIDE, SIDE])
+}
+
+#[test]
+fn an_indexed_channel_paints_every_index_but_its_background() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = Extent::new(64, 64, 16);
+    let mut values = vec![5u8; extent.voxel_count() as usize];
+    for z in 4..12u32 {
+        for y in 24..40u32 {
+            for x in 24..40u32 {
+                values[extent.index(x, y, z) as usize] = 200;
+            }
+        }
+    }
+    let colors = (0..256u32)
+        .map(|index| {
+            [
+                (index % 5) as f32 / 4.0,
+                (index % 3) as f32 / 2.0,
+                (index % 7) as f32 / 6.0,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let table = grana_volume::ColorTable::new(colors.clone());
+    let volume = Volume::new(
+        extent,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![
+            Channel::new("indexed", [0.3, 0.6, 1.0], VoxelData::U8(values)).with_color_table(table),
+        ],
+    );
+    let camera = axis_camera(&volume);
+    let transfer = TransferFunction::indexed(colors);
+    let style = VolumeStyle::new(grana_display::VolumeMode::Blend, 0.5);
+    let background = render_volume_with(&gpu, &volume, style, &camera, transfer.clone(), false);
+    let image = render_volume_with(&gpu, &volume, style, &camera, transfer, true);
+    assert_eq!(
+        rect_difference(&image, &background, [4, 4, 20, 20]),
+        0.0,
+        "the background index painted the empty corner of its tile"
+    );
+    assert!(
+        rect_difference(&image, &background, [50, 50, 78, 78]) > 10.0,
+        "the labelled blob never rendered"
+    );
+    assert!(
+        painted(&image, &background) * 8 < (SIDE * SIDE) as usize,
+        "the background index was painted as a solid tile of volume"
+    );
 }
 
 fn difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> f32 {

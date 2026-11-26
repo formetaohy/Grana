@@ -18,7 +18,7 @@ fn slice_color(point: vec3<f32>) -> vec4<f32> {
             if (!channel_active(channel)) {
                 continue;
             }
-            if (values[component] < channel_threshold(channel)) {
+            if (channel_empty(channel, values[component])) {
                 continue;
             }
             let opacity = channel_opacity(channel);

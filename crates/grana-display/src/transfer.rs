@@ -86,21 +86,34 @@ impl TransferFunction {
             tint.iter().all(|channel| (0.0..=1.0).contains(channel)),
             "a channel tint is an srgb triple"
         );
-        let dim = |factor: f32| [tint[0] * factor, tint[1] * factor, tint[2] * factor];
-        let lighten = |amount: f32| {
-            [
-                tint[0] + (1.0 - tint[0]) * amount,
-                tint[1] + (1.0 - tint[1]) * amount,
-                tint[2] + (1.0 - tint[2]) * amount,
-            ]
-        };
-        Self::new(vec![
-            Stop::new(0.00, [0.0, 0.0, 0.0], 0.00),
-            Stop::new(0.25, dim(0.35), 0.04),
-            Stop::new(0.50, dim(0.75), 0.22),
-            Stop::new(0.75, tint, 0.55),
-            Stop::new(1.00, lighten(0.45), 1.00),
-        ])
+        Self::new(
+            profile(tint)
+                .into_iter()
+                .map(|(position, color, opacity)| Stop::new(position, color, opacity))
+                .collect(),
+        )
+    }
+
+    pub fn anchored(tint: [f32; 3], background: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&background),
+            "a background position lies in the unit interval"
+        );
+        let upward = background <= 0.5;
+        let reach = if upward { 1.0 - background } else { background };
+        if reach <= 0.0 {
+            return Self::tinted(tint);
+        }
+        let sign = if upward { 1.0 } else { -1.0 };
+        Self::new(
+            profile(tint)
+                .into_iter()
+                .map(|(position, color, opacity)| {
+                    let anchor = background + sign * position * reach;
+                    Stop::new(anchor.clamp(0.0, 1.0), color, opacity)
+                })
+                .collect(),
+        )
     }
 
     pub fn grayscale() -> Self {
@@ -188,6 +201,24 @@ impl TransferFunction {
                 .collect(),
         }
     }
+}
+
+fn profile(tint: [f32; 3]) -> [(f32, [f32; 3], f32); 5] {
+    let dim = |factor: f32| [tint[0] * factor, tint[1] * factor, tint[2] * factor];
+    let lighten = |amount: f32| {
+        [
+            tint[0] + (1.0 - tint[0]) * amount,
+            tint[1] + (1.0 - tint[1]) * amount,
+            tint[2] + (1.0 - tint[2]) * amount,
+        ]
+    };
+    [
+        (0.00, [0.0, 0.0, 0.0], 0.00),
+        (0.25, dim(0.35), 0.04),
+        (0.50, dim(0.75), 0.22),
+        (0.75, tint, 0.55),
+        (1.00, lighten(0.45), 1.00),
+    ]
 }
 
 fn ramp_entry(stops: &[Stop], position: f32) -> [f32; 4] {

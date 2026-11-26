@@ -30,6 +30,7 @@ struct ChannelData {
     inverse: f32,
     lut_row: f32,
     threshold: f32,
+    ceiling: f32,
     mode: f32,
     nearest: f32,
     material: f32,
@@ -42,7 +43,7 @@ struct NeutralData {
 }
 
 const _: () = {
-    assert!(size_of::<ChannelData>() == 32);
+    assert!(size_of::<ChannelData>() == 36);
     assert!(size_of::<NeutralData>() == 432);
 };
 
@@ -302,6 +303,11 @@ fn channel_data(
                     None => f32::INFINITY,
                 },
             };
+            let background = info.statistics().background();
+            let (threshold, ceiling) = match categorical {
+                true => (range.unit(background - 0.5), range.unit(background + 0.5)),
+                false => (threshold, f32::INFINITY),
+            };
             let opacity = if row.visible { row.opacity } else { 0.0 };
             if categorical {
                 categoricals |= 1 << index;
@@ -313,6 +319,7 @@ fn channel_data(
                         peaks |= 1 << index;
                         start
                     }
+                    VolumeMode::Blend | VolumeMode::Isosurface if categorical => 0.0,
                     VolumeMode::Blend | VolumeMode::Isosurface => threshold,
                 };
                 floor = floor.min(reach);
@@ -323,6 +330,7 @@ fn channel_data(
                 inverse,
                 lut_row: (index as f32 + 0.5) / rows.len() as f32,
                 threshold,
+                ceiling,
                 mode: mode.index() as f32,
                 nearest: f32::from(u8::from(categorical)),
                 material: f32::from(u8::from(categorical)),

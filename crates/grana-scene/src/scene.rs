@@ -2119,6 +2119,9 @@ fn filter_stamp(filter: Option<MaskFilter>) -> u64 {
 pub(crate) fn initial_transfer(info: &ChannelInfo) -> TransferFunction {
     match info.color_table() {
         Some(color_table) => TransferFunction::indexed(color_table.colors()),
-        None => TransferFunction::tinted(info.tint()),
+        None => TransferFunction::anchored(
+            info.tint(),
+            info.display().unit(info.statistics().background()),
+        ),
     }
 }

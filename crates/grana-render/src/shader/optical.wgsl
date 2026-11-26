@@ -26,7 +26,7 @@ fn iso_density(channel: u32, value: f32) -> f32 {
 }
 
 fn categorical_sample(channel: u32, value: f32) -> ChannelSample {
-    if (value < channel_threshold(channel)) {
+    if (channel_empty(channel, value)) {
         return ChannelSample(vec3<f32>(0.0), 0.0, 0.0);
     }
     let weight = channel_opacity(channel);
@@ -42,7 +42,7 @@ fn channel_optical(channel: u32, value: f32) -> ChannelSample {
         let density = iso_density(channel, value) * opacity;
         return ChannelSample(channel_tau(channel, value).rgb * density, density, 0.0);
     }
-    if (value < channel_threshold(channel)) {
+    if (channel_empty(channel, value)) {
         return ChannelSample(vec3<f32>(0.0), 0.0, 0.0);
     }
     let extinction = channel_tau(channel, value);
@@ -56,7 +56,7 @@ fn channel_extinction(channel: u32, value: f32) -> f32 {
     }
     let opacity = channel_opacity(channel);
     if (channel_categorical(channel)) {
-        if (value < channel_threshold(channel)) {
+        if (channel_empty(channel, value)) {
             return 0.0;
         }
         return SURFACE_EXTINCTION * opacity;
@@ -87,7 +87,7 @@ fn optical_sample(
             let channel = pack * PACK + component;
             if (channel_peak(channel)) {
                 let value = values[component];
-                if (value >= channel_threshold(channel) && value > (*peaks)[channel]) {
+                if (!channel_empty(channel, value) && value > (*peaks)[channel]) {
                     (*peaks)[channel] = value;
                     grown = true;
                 }

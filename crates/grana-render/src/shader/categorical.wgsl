@@ -2,7 +2,7 @@ fn categorical_presence(tap: BrickTap, local: vec3<f32>, channel: u32) -> f32 {
     let pack = channel / PACK;
     let held = clamp(local, vec3<f32>(0.0), vec3<f32>(BRICK_SIDE));
     let values = tap_fetch(pack, tap_atlas_texel(tap), held);
-    return select(0.0, 1.0, values[channel % PACK] >= channel_threshold(channel));
+    return select(0.0, 1.0, !channel_empty(channel, values[channel % PACK]));
 }
 
 fn categorical_normal(tap: BrickTap, local: vec3<f32>, channel: u32) -> vec3<f32> {

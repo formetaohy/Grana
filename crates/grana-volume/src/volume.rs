@@ -37,7 +37,8 @@ impl Channel {
             VoxelFormat::U8,
             "an indexed channel stores byte indices"
         );
-        self.statistics = Statistics::declared(color_table.indices(), VoxelSemantics::Label);
+        self.statistics = Statistics::declared(color_table.indices(), VoxelSemantics::Label)
+            .with_background(self.statistics.background());
         self.color_table = Some(color_table);
         self
     }
@@ -78,6 +79,10 @@ impl Channel {
 
     pub fn statistics(&self) -> Statistics {
         self.statistics
+    }
+
+    pub fn background(&self) -> f32 {
+        self.statistics.background()
     }
 
     pub fn data(&self) -> &VoxelData {
@@ -145,7 +150,8 @@ impl Volume {
                         color_table.indices(),
                         channel.format(),
                     )
-                    .with_color_table(color_table.clone()),
+                    .with_color_table(color_table.clone())
+                    .with_background(channel.background()),
                     None => ChannelInfo::new(
                         channel.name(),
                         channel.tint(),

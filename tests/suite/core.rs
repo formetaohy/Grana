@@ -286,3 +286,62 @@ fn a_brick_at_the_channel_background_packs_empty() {
         "one voxel above the background label makes the brick content"
     );
 }
+
+#[test]
+fn anchors_the_default_transfer_on_the_value_the_volume_mostly_holds() {
+    fn scene(name: &str, values: Vec<u8>) -> grana_scene::Scene {
+        let extent = Extent::new(16, 16, 8);
+        let channel = Channel::new(name, [1.0, 1.0, 1.0], VoxelData::U8(values));
+        let volume = Volume::new(extent, Spacing::new(1.0, 1.0, 1.0), vec![channel]);
+        let image = Image::open(&Source::memory(VolumeSeries::new(vec![volume], 1.0)))
+            .expect("the synthetic series opens");
+        grana_scene::Scene::new(grana_scene::Dataset::synthetic(
+            name,
+            image.pyramid().clone(),
+        ))
+    }
+    let extent = Extent::new(16, 16, 8);
+    let count = extent.voxel_count() as usize;
+    let mut bright = vec![200u8; count];
+    let mut dark = vec![0u8; count];
+    for z in 2..6u32 {
+        for y in 4..12u32 {
+            for x in 4..12u32 {
+                bright[extent.index(x, y, z) as usize] = 40;
+                dark[extent.index(x, y, z) as usize] = 220;
+            }
+        }
+    }
+    let bright = scene("bright", bright);
+    let background = bright.dataset.channels()[0].statistics().background();
+    assert!(
+        (background - 200.0).abs() < 0.5,
+        "the background is the value the volume mostly holds: {background}"
+    );
+    let stops = bright.channels[0]
+        .transfer()
+        .stops()
+        .expect("a channel ramp");
+    assert_eq!(
+        stops.last().map(|stop| stop.opacity()),
+        Some(0.0),
+        "a bright background stays transparent at the top of its ramp"
+    );
+    assert_eq!(
+        stops.first().map(|stop| stop.opacity()),
+        Some(1.0),
+        "the objects gain opacity towards the dark end"
+    );
+    let dark = scene("dark", dark);
+    let stops = dark.channels[0].transfer().stops().expect("a channel ramp");
+    assert_eq!(
+        stops.first().map(|stop| stop.opacity()),
+        Some(0.0),
+        "a dark background stays transparent at the bottom of its ramp"
+    );
+    assert_eq!(
+        stops.last().map(|stop| stop.opacity()),
+        Some(1.0),
+        "the objects gain opacity towards the bright end"
+    );
+}

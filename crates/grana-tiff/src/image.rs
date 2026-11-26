@@ -323,15 +323,24 @@ impl Image {
                     }
                 },
             };
+            let sampled = sample_range(&files, &levels, index, sizes[0])?;
             if let Some(color_table) = color_table {
-                channels.push(
-                    ChannelInfo::declared(name, tint, color_table.indices(), format)
-                        .with_color_table(color_table),
-                );
+                let info = ChannelInfo::declared(name, tint, color_table.indices(), format)
+                    .with_color_table(color_table);
+                let info = match declared_tables
+                    .iter()
+                    .any(|(held, _)| *held == index as usize)
+                {
+                    true => info,
+                    false => match sampled {
+                        Some(sampled) => info.with_background(sampled.background()),
+                        None => info,
+                    },
+                };
+                channels.push(info);
                 continue;
             }
             let window = window(lookup, index as usize, path)?;
-            let sampled = sample_range(&files, &levels, index, sizes[0])?;
             let sampled = sampled.ok_or_else(|| {
                 Error::metadata(path, "a TIFF channel exposes no voxel to census")
             })?;

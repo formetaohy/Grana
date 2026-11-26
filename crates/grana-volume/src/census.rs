@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use rayon::prelude::*;
 
-use crate::{Extent, Intensity, NoData, Statistics, VoxelData};
+use crate::{Extent, Histogram, Intensity, NoData, Statistics, VoxelData};
 
 const VOXEL_BUDGET: u64 = 4 << 20;
 
@@ -66,7 +66,27 @@ impl Census {
                 totals.merge(held);
             }
         }
-        Ok(totals.statistics())
+        let statistics = totals.statistics();
+        let mut histogram = Histogram::over(statistics.intensity());
+        for sample in 0..self.samples {
+            let time = sample * self.frames / self.samples;
+            let bands = self
+                .bands
+                .par_iter()
+                .map(|band| {
+                    let mut held = Histogram::over(statistics.intensity());
+                    for block in &band.blocks {
+                        let data = read(time, block.clone())?;
+                        data.for_each_present_value(no_data, |value| held.add(value));
+                    }
+                    Ok(held)
+                })
+                .collect::<Result<Vec<Histogram>, E>>()?;
+            for held in bands {
+                histogram.merge(&held);
+            }
+        }
+        Ok(statistics.with_background(histogram.background()))
     }
 }
 

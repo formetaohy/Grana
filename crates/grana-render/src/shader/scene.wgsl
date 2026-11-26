@@ -42,6 +42,7 @@ struct ChannelData {
     inverse: f32,
     lut_row: f32,
     threshold: f32,
+    ceiling: f32,
     mode: f32,
     nearest: f32,
     material: f32,
@@ -162,6 +163,17 @@ fn channel_opacity(index: u32) -> f32 {
 
 fn channel_threshold(index: u32) -> f32 {
     return channels[index].threshold;
+}
+
+fn channel_ceiling(index: u32) -> f32 {
+    return channels[index].ceiling;
+}
+
+fn channel_empty(index: u32, unit: f32) -> bool {
+    if (channel_categorical(index)) {
+        return unit >= channel_threshold(index) && unit <= channel_ceiling(index);
+    }
+    return unit < channel_threshold(index);
 }
 
 fn channel_mode(index: u32) -> f32 {
