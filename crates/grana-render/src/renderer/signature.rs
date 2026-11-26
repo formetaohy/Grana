@@ -14,7 +14,7 @@ pub(super) struct Signature<'a> {
     pub(super) epoch: u64,
     pub(super) size: [u32; 2],
     pub(super) step: f32,
-    pub(super) levels: LevelKey,
+    pub(super) level: usize,
     pub(super) stale: bool,
 }
 
@@ -52,11 +52,7 @@ impl Signature<'_> {
     }
 
     pub(super) fn detail(self) -> u64 {
-        digest(&[
-            self.levels.base as u64,
-            self.levels.count as u64,
-            u64::from(self.stale),
-        ])
+        digest(&[self.level as u64, u64::from(self.stale)])
     }
 
     pub(super) fn classification(self) -> u64 {

@@ -530,8 +530,8 @@ impl Resources {
         }
     }
 
-    pub(super) fn retire(&mut self, time: u32, base: usize, count: usize) {
-        self.atlas.retire(time, base, count);
+    pub(super) fn retire(&mut self, time: u32, level: usize) {
+        self.atlas.retire(time, level);
     }
 
     pub(super) fn forget_unavailable(&mut self, requests: &[BrickRequest]) {

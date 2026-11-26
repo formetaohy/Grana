@@ -7,9 +7,8 @@ use grana_render::{
     Frame, Layer, LayerKey, PickId, Renderer, Requests, SceneFrame, SplatChunk, Splats, Style,
 };
 use grana_volume::{
-    BrickCoord, BrickGrid, BrickRequest, Calibration, Channel, ChannelInfo, ChannelSet, Clip,
-    Damage, Extent, Intensity, Level, PackedBrick, Pyramid, Region, Spacing, Statistics, Volume,
-    VolumeSeries, VoxelData, VoxelFormat,
+    BrickCoord, BrickGrid, BrickRequest, Calibration, Channel, ChannelSet, Clip, Damage, Extent,
+    Level, PackedBrick, Pyramid, Region, Spacing, Volume, VolumeSeries, VoxelData,
 };
 
 use crate::support::{
@@ -1466,84 +1465,6 @@ fn holds_a_settled_frame(gpu: &Gpu, renderer: &mut Renderer, view: &View<'_>) {
         assert!(!info.truncated, "an idle fitted frame truncates");
     }
 }
-fn deep_pyramid() -> Pyramid {
-    let fine = Level::new(Extent::new(512, 512, 512), Spacing::new(1.0, 1.0, 1.0));
-    let levels = vec![
-        fine,
-        fine.coarser(),
-        fine.coarser().coarser(),
-        fine.coarser().coarser().coarser(),
-    ];
-    Pyramid::placed(
-        levels,
-        1,
-        vec![ChannelInfo::new(
-            "signal",
-            [0.3, 0.6, 1.0],
-            Statistics::of(Intensity::new(0.0, 60_000.0), 2),
-            VoxelFormat::U16,
-        )],
-        1,
-        1.0,
-        [0.0; 3],
-        Calibration::Declared,
-    )
-}
-
-#[test]
-fn plans_the_ladder_from_the_banded_demand() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let pyramid = deep_pyramid();
-    let transfers = [TransferFunction::tinted([0.4, 0.8, 1.0])];
-    let channels = channels(&pyramid, &transfers);
-    let mut camera = Camera::new(35.0);
-    let mut state = camera.state();
-    state.pivot = [256.0, 256.0, 256.0];
-    state.yaw = 0.6;
-    state.pitch = 0.4;
-    state.distance = 300.0;
-    state.aperture = 0.0;
-    camera.restore(state);
-    let scene = SceneFrame {
-        versions: versions(),
-        channels: &channels,
-        shading: Shading::default(),
-        step_scale: 0.5,
-        layers: &[],
-        splats: Splats::empty(),
-        overlays: &[],
-    };
-    let mut renderer = Renderer::new(
-        gpu.device(),
-        gpu.queue(),
-        wgpu::TextureFormat::Rgba8Unorm,
-        &crate::support::ledger(),
-        256 << 20,
-        gpu.pipelines(),
-    );
-    renderer
-        .set_dataset(
-            gpu.device(),
-            &pyramid,
-            budget(256 << 20, [SIDE, SIDE]),
-            [SIDE, SIDE],
-        )
-        .expect("the test budget holds the volume");
-    let target = texture(&gpu, SIDE);
-    let view_texture = target.create_view(&Default::default());
-    let view = ladder_view(&view_texture, &camera, &scene);
-    let info = renderer
-        .draw(gpu.device(), gpu.queue(), frame(&view))
-        .expect("the first frame draws");
-    assert_eq!(
-        info.view.level, 0,
-        "the first frame asks for level {} while the banded demand fits level 0",
-        info.view.level
-    );
-}
-
 fn slice_camera(pyramid: &Pyramid, index: u32) -> Camera {
     let level = pyramid.level(0);
     let frame = level.slice_frame(2);

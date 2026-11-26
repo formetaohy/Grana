@@ -5,7 +5,7 @@ fn categorical_presence(tap: BrickTap, local: vec3<f32>, channel: u32) -> f32 {
     return select(0.0, 1.0, values[channel % PACK] >= channel_threshold(channel));
 }
 
-fn categorical_normal(tap: BrickTap, local: vec3<f32>, band: u32, channel: u32) -> vec3<f32> {
+fn categorical_normal(tap: BrickTap, local: vec3<f32>, channel: u32) -> vec3<f32> {
     let held = clamp(local, vec3<f32>(0.0), vec3<f32>(BRICK_SIDE));
     let x = categorical_presence(tap, held + vec3<f32>(1.0, 0.0, 0.0), channel)
         - categorical_presence(tap, held - vec3<f32>(1.0, 0.0, 0.0), channel);
@@ -13,7 +13,7 @@ fn categorical_normal(tap: BrickTap, local: vec3<f32>, band: u32, channel: u32) 
         - categorical_presence(tap, held - vec3<f32>(0.0, 1.0, 0.0), channel);
     let z = categorical_presence(tap, held + vec3<f32>(0.0, 0.0, 1.0), channel)
         - categorical_presence(tap, held - vec3<f32>(0.0, 0.0, 1.0), channel);
-    let gradient = level_gradient(band, vec3<f32>(x, y, z));
+    let gradient = volume_gradient(vec3<f32>(x, y, z));
     if (dot(gradient, gradient) <= 1.0e-20) {
         return frame.forward.xyz;
     }

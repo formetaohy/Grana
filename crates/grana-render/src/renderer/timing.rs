@@ -3,7 +3,7 @@ use glam::Mat4;
 
 pub(super) struct Begin<'a> {
     pub(super) target: &'a mut FrameTarget,
-    pub(super) levels: LevelKey,
+    pub(super) level: usize,
     pub(super) layers: u64,
     pub(super) content: u64,
     pub(super) classification: u64,
@@ -46,7 +46,7 @@ impl Started {
 pub(super) fn begin(begin: Begin<'_>) -> Started {
     let Begin {
         target,
-        levels,
+        level,
         layers,
         content,
         classification,
@@ -64,12 +64,12 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
     if moved || changed {
         *fade = None;
     }
-    let snapshot = target.levels.is_some_and(|previous| previous != levels)
+    let snapshot = target.levels.is_some_and(|previous| previous != level)
         && !moved
         && !exporting
         && !assured
         && target.camera.is_some();
-    target.levels = Some(levels);
+    target.levels = Some(level);
     let restart = target.layers != Some(layers);
     let restaged = target.classification != Some(classification);
     let restyled = target.appearance != Some(appearance);

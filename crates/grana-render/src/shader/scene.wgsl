@@ -20,14 +20,12 @@ struct FrameData {
     oit: vec4<u32>,
     clip: vec4<f32>,
     tag: vec4<u32>,
-    dims: array<vec4<f32>, 4>,
-    grids: array<vec4<u32>, 4>,
-    origins: array<vec4<f32>, 4>,
-    axes: array<vec4<f32>, 12>,
-    inverses: array<vec4<f32>, 12>,
-    bases: vec4<u32>,
-    bands: vec4<u32>,
-    edge: vec4<f32>,
+    dims: vec4<f32>,
+    grids: vec4<u32>,
+    origin: vec4<f32>,
+    axes: array<vec4<f32>, 3>,
+    inverses: array<vec4<f32>, 3>,
+    base: vec4<u32>,
     projection: vec4<f32>,
     lens: vec4<f32>,
     sampling: vec4<f32>,
@@ -113,56 +111,49 @@ fn local_step(t: f32) -> f32 {
     return max(frame.march.x, 0.5 * frame.jitter.w * pixel_world(t));
 }
 
-fn level_origin(band: u32) -> vec3<f32> {
-    return frame.origins[band].xyz;
+fn volume_origin() -> vec3<f32> {
+    return frame.origin.xyz;
 }
 
-fn level_axis(band: u32, axis: u32) -> vec3<f32> {
-    return frame.axes[band * 3u + axis].xyz;
+fn volume_axis(axis: u32) -> vec3<f32> {
+    return frame.axes[axis].xyz;
 }
 
-fn level_inverse(band: u32, axis: u32) -> vec3<f32> {
-    return frame.inverses[band * 3u + axis].xyz;
+fn volume_inverse(axis: u32) -> vec3<f32> {
+    return frame.inverses[axis].xyz;
 }
 
-fn level_world(band: u32, uvw: vec3<f32>) -> vec3<f32> {
-    let dims = frame.dims[band].xyz;
-    return level_origin(band)
-        + level_axis(band, 0u) * (uvw.x * dims.x)
-        + level_axis(band, 1u) * (uvw.y * dims.y)
-        + level_axis(band, 2u) * (uvw.z * dims.z);
+fn volume_world(uvw: vec3<f32>) -> vec3<f32> {
+    let dims = frame.dims.xyz;
+    return volume_origin()
+        + volume_axis(0u) * (uvw.x * dims.x)
+        + volume_axis(1u) * (uvw.y * dims.y)
+        + volume_axis(2u) * (uvw.z * dims.z);
 }
 
-fn level_local(band: u32, point: vec3<f32>) -> vec3<f32> {
-    let offset = point - level_origin(band);
+fn volume_local(point: vec3<f32>) -> vec3<f32> {
+    let offset = point - volume_origin();
     let voxel = vec3<f32>(
-        dot(level_inverse(band, 0u), offset),
-        dot(level_inverse(band, 1u), offset),
-        dot(level_inverse(band, 2u), offset),
+        dot(volume_inverse(0u), offset),
+        dot(volume_inverse(1u), offset),
+        dot(volume_inverse(2u), offset),
     );
-    return voxel / frame.dims[band].xyz;
+    return voxel / frame.dims.xyz;
 }
 
-fn level_rate(band: u32, direction: vec3<f32>) -> vec3<f32> {
+fn volume_rate(direction: vec3<f32>) -> vec3<f32> {
     let voxel = vec3<f32>(
-        dot(level_inverse(band, 0u), direction),
-        dot(level_inverse(band, 1u), direction),
-        dot(level_inverse(band, 2u), direction),
+        dot(volume_inverse(0u), direction),
+        dot(volume_inverse(1u), direction),
+        dot(volume_inverse(2u), direction),
     );
-    return voxel / frame.dims[band].xyz;
+    return voxel / frame.dims.xyz;
 }
 
-fn level_gradient(band: u32, gradient: vec3<f32>) -> vec3<f32> {
-    return gradient.x * level_inverse(band, 0u)
-        + gradient.y * level_inverse(band, 1u)
-        + gradient.z * level_inverse(band, 2u);
-}
-
-fn level_extent(band: u32) -> vec3<f32> {
-    let dims = frame.dims[band].xyz;
-    return abs(level_axis(band, 0u)) * dims.x
-        + abs(level_axis(band, 1u)) * dims.y
-        + abs(level_axis(band, 2u)) * dims.z;
+fn volume_gradient(gradient: vec3<f32>) -> vec3<f32> {
+    return gradient.x * volume_inverse(0u)
+        + gradient.y * volume_inverse(1u)
+        + gradient.z * volume_inverse(2u);
 }
 
 fn channel_opacity(index: u32) -> f32 {
@@ -348,7 +339,7 @@ fn slice_crossing(origin: vec3<f32>, direction: vec3<f32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     let point = origin + direction * distance;
-    let local = level_local(0u, point);
+    let local = volume_local(point);
     if (any(local < vec3<f32>(0.0)) || any(local > vec3<f32>(1.0))) {
         return vec4<f32>(0.0);
     }

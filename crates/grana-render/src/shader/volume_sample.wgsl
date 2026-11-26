@@ -8,10 +8,9 @@ const CELL_SIDE: f32 = 8.0;
 const CELL_GRID: u32 = 4u;
 const LEVEL_EXIT: f32 = 1.0e20;
 
-struct LevelFrame {
+struct VolumeFrame {
     dims: vec3<f32>,
     grid: vec3<u32>,
-    origin: vec3<f32>,
 }
 
 struct VoxelRay {
@@ -19,28 +18,17 @@ struct VoxelRay {
     rate: vec3<f32>,
 }
 
-fn level_frame(band: u32) -> LevelFrame {
-    return LevelFrame(
-        frame.dims[band].xyz,
-        frame.grids[band].xyz,
-        frame.origins[band].xyz,
-    );
+fn volume_frame() -> VolumeFrame {
+    return VolumeFrame(frame.dims.xyz, frame.grids.xyz);
 }
 
-fn level_record(band: u32, index: u32) -> BrickRecord {
-    return bricks[frame.bases[band] + index];
+fn volume_record(index: u32) -> BrickRecord {
+    return bricks[frame.base.x + index];
 }
 
-fn band_uvw(band: u32, uvw: vec3<f32>) -> vec3<f32> {
-    if (band == 0u) {
-        return uvw;
-    }
-    return level_local(band, level_world(0u, uvw));
-}
-
-fn voxel_ray(band: u32, origin: vec3<f32>, direction: vec3<f32>) -> VoxelRay {
-    let dims = frame.dims[band].xyz;
-    return VoxelRay(level_local(band, origin) * dims, level_rate(band, direction) * dims);
+fn voxel_ray(origin: vec3<f32>, direction: vec3<f32>) -> VoxelRay {
+    let dims = frame.dims.xyz;
+    return VoxelRay(volume_local(origin) * dims, volume_rate(direction) * dims);
 }
 
 fn voxel_at(ray: VoxelRay, t: f32) -> vec3<f32> {
@@ -117,10 +105,10 @@ fn tap_fetch(pack: u32, texel: vec3<u32>, local: vec3<f32>) -> vec4<f32> {
     return select(tap_blend(pack, texel, local), exact, nearest_components(mask));
 }
 
-fn tap_sample(band: u32, pack: u32, voxel: vec3<f32>) -> vec4<f32> {
-    let g = level_frame(band);
+fn tap_sample(pack: u32, voxel: vec3<f32>) -> vec4<f32> {
+    let g = volume_frame();
     let cell = brick_of(g.grid, g.dims, voxel);
-    let record = level_record(band, brick_index(g.grid, cell));
+    let record = volume_record(brick_index(g.grid, cell));
     let slot = brick_display_slot(record);
     if (slot == 0u) {
         return vec4<f32>(0.0);

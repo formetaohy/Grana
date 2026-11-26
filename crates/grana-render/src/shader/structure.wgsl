@@ -1,5 +1,4 @@
 struct BakeEntry {
-    band: u32,
     slot: u32,
     brick: u32,
     reserved: u32,
@@ -32,14 +31,14 @@ fn structure_density(texel: vec3<i32>) -> f32 {
     return total;
 }
 
-fn structure_normal(band: u32, origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32> {
+fn structure_normal(origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32> {
     let dx = structure_density(origin + inner + vec3<i32>(1, 0, 0))
         - structure_density(origin + inner - vec3<i32>(1, 0, 0));
     let dy = structure_density(origin + inner + vec3<i32>(0, 1, 0))
         - structure_density(origin + inner - vec3<i32>(0, 1, 0));
     let dz = structure_density(origin + inner + vec3<i32>(0, 0, 1))
         - structure_density(origin + inner - vec3<i32>(0, 0, 1));
-    let gradient = level_gradient(band, vec3<f32>(dx, dy, dz));
+    let gradient = volume_gradient(vec3<f32>(dx, dy, dz));
     if (dot(gradient, gradient) <= 0.0) {
         return vec4<f32>(0.0);
     }
@@ -84,7 +83,7 @@ fn bake_main(
                 if (structure_density(origin + texel) <= 0.0) {
                     continue;
                 }
-                let held = structure_normal(entry.band, origin, clamp(texel, vec3<i32>(1), limit));
+                let held = structure_normal(origin, clamp(texel, vec3<i32>(1), limit));
                 if (held.z <= 0.0) {
                     continue;
                 }

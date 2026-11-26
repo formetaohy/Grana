@@ -23,7 +23,6 @@ struct Column {
     start: vec3<f32>,
     rate: vec3<f32>,
     dims: vec3<f32>,
-    band: u32,
     count: u32,
 }
 
@@ -34,12 +33,12 @@ struct Block {
     end: u32,
 }
 
-fn column_of(band: u32, uv: vec2<f32>, stride: f32, count: u32) -> Column {
-    let g = level_frame(band);
+fn column_of(uv: vec2<f32>, stride: f32, count: u32) -> Column {
+    let g = volume_frame();
     let origin = (frame.light_inverse * vec4<f32>(uv, 0.0, 1.0)).xyz;
     let advance = (frame.light_inverse * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz;
-    let rate = level_rate(band, advance) * g.dims * stride;
-    return Column(level_local(band, origin) * g.dims + rate * 0.5, rate, g.dims, band, count);
+    let rate = volume_rate(advance) * g.dims * stride;
+    return Column(volume_local(origin) * g.dims + rate * 0.5, rate, g.dims, count);
 }
 
 fn reach_layers(column: Column) -> vec2<u32> {
@@ -85,9 +84,9 @@ fn exit_layer(
 }
 
 fn block_at(column: Column, voxel: vec3<f32>, layer: u32) -> Block {
-    let g = level_frame(column.band);
+    let g = volume_frame();
     let cell = brick_of(g.grid, g.dims, voxel);
-    let slot = brick_display_slot(level_record(column.band, brick_index(g.grid, cell)));
+    let slot = brick_display_slot(volume_record(brick_index(g.grid, cell)));
     let base = brick_origin(cell);
     let far = min(base + vec3<f32>(BRICK_SIDE), g.dims);
     if (slot == 0u) {
@@ -142,8 +141,7 @@ fn tau_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5)) / vec2<f32>(dims.xy);
-    let band = band_count() - 1u;
-    let column = column_of(band, uv, 1.0 / f32(dims.z), dims.z);
+    let column = column_of(uv, 1.0 / f32(dims.z), dims.z);
     let scale = length(column.rate);
     let reach = reach_layers(column);
     var tau = 0.0;

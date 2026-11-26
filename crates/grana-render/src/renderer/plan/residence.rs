@@ -35,7 +35,7 @@ pub(crate) struct Poll<'a> {
 
 pub(crate) struct ResidencyDemand {
     pub(crate) key: ViewKey,
-    pub(crate) bands: Vec<Demand>,
+    pub(crate) demand: Demand,
 }
 
 impl ResidencyDemand {
@@ -78,12 +78,12 @@ pub(crate) struct Residence {
 struct Missing {
     time: Option<u32>,
     epoch: u32,
-    bands: Vec<usize>,
+    level: Option<usize>,
     demanded: HashMap<usize, Vec<Word>>,
     wanted: HashMap<(usize, u32), Wanted>,
     order: Vec<BrickRequest>,
     ordered: bool,
-    absent: [usize; BAND],
+    absent: usize,
     unfetchable: HashMap<usize, usize>,
     marked: Vec<BrickRequest>,
 }
@@ -96,7 +96,6 @@ struct Word {
 
 #[derive(Clone, Copy)]
 struct Wanted {
-    band: usize,
     bucket: u32,
     request: BrickRequest,
 }
@@ -105,12 +104,12 @@ impl Missing {
     fn begin(&mut self, time: Option<u32>) {
         self.time = time;
         self.epoch = self.epoch.wrapping_add(1);
-        self.bands.clear();
+        self.level = None;
         self.demanded.clear();
         self.wanted.clear();
         self.order.clear();
         self.ordered = true;
-        self.absent = [0; BAND];
+        self.absent = 0;
         self.unfetchable.clear();
         self.marked.clear();
     }
@@ -122,46 +121,31 @@ impl Missing {
     fn apply(&mut self, demand: &ResidencyDemand, atlas: &Atlas) {
         let key = &demand.key;
         let time = key.time;
-        let ladder = key.levels.ladder;
-        let continued = self.time == Some(time)
-            && self.bands.len() == demand.bands.len()
-            && self
-                .bands
-                .iter()
-                .zip(&demand.bands)
-                .all(|(level, band)| *level == band.info.level);
+        let level = key.levels.level;
+        let continued = self.time == Some(time) && self.level == Some(level);
         if !continued {
             self.begin(Some(time));
-            self.bands = demand.bands.iter().map(|band| band.info.level).collect();
+            self.level = Some(level);
         }
         self.epoch = self.epoch.wrapping_add(1);
         self.unfetchable.clear();
         self.marked.clear();
-        for band in &demand.bands {
-            for index in &band.indices {
-                self.demands(band.info.level, *index);
-            }
+        for index in &demand.demand.indices {
+            self.demands(level, *index);
         }
-        for (band, held) in demand.bands.iter().enumerate() {
-            let level = held.info.level;
-            for (position, (index, bucket)) in held.missing.iter().enumerate() {
-                if atlas.slot(time, level, *index as usize).is_some()
-                    || atlas.is_hollow(time, level, *index as usize)
-                {
-                    self.supply(level, *index);
-                    continue;
-                }
-                if atlas.is_unavailable(time, level, *index as usize) {
-                    self.unfetchable_mark(level, *index);
-                    self.marked.push(held.requests[position]);
-                    continue;
-                }
-                let shown = level
-                    .checked_sub(ladder.base)
-                    .filter(|band| *band < ladder.count)
-                    .unwrap_or(band);
-                self.want(shown, *bucket, level, *index, held.requests[position]);
+        for (position, (index, bucket)) in demand.demand.missing.iter().enumerate() {
+            if atlas.slot(time, level, *index as usize).is_some()
+                || atlas.is_hollow(time, level, *index as usize)
+            {
+                self.supply(level, *index);
+                continue;
             }
+            if atlas.is_unavailable(time, level, *index as usize) {
+                self.unfetchable_mark(level, *index);
+                self.marked.push(demand.demand.requests[position]);
+                continue;
+            }
+            self.want(*bucket, level, *index, demand.demand.requests[position]);
         }
         self.prune();
     }
@@ -171,8 +155,8 @@ impl Missing {
     }
 
     fn unfetchable_mark(&mut self, level: usize, index: u32) {
-        if let Some(held) = self.wanted.remove(&(level, index)) {
-            self.absent[held.band] -= 1;
+        if self.wanted.remove(&(level, index)).is_some() {
+            self.absent = self.absent.saturating_sub(1);
             self.ordered = false;
         }
         *self.unfetchable.entry(level).or_default() += 1;
@@ -204,7 +188,7 @@ impl Missing {
         })
     }
 
-    fn want(&mut self, band: usize, bucket: u32, level: usize, index: u32, request: BrickRequest) {
+    fn want(&mut self, bucket: u32, level: usize, index: u32, request: BrickRequest) {
         match self.wanted.entry((level, index)) {
             std::collections::hash_map::Entry::Occupied(mut held) => {
                 if held.get().bucket == bucket {
@@ -213,50 +197,37 @@ impl Missing {
                 held.get_mut().bucket = bucket;
             }
             std::collections::hash_map::Entry::Vacant(held) => {
-                held.insert(Wanted {
-                    band,
-                    bucket,
-                    request,
-                });
-                self.absent[band] += 1;
+                held.insert(Wanted { bucket, request });
+                self.absent += 1;
             }
         }
         self.ordered = false;
     }
 
     fn supply(&mut self, level: usize, index: u32) {
-        if let Some(held) = self.wanted.remove(&(level, index)) {
-            self.absent[held.band] -= 1;
+        if self.wanted.remove(&(level, index)).is_some() {
+            self.absent = self.absent.saturating_sub(1);
             self.ordered = false;
         }
     }
 
     fn prune(&mut self) {
-        let Self {
-            epoch,
-            demanded,
-            wanted,
-            absent,
-            ordered,
-            ..
-        } = self;
-        let before = wanted.len();
-        wanted.retain(|(level, index), _| {
+        let before = self.wanted.len();
+        let epoch = self.epoch;
+        let demanded = &self.demanded;
+        self.wanted.retain(|(level, index), _| {
             let word = *index as usize / u64::BITS as usize;
             demanded.get(level).is_some_and(|words| {
                 words.get(word).is_some_and(|stamp| {
-                    stamp.epoch == *epoch && stamp.bits & (1 << (*index % u64::BITS)) != 0
+                    stamp.epoch == epoch && stamp.bits & (1 << (*index % u64::BITS)) != 0
                 })
             })
         });
-        if wanted.len() == before {
+        if self.wanted.len() == before {
             return;
         }
-        absent.fill(0);
-        for held in wanted.values() {
-            absent[held.band] += 1;
-        }
-        *ordered = false;
+        self.absent = self.wanted.len();
+        self.ordered = false;
     }
 
     fn requests(&mut self) -> &[BrickRequest] {
@@ -301,7 +272,6 @@ pub(crate) struct Adapt<'a> {
 }
 
 pub(crate) struct Outlook {
-    pub(crate) ladder: Ladder,
     pub(crate) levels: Levels,
     pub(crate) key: ViewKey,
     pub(crate) replan: bool,
@@ -349,7 +319,7 @@ impl Residence {
         self.feedback = Some(Readback::new(
             device,
             "grana.feedback",
-            (BAND * self.words) as u64 * size_of::<u32>() as u64,
+            self.bytes,
             planner::READBACK_SLOTS,
         ));
         self.frames = vec![None; planner::READBACK_SLOTS];
@@ -576,7 +546,6 @@ impl Residence {
             true
         };
         Outlook {
-            ladder: planned.ladder,
             levels: planned.levels,
             key,
             replan,
@@ -602,15 +571,7 @@ impl Residence {
         key: ViewKey,
     ) {
         if let Some(feedback) = self.feedback.as_ref() {
-            for (band, view) in planner.view.bands.iter().enumerate() {
-                feedback.stage(
-                    encoder,
-                    slot,
-                    band as u64 * self.bytes,
-                    view.buffer(),
-                    self.bytes,
-                );
-            }
+            feedback.stage(encoder, slot, 0, planner.plan.buffer(), self.bytes);
         }
         self.frames[slot] = Some(key);
         self.planned = Some(key);
@@ -639,8 +600,8 @@ impl Residence {
             prefetch,
             pending,
         } = stage;
-        while let Some((key, bands)) = self.decode(device, pyramid, planner)? {
-            self.accept(pyramid, key, bands, atlas);
+        while let Some((key, demand)) = self.decode(device, pyramid, planner)? {
+            self.accept(pyramid, key, demand, atlas);
         }
         Ok(self.emit(pyramid, atlas, time, prefetch, pending))
     }
@@ -650,33 +611,33 @@ impl Residence {
         device: &Device,
         pyramid: &Pyramid,
         planner: &Planner,
-    ) -> Result<Option<(ViewKey, Vec<Demand>)>, String> {
+    ) -> Result<Option<(ViewKey, Demand)>, String> {
         let Self {
-            feedback,
-            frames,
-            words,
-            ..
+            feedback, frames, ..
         } = self;
-        let words = *words;
         let Some(feedback) = feedback.as_mut() else {
             return Ok(None);
         };
         let decoded = feedback.take_with(device, |slot, bytes| {
             let key = frames[slot].take()?;
-            let bands = parse_bands(bytes, words, key.levels.ladder, key.time, pyramid, planner)?;
-            Some((key, bands))
+            let demand = decode_plan(
+                bytes,
+                planner.plan.capacity(),
+                key.time,
+                key.levels.level,
+                pyramid,
+            )?;
+            Some((key, demand))
         })?;
         Ok(decoded.flatten())
     }
 
-    fn accept(&mut self, pyramid: &Pyramid, key: ViewKey, bands: Vec<Demand>, atlas: &mut Atlas) {
+    fn accept(&mut self, pyramid: &Pyramid, key: ViewKey, demand: Demand, atlas: &mut Atlas) {
         if key.epoch != self.epoch {
             return;
         }
         atlas.advance_holds();
-        for band in &bands {
-            atlas.touch(key.time, band.info.level, band.indices.iter().copied());
-        }
+        atlas.touch(key.time, demand.info.level, demand.indices.iter().copied());
         if self
             .demand
             .as_ref()
@@ -684,19 +645,14 @@ impl Residence {
         {
             self.plan = self.plan.wrapping_add(1);
         }
-        let demand = ResidencyDemand { key, bands };
+        let demand = ResidencyDemand { key, demand };
         self.missing.apply(&demand, atlas);
-        self.settled = demand
-            .bands
-            .iter()
-            .enumerate()
-            .all(|(band, held)| {
-                self.missing.absent[band] == 0
-                    && held.info.resident + self.missing.unfetchable(held.info.level)
-                        == held.info.demand
-                    && (!key.assured || held.info.visible == held.info.demand)
-            })
+        let unfetchable = self.missing.unfetchable(demand.demand.info.level);
+        let settled = (self.missing.absent == 0
+            && demand.demand.info.resident + unfetchable == demand.demand.info.demand
+            && (!key.assured || demand.demand.info.visible == demand.demand.info.demand))
             .then_some(key);
+        self.settled = settled;
         self.demand = Some(demand);
         self.measure_prefetch(pyramid, key.time);
         let preview = key.prefetch_digest();
@@ -742,11 +698,7 @@ impl Residence {
     }
 
     fn prefetch_budget(&self, atlas: &Atlas, demand: &ResidencyDemand) -> usize {
-        let wanted = demand
-            .bands
-            .iter()
-            .map(|band| band.indices.len())
-            .sum::<usize>();
+        let wanted = demand.demand.indices.len();
         let free = atlas.vacancies().saturating_sub(self.prefetched.len());
         let budget = (free.min(wanted) as f32 * self.prefetch_rate) as usize;
         budget.min(PREFETCH_LIMIT)
@@ -758,10 +710,8 @@ impl Residence {
         let Some(demand) = self.demand.as_ref() else {
             return;
         };
-        for band in &demand.bands {
-            for request in &band.requests {
-                self.prefetched.remove(request);
-            }
+        for request in &demand.demand.requests {
+            self.prefetched.remove(request);
         }
     }
 
@@ -801,20 +751,16 @@ impl Residence {
             unavailable: self.missing.marked.clone(),
             ..Default::default()
         };
-        let mut view = ViewInfo {
-            level: demand.key.levels.ladder.base,
-            ..Default::default()
-        };
-        for (band, held) in demand.bands.iter().enumerate() {
-            view.visible += held.info.visible;
-            view.demand += held.info.demand;
-            let unfetchable = self.missing.unfetchable(held.info.level);
-            view.unavailable += unfetchable;
-            view.resident += held
-                .info
-                .demand
-                .saturating_sub(self.missing.absent[band] + unfetchable);
-        }
+        let mut view = ViewInfo::default();
+        let level = demand.demand.info.level;
+        let unfetchable = self.missing.unfetchable(level);
+        view.level = level;
+        view.visible = demand.demand.info.visible;
+        view.demand = demand.demand.info.demand;
+        view.unavailable = unfetchable;
+        view.resident = view
+            .demand
+            .saturating_sub(self.missing.absent + unfetchable);
         self.refreshes.retain(|request| {
             let grid = BrickGrid::new(pyramid.level(request.level).extent());
             let index = grid.index(request.coord);
@@ -849,8 +795,8 @@ impl Residence {
                         budget,
                         atlas,
                         time: next,
-                        ladder: demand.key.levels.ladder,
-                        demands: &demand.bands,
+                        level: demand.key.levels.level,
+                        demand: &demand.demand,
                         pyramid,
                     };
                     prefetch_requests(&prefetch, &mut self.prefetched)
@@ -904,19 +850,16 @@ impl Residence {
         if self.missing.wanted.contains_key(&(level, index as u32)) {
             return;
         }
-        let Some(ladder) = self.demand.as_ref().map(|demand| demand.key.levels.ladder) else {
+        let Some(current) = self.demand.as_ref().map(|demand| demand.key.levels.level) else {
             return;
         };
-        let Some(band) = level
-            .checked_sub(ladder.base)
-            .filter(|band| *band < ladder.count)
-        else {
+        if level != current {
             return;
-        };
+        }
         let grid = BrickGrid::new(pyramid.level(level).extent());
         let request = BrickRequest::new(time, level, grid.coord(index));
         self.missing
-            .want(band, RESTORE_BUCKET, level, index as u32, request);
+            .want(RESTORE_BUCKET, level, index as u32, request);
     }
 
     pub(crate) fn revalidate(&mut self) {
@@ -928,8 +871,8 @@ struct Prefetch<'a> {
     budget: usize,
     atlas: &'a Atlas,
     time: u32,
-    ladder: Ladder,
-    demands: &'a [Demand],
+    level: usize,
+    demand: &'a Demand,
     pyramid: &'a Pyramid,
 }
 
@@ -941,27 +884,22 @@ fn prefetch_requests(
         budget,
         atlas,
         time,
-        ladder,
-        demands,
+        level,
+        demand,
         pyramid,
     } = *prefetch;
     let mut budget = budget.min(PREFETCH_LIMIT);
     let mut requests = Vec::new();
-    for (band, demand) in demands.iter().enumerate() {
-        if budget == 0 {
-            break;
-        }
-        carry(
-            pyramid,
-            atlas,
-            time,
-            ladder.level(band),
-            &demand.indices,
-            &mut requests,
-            &mut budget,
-            issued,
-        );
-    }
+    carry(
+        pyramid,
+        atlas,
+        time,
+        level,
+        &demand.indices,
+        &mut requests,
+        &mut budget,
+        issued,
+    );
     requests
 }
 
@@ -997,30 +935,4 @@ fn carry(
         requests.push(request);
         *budget -= 1;
     }
-}
-
-fn parse_bands(
-    bytes: &[u8],
-    words: usize,
-    ladder: Ladder,
-    time: u32,
-    pyramid: &Pyramid,
-    planner: &Planner,
-) -> Option<Vec<Demand>> {
-    let width = words * size_of::<u32>();
-    if bytes.len() < BAND * width {
-        return None;
-    }
-    let mut bands = Vec::with_capacity(ladder.count);
-    for band in 0..ladder.count {
-        let slice = &bytes[band * width..(band + 1) * width];
-        bands.push(decode_plan(
-            slice,
-            planner.view.bands[band].capacity(),
-            time,
-            ladder.level(band),
-            pyramid,
-        )?);
-    }
-    Some(bands)
 }

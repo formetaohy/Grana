@@ -29,7 +29,6 @@ pub(crate) const BAKE_TILES: u32 = 5;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
 pub(crate) struct BakeEntry {
-    pub band: u32,
     pub slot: u32,
     pub brick: u32,
     pub reserved: u32,
@@ -148,8 +147,7 @@ struct Stamp {
     writes: u64,
     time: u32,
     content: u32,
-    base: usize,
-    count: usize,
+    level: usize,
 }
 
 impl BakeQueue {
@@ -170,7 +168,7 @@ impl BakeQueue {
     pub fn collect(
         &mut self,
         atlas: &Atlas,
-        levels: &[usize],
+        level: usize,
         time: u32,
         content: u32,
         capacity: usize,
@@ -180,42 +178,38 @@ impl BakeQueue {
             writes: atlas.writes(),
             time,
             content,
-            base: levels.first().copied().unwrap_or(0),
-            count: levels.len(),
+            level,
         };
         if self.collected == Some(stamp) {
             return &[];
         }
         self.entries.clear();
         let mut complete = true;
-        'bands: for (band, level) in levels.iter().enumerate() {
-            atlas.residents(time, *level, &mut self.residents);
-            for resident in &self.residents {
-                let Some(slot) = resident.slot else {
-                    continue;
-                };
-                let key = stamp_key(
-                    time,
-                    content,
-                    *level as u32,
-                    resident.index as u32,
-                    atlas.version(slot),
-                );
-                if self.staged.get(&slot) == Some(&key) {
-                    continue;
-                }
-                if self.entries.len() == capacity {
-                    complete = false;
-                    break 'bands;
-                }
-                self.staged.insert(slot, key);
-                self.entries.push(BakeEntry {
-                    band: band as u32,
-                    slot,
-                    brick: resident.index as u32,
-                    reserved: 0,
-                });
+        atlas.residents(time, level, &mut self.residents);
+        for resident in &self.residents {
+            let Some(slot) = resident.slot else {
+                continue;
+            };
+            let key = stamp_key(
+                time,
+                content,
+                level as u32,
+                resident.index as u32,
+                atlas.version(slot),
+            );
+            if self.staged.get(&slot) == Some(&key) {
+                continue;
             }
+            if self.entries.len() == capacity {
+                complete = false;
+                break;
+            }
+            self.staged.insert(slot, key);
+            self.entries.push(BakeEntry {
+                slot,
+                brick: resident.index as u32,
+                reserved: 0,
+            });
         }
         if complete {
             self.collected = Some(stamp);

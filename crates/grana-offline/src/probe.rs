@@ -43,77 +43,75 @@ pub(crate) fn scan(scan: Scan<'_>) -> Result<Option<Probe>, String> {
     } = scan;
     assert!(limit > 0, "an export that probes holds at least one brick");
     let size = plan.size.to_array();
-    let ladders = plan
+    let views = plan
         .poses
         .iter()
         .map(|pose| {
             let camera = plan::camera(&pose.camera);
             (
                 pose.time,
-                grana_render::visible_bricks(pyramid, &camera, size, plan.region),
+                grana_render::visible(pyramid, &camera, size, plan.region),
             )
         })
         .collect::<Vec<_>>();
-    let total = ladders
+    let total = views
         .iter()
-        .flat_map(|(_, ladder)| ladder.iter().map(|visible| visible.bricks.len()))
+        .map(|(_, visible)| visible.bricks.len())
         .sum::<usize>() as u32;
     let mut visited = 0u32;
     let mut known = HashMap::<(u32, usize, u32), bool>::new();
     let mut cache = Cache::new(CACHE_BYTES);
-    let mut counts = Vec::with_capacity(ladders.len());
+    let mut counts = Vec::with_capacity(views.len());
     let mut finest = pyramid.level_count() - 1;
-    for (time, ladder) in &ladders {
+    for (time, visible) in &views {
         let warps = scene.drift_warps(*time);
         let mut count = 0usize;
-        for visible in ladder {
-            finest = finest.min(visible.level);
-            let grid = BrickGrid::new(pyramid.level(visible.level).extent());
-            for chunk in visible.bricks.chunks(CHUNK) {
-                if cancel.load(Ordering::Relaxed) {
-                    return Ok(None);
+        finest = finest.min(visible.level);
+        let grid = BrickGrid::new(pyramid.level(visible.level).extent());
+        for chunk in visible.bricks.chunks(CHUNK) {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            let mut fresh = Vec::with_capacity(chunk.len());
+            for index in chunk {
+                match known.get(&(*time, visible.level, *index)) {
+                    Some(true) => {}
+                    Some(false) => count += 1,
+                    None => fresh.push(*index),
                 }
-                let mut fresh = Vec::with_capacity(chunk.len());
-                for index in chunk {
-                    match known.get(&(*time, visible.level, *index)) {
-                        Some(true) => {}
-                        Some(false) => count += 1,
-                        None => fresh.push(*index),
-                    }
+            }
+            let probed = fresh
+                .par_iter()
+                .map(|index| {
+                    let request =
+                        BrickRequest::new(*time, visible.level, grid.coord(*index as usize));
+                    let Some(fill) = bricks.empty(request, &warps)? else {
+                        let data = bricks.read(request, &warps)?;
+                        let packed = PackedBrick::of(&data, pyramid, request.channels);
+                        let empty = packed.empty();
+                        return Ok((*index, Some((request, packed)), empty));
+                    };
+                    Ok((
+                        *index,
+                        None,
+                        fill_is_background(pyramid, fill, request.channels),
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            for (index, packed, hollow) in probed {
+                known.insert((*time, visible.level, index), hollow);
+                if hollow {
+                    continue;
                 }
-                let probed = fresh
-                    .par_iter()
-                    .map(|index| {
-                        let request =
-                            BrickRequest::new(*time, visible.level, grid.coord(*index as usize));
-                        let Some(fill) = bricks.empty(request, &warps)? else {
-                            let data = bricks.read(request, &warps)?;
-                            let packed = PackedBrick::of(&data, pyramid, request.channels);
-                            let empty = packed.empty();
-                            return Ok((*index, Some((request, packed)), empty));
-                        };
-                        Ok((
-                            *index,
-                            None,
-                            fill_is_background(pyramid, fill, request.channels),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                for (index, packed, hollow) in probed {
-                    known.insert((*time, visible.level, index), hollow);
-                    if hollow {
-                        continue;
-                    }
-                    count += 1;
-                    if let Some((request, packed)) = packed {
-                        cache.insert(request, packed);
-                    }
+                count += 1;
+                if let Some((request, packed)) = packed {
+                    cache.insert(request, packed);
                 }
-                visited += chunk.len() as u32;
-                progress(visited, total);
-                if count > limit {
-                    return Err(over(limit));
-                }
+            }
+            visited += chunk.len() as u32;
+            progress(visited, total);
+            if count > limit {
+                return Err(over(limit));
             }
         }
         counts.push(count);

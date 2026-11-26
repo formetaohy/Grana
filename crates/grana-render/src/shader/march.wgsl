@@ -20,7 +20,6 @@ fn march_volume(
     begin: f32,
     finish: f32,
     direction: vec3<f32>,
-    dither: f32,
     peaks: ptr<function, array<f32, CHANNEL_LIMIT>>,
 ) -> March {
     var march = March(
@@ -37,18 +36,18 @@ fn march_volume(
         direction,
         begin,
         finish,
-        volume_reachable(origin, band_for(begin, dither), band_count(), begin, direction),
+        volume_sight(origin, begin, direction),
     );
     var held = 0xffffffffu;
     var occupied = true;
     var samples = 0u;
     var cells = 0u;
     while (t < finish && samples < frame.bounds.x && cells < frame.bounds.y) {
-        if (!inside_level(walk.sight)) {
+        if (!inside_volume(walk.sight)) {
             break;
         }
         if (t >= walk.exit) {
-            let sight = volume_reachable(origin, band_for(t, dither), walk.sight.band, t, direction);
+            let sight = volume_sight(origin, t, direction);
             walk = walk_open(direction, t, finish, sight);
             held = 0xffffffffu;
             occupied = true;
@@ -98,7 +97,6 @@ fn march_volume(
                 let normal = categorical_normal(
                     walk.tap,
                     local,
-                    walk.sight.band,
                     sample.surface - 1u,
                 );
                 surface_normal = vec4<f32>(normal, 1.0);
@@ -169,7 +167,6 @@ fn fs_main(input: VertexOutput) -> VolumeOutput {
         resolution.start + min(resolution.jitter, max(resolution.exit - resolution.start, 0.0)),
         resolution.exit,
         resolution.direction,
-        resolution.dither,
         &peaks,
     );
     if (projection()) {

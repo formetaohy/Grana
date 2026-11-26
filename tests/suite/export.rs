@@ -510,12 +510,9 @@ fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_cover
         "the fitted view covers {} of the 2048 bricks of the level",
         held.detail.bricks
     );
-    let probed = grana_render::visible_bricks(&pyramid, &camera, size.to_array(), Region::none());
+    let probed = grana_render::visible(&pyramid, &camera, size.to_array(), Region::none());
     assert_eq!(
-        probed
-            .iter()
-            .map(|visible| visible.bricks.len())
-            .sum::<usize>(),
+        probed.bricks.len(),
         held.detail.bricks,
         "the bricks an export probes are the bricks its claim counts"
     );

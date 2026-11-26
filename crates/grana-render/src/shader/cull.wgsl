@@ -2,14 +2,6 @@
 @group(1) @binding(1) var<uniform> schedule: ScheduleData;
 @group(2) @binding(0) var<storage, read_write> plan: array<atomic<u32>>;
 
-fn level_dims() -> vec3<f32> {
-    return frame.dims[schedule.band].xyz;
-}
-
-fn level_grid() -> vec3<u32> {
-    return frame.grids[schedule.band].xyz;
-}
-
 fn box_bounds(
     origin: vec3<f32>,
     axes: array<vec3<f32>, 3>,
@@ -28,31 +20,19 @@ fn box_bounds(
 }
 
 fn brick_box(cell: vec3<u32>) -> array<vec3<f32>, 2> {
-    let dims = vec3<f32>(vec3<u32>(level_dims()));
+    let dims = frame.dims.xyz;
     let low = vec3<f32>(cell * 32u);
     let high = min(low + vec3<f32>(32.0), dims);
     return box_bounds(
-        level_origin(schedule.band),
+        volume_origin(),
         array<vec3<f32>, 3>(
-            level_axis(schedule.band, 0u),
-            level_axis(schedule.band, 1u),
-            level_axis(schedule.band, 2u),
+            volume_axis(0u),
+            volume_axis(1u),
+            volume_axis(2u),
         ),
         low,
         high,
     );
-}
-
-fn reach(low: vec3<f32>, high: vec3<f32>) -> vec2<f32> {
-    let eye = frame.eye.xyz;
-    let near = length(clamp(eye, low, high) - eye);
-    let far = length(max(abs(eye - low), abs(eye - high)));
-    return vec2<f32>(near, far);
-}
-
-fn band_holds(low: vec3<f32>, high: vec3<f32>) -> bool {
-    let span = reach(low, high);
-    return span.y >= band_lower(schedule.band) && span.x < band_upper(schedule.band);
 }
 
 fn volume_bucket(center: vec3<f32>) -> u32 {
@@ -61,7 +41,7 @@ fn volume_bucket(center: vec3<f32>) -> u32 {
 }
 
 fn volume_cell(index: u32) -> vec3<u32> {
-    let grid = level_grid();
+    let grid = frame.grids.xyz;
     return vec3<u32>(
         index % grid.x,
         (index / grid.x) % grid.y,
@@ -88,7 +68,7 @@ fn emit(bucket: u32, index: u32) {
 
 @compute @workgroup_size(64)
 fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
-    let grid = level_grid();
+    let grid = frame.grids.xyz;
     let index = id.x;
     if (index >= grid.x * grid.y * grid.z) {
         return;
@@ -103,9 +83,6 @@ fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
     {
         return;
     }
-    if (!band_holds(bounds[0], bounds[1])) {
-        return;
-    }
     let bucket = volume_bucket(0.5 * (bounds[0] + bounds[1]));
     atomicAdd(&plan[0], 1u);
     atomicAdd(&plan[VISIBLE_BASE + bucket], 1u);
@@ -113,7 +90,7 @@ fn volume_count(@builtin(global_invocation_id) id: vec3<u32>) {
 
 @compute @workgroup_size(64)
 fn volume_scatter(@builtin(global_invocation_id) id: vec3<u32>) {
-    let grid = level_grid();
+    let grid = frame.grids.xyz;
     let index = id.x;
     if (index >= grid.x * grid.y * grid.z) {
         return;
@@ -123,9 +100,6 @@ fn volume_scatter(@builtin(global_invocation_id) id: vec3<u32>) {
         || outside_region_bounds(bounds[0], bounds[1])
         || outside_slice(bounds[0], bounds[1]))
     {
-        return;
-    }
-    if (!band_holds(bounds[0], bounds[1])) {
         return;
     }
     emit(volume_bucket(0.5 * (bounds[0] + bounds[1])), index);

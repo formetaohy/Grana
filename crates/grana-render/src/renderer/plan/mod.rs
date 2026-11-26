@@ -3,7 +3,7 @@ use super::view::View;
 use super::*;
 use crate::brick::BrickTable;
 use crate::hollow::Cursor;
-use crate::planner::Counts;
+use crate::planner::{volume_count, volume_dispatch};
 use crate::schema::Versions;
 use crate::table::SceneTable;
 
@@ -20,7 +20,6 @@ pub(super) struct Input<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct Planned {
-    pub(super) ladder: Ladder,
     pub(super) levels: Levels,
     pub(super) truncated: bool,
 }
@@ -38,55 +37,22 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
     } = input;
     let level_count = pyramid.level_count();
     let budget = budget.max(1);
-    let projection = camera.projection();
-    let mut counts = Counts::new(
-        pyramid,
-        camera,
-        region,
-        view.aspect,
-        view.height,
-        target,
-        hollow,
-    );
-    let single = crate::material::single_level(pyramid);
-    let mut fit = None;
-    for base in target..level_count {
-        let count = ladder_count(projection, level_count, base, single);
-        let estimate = counts.volume(base, count);
-        let mut wanted = [0usize; BAND];
-        let mut needed = 0usize;
-        for (band, slot) in wanted.iter_mut().enumerate().take(count) {
-            let level = base + band;
-            let denied = denial.get(level).copied().unwrap_or(0);
-            *slot = estimate[band] + denied;
-            needed += estimate[band] + denied;
-        }
+    let mut level = level_count - 1;
+    let mut truncated = true;
+    for candidate in target..level_count {
+        let denied = denial.get(candidate).copied().unwrap_or(0);
+        let needed = volume_count(pyramid, camera, region, view.aspect, candidate, hollow) + denied;
         if needed <= budget {
-            fit = Some((base, count, wanted, false));
+            level = candidate;
+            truncated = false;
             break;
         }
     }
-    let (base, count, wanted, truncated) = fit.unwrap_or_else(|| {
-        let base = level_count - 1;
-        let count = ladder_count(projection, level_count, base, single);
-        let estimate = counts.volume(base, count);
-        let mut wanted = [0usize; BAND];
-        for (band, slot) in wanted.iter_mut().enumerate().take(count) {
-            let level = base + band;
-            let denied = denial.get(level).copied().unwrap_or(0);
-            *slot = estimate[band] + denied;
-        }
-        (base, count, wanted, true)
-    });
-    let capacity = if truncated {
-        capacities(budget, &wanted, count)
-    } else {
-        [budget; BAND]
-    };
-    let ladder = Ladder { base, count };
     Planned {
-        ladder,
-        levels: Levels { ladder, capacity },
+        levels: Levels {
+            level,
+            capacity: budget,
+        },
         truncated,
     }
 }
@@ -113,65 +79,45 @@ pub(super) fn prepare(tables: Tables<'_>) {
         time,
         content,
     } = tables;
-    let slot_grid = atlas.slot_grid();
-    let mut prepared = [usize::MAX; BAND];
-    let mut count = 0;
-    for level in levels.ladder.levels() {
-        if prepared[..count].contains(&level) {
-            continue;
-        }
-        prepared[count] = level;
-        count += 1;
-        ensure_brick(bricks, pyramid.level(level), level, slot_grid, arena);
-        let table = bricks[level].as_mut().expect("the brick table exists");
-        if table.time() != Some(time) {
-            table.rebase(upload, time, content, atlas, arena);
-        }
+    let level = levels.level;
+    ensure_brick(
+        bricks,
+        pyramid.level(level),
+        level,
+        atlas.slot_grid(),
+        arena,
+    );
+    let table = bricks[level].as_mut().expect("the brick table exists");
+    if table.time() != Some(time) {
+        table.rebase(upload, time, content, atlas, arena);
     }
 }
 
-pub(super) fn tables(bricks: &[Option<BrickTable>], levels: Levels) -> Vec<&BrickTable> {
-    levels
-        .ladder
-        .levels()
-        .map(|level| bricks[level].as_ref().expect("the band table exists"))
-        .collect()
+pub(super) fn table(bricks: &[Option<BrickTable>], levels: Levels) -> &BrickTable {
+    bricks[levels.level]
+        .as_ref()
+        .expect("the brick table exists")
 }
 
 pub(super) fn schedule(
     planner: &mut Planner,
     queue: &Queue,
     camera: &Camera,
-    tables: &[&BrickTable],
+    table: &BrickTable,
     levels: Levels,
     time: u32,
 ) {
-    let scale = bucket_scale(
-        camera,
-        tables[0].bounds.0.to_array(),
-        tables[0].world.to_array(),
+    let scale = bucket_scale(camera, table.bounds.0.to_array(), table.world.to_array());
+    planner.plan.prepare(
+        queue,
+        Schedule {
+            time,
+            capacity: levels.capacity as u32,
+            dispatch: volume_dispatch(table),
+            bucket_scale: scale,
+            base: table.record_base(),
+        },
     );
-    for (band, view) in planner.view.bands.iter_mut().enumerate() {
-        let (capacity, dispatch, base) = match tables.get(band) {
-            Some(table) => (
-                levels.capacity.get(band).copied().unwrap_or(0) as u32,
-                volume_dispatch(table),
-                table.record_base(),
-            ),
-            None => (0, 0, 0),
-        };
-        view.prepare(
-            queue,
-            Schedule {
-                time,
-                band: band as u32,
-                capacity,
-                dispatch,
-                bucket_scale: scale,
-                base,
-            },
-        );
-    }
 }
 
 pub(super) fn ray(
@@ -191,15 +137,14 @@ pub(super) struct Frame<'a> {
     pub(super) clip: Clip,
     pub(super) view: View,
     pub(super) time: u32,
-    pub(super) ladder: Ladder,
-    pub(super) tables: &'a [&'a BrickTable],
+    pub(super) table: &'a BrickTable,
     pub(super) scene: &'a SceneFrame<'a>,
     pub(super) ray: crate::frame::Ray,
     pub(super) space: ShadowSpace,
     pub(super) translucent: bool,
     pub(super) stale: bool,
     pub(super) content: u32,
-    pub(super) table: &'a SceneTable,
+    pub(super) channels: &'a SceneTable,
     pub(super) oit: Option<&'a Oit>,
 }
 
@@ -210,15 +155,14 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
         clip,
         view,
         time,
-        ladder,
-        tables,
+        table,
         scene,
         ray,
         space,
         translucent,
         stale,
         content,
-        table,
+        channels,
         oit,
     } = frame;
     let mut data = FrameData::new(
@@ -229,10 +173,8 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
             aspect: view.aspect,
             height: view.height,
             time,
-            samples_per_voxel: table.samples_per_voxel(),
         },
-        ladder,
-        tables,
+        table,
         scene.shading,
         ray,
         space,
@@ -241,8 +183,8 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
     data.oit = [u32::from(translucent), 0, 0, 0];
     data.tag[1] = u32::from(stale);
     data.tag[3] = content;
-    data.occupancy[0] = table.threshold_floor();
-    data.packs = table.packs();
+    data.occupancy[0] = channels.threshold_floor();
+    data.packs = channels.packs();
     if let Some(oit) = oit.filter(|_| translucent) {
         data.oit[1] = oit.layers();
         data.oit[2] = oit.next_epoch();
@@ -253,7 +195,7 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
 pub(super) struct ShadowFrame<'a> {
     pub(super) scene: &'a SceneFrame<'a>,
     pub(super) pyramid: &'a Pyramid,
-    pub(super) ladder: Ladder,
+    pub(super) level: usize,
     pub(super) versions: Versions,
     pub(super) summary: &'a mut Option<SceneSummary>,
     pub(super) channel: u64,
@@ -283,7 +225,7 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
     let ShadowFrame {
         scene,
         pyramid,
-        ladder,
+        level,
         versions,
         summary,
         channel,
@@ -309,7 +251,6 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
         high,
         Vec3::new(spacing.x(), spacing.y(), spacing.z()),
     );
-    let level = ladder.base + ladder.count - 1;
     let layers = digest(&[
         versions.topology(),
         versions.classification(),

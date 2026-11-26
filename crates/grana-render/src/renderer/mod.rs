@@ -10,7 +10,7 @@ mod timing;
 mod view;
 
 use plan::Residence;
-use residency::{FrameTarget, LevelKey, Levels, TargetCache, ViewKey};
+use residency::{FrameTarget, Levels, TargetCache, ViewKey};
 use resources::Resources;
 use signature::Signature;
 use std::collections::HashSet;
@@ -42,10 +42,7 @@ use crate::oit::Oit;
 use crate::oit_resolve::OitResolve;
 use crate::overlay::Overlays;
 use crate::pick::{self, PICK_ROW, PickId, PickTarget};
-use crate::planner::{
-    self, BAND, Ladder, Planner, Schedule, TargetView, bucket_scale, capacities, ladder_count,
-    volume_dispatch, volume_target,
-};
+use crate::planner::{self, Planner, Schedule, TargetView, bucket_scale, volume_target};
 use crate::present::Present;
 use crate::reserve;
 use crate::schema::SceneFrame;

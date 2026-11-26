@@ -8,7 +8,6 @@ struct Resolution {
     start: f32,
     exit: f32,
     jitter: f32,
-    dither: f32,
 }
 
 fn object_distance(origin: vec3<f32>, depth: f32, ndc: vec2<f32>) -> f32 {
@@ -54,8 +53,8 @@ fn resolve(pixel: vec2<i32>, ndc: vec2<f32>) -> Resolution {
     let ray = camera_ray(ndc);
     let origin = ray.origin;
     let direction = ray.direction;
-    let local_eye = level_local(0u, origin);
-    let local_direction = level_rate(0u, direction);
+    let local_eye = volume_local(origin);
+    let local_direction = volume_rate(direction);
     let inverse_direction = vec3<f32>(1.0) / local_direction;
     let near_t = (vec3<f32>(0.0) - local_eye) * inverse_direction;
     let far_t = (vec3<f32>(1.0) - local_eye) * inverse_direction;
@@ -72,6 +71,5 @@ fn resolve(pixel: vec2<i32>, ndc: vec2<f32>) -> Resolution {
     );
     let start = max(max(entry, 0.0), clip.x);
     let jitter = stratified(pixel, frame.jitter.z) * local_step(start);
-    let dither = sample_noise(vec2<f32>(pixel), frame.jitter.z + 8.0);
-    return Resolution(origin, direction, start, exit, jitter, dither);
+    return Resolution(origin, direction, start, exit, jitter);
 }

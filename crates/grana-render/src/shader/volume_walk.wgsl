@@ -1,7 +1,6 @@
 const WALK_EPSILON: f32 = 1.0e-6;
 
 struct Sight {
-    band: u32,
     cell: vec3<u32>,
     slot: u32,
     usable: bool,
@@ -21,71 +20,27 @@ struct Walk {
     voxels: f32,
 }
 
-fn level_sight(origin: vec3<f32>, band: u32, t: f32, direction: vec3<f32>) -> Sight {
-    let g = level_frame(band);
-    let voxel = voxel_at(voxel_ray(band, origin, direction), t);
+fn volume_sight(origin: vec3<f32>, t: f32, direction: vec3<f32>) -> Sight {
+    let g = volume_frame();
+    let voxel = voxel_at(voxel_ray(origin, direction), t);
     let cell = brick_of(g.grid, g.dims, voxel);
-    let record = level_record(band, brick_index(g.grid, cell));
+    let record = volume_record(brick_index(g.grid, cell));
     let slot = brick_display_slot(record);
     var usable = false;
     if (slot != 0u) {
         usable = occupied_brick(slot - 1u);
     }
-    return Sight(band, cell, slot, usable, slot == 0u && !brick_hollow(record), voxel);
+    return Sight(cell, slot, usable, slot == 0u && !brick_hollow(record), voxel);
 }
 
-fn volume_reachable(
-    origin: vec3<f32>,
-    band: u32,
-    hint: u32,
-    t: f32,
-    direction: vec3<f32>,
-) -> Sight {
-    let count = band_count();
-    if (hint != band && hint < count) {
-        let held = level_sight(origin, hint, t, direction);
-        if (held.usable) {
-            return held;
-        }
-    }
-    let first = level_sight(origin, band, t, direction);
-    if (first.usable) {
-        return first;
-    }
-    var chosen = first;
-    for (var step = 1u; step < count; step += 1u) {
-        let coarser = band + step;
-        if (coarser < count) {
-            let other = level_sight(origin, coarser, t, direction);
-            if (other.usable) {
-                return other;
-            }
-            if (chosen.missing && !other.missing) {
-                chosen = other;
-            }
-        }
-        if (step <= band) {
-            let finer = band - step;
-            let other = level_sight(origin, finer, t, direction);
-            if (other.usable) {
-                return other;
-            }
-            if (chosen.missing && !other.missing) {
-                chosen = other;
-            }
-        }
-    }
-    return chosen;
-}
-
-fn inside_level(sight: Sight) -> bool {
-    let dims = level_frame(sight.band).dims;
+fn inside_volume(sight: Sight) -> bool {
+    let dims = frame.dims.xyz;
     return all(sight.voxel >= vec3<f32>(0.0)) && all(sight.voxel <= dims);
 }
 
 fn walk_open(direction: vec3<f32>, begin: f32, finish: f32, sight: Sight) -> Walk {
-    let g = level_frame(sight.band);
-    let rate = level_rate(sight.band, direction) * g.dims;
+    let g = volume_frame();
+    let rate = volume_rate(direction) * g.dims;
     let base = brick_origin(sight.cell);
     let far = min(base + vec3<f32>(BRICK_SIDE), g.dims);
     let exit = box_exit(base, far, sight.voxel, rate);

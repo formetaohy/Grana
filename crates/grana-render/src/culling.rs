@@ -3,81 +3,33 @@ use grana_volume::{BRICK_SIDE, BrickGrid, Level, Region};
 
 use crate::hollow::Mask;
 
-const WHOLE: usize = 0;
-const FIRST: usize = 1;
-const MIDDLE: usize = 2;
-const KINDS: usize = 3;
-const ALL: u8 = (1 << KINDS) - 1;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Counts([usize; KINDS]);
-
-impl Counts {
-    pub(crate) fn band(&self, band: usize, count: usize) -> usize {
-        if count == 1 || band + 1 == count {
-            self.0[WHOLE]
-        } else if band == 0 {
-            self.0[FIRST]
-        } else {
-            self.0[MIDDLE]
-        }
-    }
-}
-
-struct Bands {
-    lower: [f32; KINDS],
-    upper: [f32; KINDS],
-}
-
-impl Bands {
-    fn new(lower: f32, upper: f32) -> Self {
-        Self {
-            lower: [f32::NEG_INFINITY, f32::NEG_INFINITY, lower],
-            upper: [f32::INFINITY, upper, upper],
-        }
-    }
-}
-
 struct Query<'a> {
     level: Level,
     grid: [u32; 3],
-    bands: Bands,
     hollow: Option<&'a Mask<'a>>,
 }
 
 pub(crate) struct Frustum {
     planes: [[f32; 4]; 6],
-    eye: Vec3,
     region: Region,
 }
 
 impl Frustum {
-    pub(crate) fn new(planes: [[f32; 4]; 6], eye: Vec3, region: Region) -> Self {
-        Self {
-            planes,
-            eye,
-            region,
-        }
+    pub(crate) fn new(planes: [[f32; 4]; 6], region: Region) -> Self {
+        Self { planes, region }
     }
 
-    pub(crate) fn counts(
-        &self,
-        level: Level,
-        lower: f32,
-        upper: f32,
-        hollow: Option<&Mask<'_>>,
-    ) -> Counts {
+    pub(crate) fn count(&self, level: Level, hollow: Option<&Mask<'_>>) -> usize {
         let grid = BrickGrid::new(level.extent()).counts();
         if grid.contains(&0) {
-            return Counts::default();
+            return 0;
         }
         let query = Query {
             level,
             grid,
-            bands: Bands::new(lower, upper),
             hollow,
         };
-        Counts(self.visit(&query, [0; 3], grid, ALL).0)
+        self.visit(&query, [0; 3], grid)
     }
 
     pub(crate) fn gather(&self, level: Level) -> Vec<u32> {
@@ -136,7 +88,7 @@ impl Frustum {
         self.collect(level, grid, right, high, indices);
     }
 
-    fn visit(&self, query: &Query<'_>, low: [u32; 3], high: [u32; 3], open: u8) -> Counts {
+    fn visit(&self, query: &Query<'_>, low: [u32; 3], high: [u32; 3]) -> usize {
         let extent = query.level.extent();
         let limits = [extent.x(), extent.y(), extent.z()];
         let first = low.map(|value| value * BRICK_SIDE);
@@ -146,53 +98,22 @@ impl Frustum {
         let high_world = Vec3::from(high_world);
         if self.beyond_frustum(low_world, high_world) || self.outside_region(low_world, high_world)
         {
-            return Counts::default();
+            return 0;
         }
-        let (near, far) = self.reach(low_world, high_world);
-        let bricks = (0..3)
-            .map(|axis| (high[axis] - low[axis]) as usize)
-            .product::<usize>();
+        let bricks = brick_count(low, high);
         let contained =
             self.within_frustum(low_world, high_world) && self.within_region(low_world, high_world);
-        let mut counts = [0usize; KINDS];
-        let mut descend = 0u8;
-        let mut live = None;
-        for (kind, slot) in counts.iter_mut().enumerate() {
-            if open & (1 << kind) == 0 {
-                continue;
-            }
-            let lower = query.bands.lower[kind];
-            let upper = query.bands.upper[kind];
-            if far < lower || near >= upper {
-                continue;
-            }
-            if contained && near >= lower && far < upper {
-                let occupied = *live.get_or_insert_with(|| {
-                    query
-                        .hollow
-                        .map_or(bricks, |mask| bricks - mask.count(low, high))
-                });
-                *slot += occupied;
-                continue;
-            }
-            descend |= 1 << kind;
-        }
-        if descend == 0 {
-            return Counts(counts);
+        if contained {
+            return query
+                .hollow
+                .map_or(bricks, |mask| bricks - mask.count(low, high));
         }
         if bricks == 1 {
             let occupied = query.hollow.is_none_or(|mask| {
                 let index = low[0] + query.grid[0] * (low[1] + query.grid[1] * low[2]);
                 !mask.holds(index as usize)
             });
-            if occupied {
-                for (kind, slot) in counts.iter_mut().enumerate() {
-                    if descend & (1 << kind) != 0 {
-                        *slot += 1;
-                    }
-                }
-            }
-            return Counts(counts);
+            return usize::from(occupied);
         }
         let axis = (0..3)
             .max_by_key(|axis| high[*axis] - low[*axis])
@@ -202,13 +123,7 @@ impl Frustum {
         left[axis] = middle;
         let mut right = low;
         right[axis] = middle;
-        for (low, high) in [(low, left), (right, high)] {
-            let part = self.visit(query, low, high, descend);
-            for (count, other) in counts.iter_mut().zip(part.0) {
-                *count += other;
-            }
-        }
-        Counts(counts)
+        self.visit(query, low, left) + self.visit(query, right, high)
     }
 
     fn beyond_frustum(&self, low: Vec3, high: Vec3) -> bool {
@@ -263,13 +178,6 @@ impl Frustum {
             let reach = extent.dot(direction.abs());
             offset.dot(direction).abs() + reach <= half[axis]
         })
-    }
-
-    fn reach(&self, low: Vec3, high: Vec3) -> (f32, f32) {
-        let eye = self.eye;
-        let near = (eye.clamp(low, high) - eye).length();
-        let far = (eye - low).abs().max((eye - high).abs()).length();
-        (near, far)
     }
 }
 

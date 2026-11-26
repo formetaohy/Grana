@@ -65,7 +65,6 @@ pub(crate) struct SceneTable {
     thresholds: Vec<Option<f32>>,
     floor: f32,
     packs: [u32; 4],
-    quality: f32,
     group: BindGroup,
     channels_count: usize,
 }
@@ -134,7 +133,6 @@ impl SceneTable {
             thresholds: vec![None; channels],
             floor: 0.0,
             packs: [0; 4],
-            quality: 1.0,
             group,
             channels_count: channels,
         }
@@ -176,15 +174,10 @@ impl SceneTable {
         self.channels.write(device, queue, &data.rows);
         self.floor = data.floor;
         self.packs = data.packs;
-        self.quality = data.quality;
     }
 
     pub fn threshold_floor(&self) -> f32 {
         self.floor
-    }
-
-    pub fn samples_per_voxel(&self) -> f32 {
-        self.quality
     }
 
     pub fn packs(&self) -> [u32; 4] {
@@ -273,7 +266,6 @@ struct ChannelTable {
     rows: Vec<ChannelData>,
     floor: f32,
     packs: [u32; 4],
-    quality: f32,
 }
 
 fn channel_data(
@@ -347,7 +339,6 @@ fn channel_data(
         rows,
         floor,
         packs: [channels, packs, peaks, categoricals],
-        quality: crate::material::samples_per_voxel(pyramid),
     }
 }
 

@@ -9,8 +9,8 @@ const QUANTUM_CEILING: f32 = 24.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Levels {
-    pub(super) ladder: Ladder,
-    pub(super) capacity: [usize; BAND],
+    pub(super) level: usize,
+    pub(super) capacity: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -176,7 +176,7 @@ impl ViewKey {
         self.prefetch.hash(&mut hasher);
         self.assured.hash(&mut hasher);
         self.size.hash(&mut hasher);
-        self.levels.ladder.hash(&mut hasher);
+        self.levels.level.hash(&mut hasher);
         self.levels.capacity.hash(&mut hasher);
         self.region.enabled.hash(&mut hasher);
         self.region.center.hash(&mut hasher);
@@ -190,21 +190,6 @@ impl ViewKey {
             .map(|slice| (slice.axis, slice.right, slice.up, slice.step))
             .hash(&mut hasher);
         hasher.finish()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct LevelKey {
-    pub(super) base: usize,
-    pub(super) count: usize,
-}
-
-impl LevelKey {
-    pub(super) fn of(levels: Levels) -> Self {
-        Self {
-            base: levels.ladder.base,
-            count: levels.ladder.count,
-        }
     }
 }
 
@@ -286,7 +271,7 @@ pub(super) struct FrameTarget {
     pub(super) detail: Option<u64>,
     pub(super) lens: Option<u64>,
     pub(super) camera: Option<Mat4>,
-    pub(super) levels: Option<LevelKey>,
+    pub(super) levels: Option<usize>,
     pub(super) age: u32,
     pub(super) phase: u32,
 }

@@ -15,12 +15,8 @@ use crate::layout::Layouts;
 use grana_display::{Camera, CameraProjection};
 use grana_volume::BrickRequest;
 
-pub(crate) const BAND: usize = 4;
-
 pub(crate) const BUCKET_COUNT: usize = 128;
-const LEVEL_HYSTERESIS: f32 = 1.2;
-const BAND_FLOOR: f32 = 0.75;
-const BAND_CEIL: f32 = 1.25;
+
 const HEADER_WORDS: usize = 4;
 const VISIBLE_BASE: usize = HEADER_WORDS;
 const BASE_BASE: usize = VISIBLE_BASE + BUCKET_COUNT;
@@ -33,8 +29,6 @@ const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
     "\n",
     include_str!("shader/brick.wgsl"),
-    "\n",
-    include_str!("shader/band.wgsl"),
     "\n",
     include_str!("shader/frustum.wgsl"),
     "\n",
@@ -57,36 +51,18 @@ pub(crate) fn plan_bytes(capacity: usize) -> u64 {
 }
 
 pub(crate) fn bytes(capacity: usize) -> u64 {
-    BAND as u64 * (plan_bytes(capacity) + size_of::<ScheduleData>() as u64)
+    plan_bytes(capacity) + size_of::<ScheduleData>() as u64
 }
 
 pub(crate) const READBACK_SLOTS: usize = 4;
 
 pub(crate) fn readback_bytes(capacity: usize) -> u64 {
-    READBACK_SLOTS as u64 * BAND as u64 * plan_bytes(capacity)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Ladder {
-    pub base: usize,
-    pub count: usize,
-}
-
-impl Ladder {
-    pub fn level(&self, band: usize) -> usize {
-        assert!(band < self.count, "a ladder names one of its bands");
-        self.base + band
-    }
-
-    pub fn levels(&self) -> impl Iterator<Item = usize> + '_ {
-        self.base..self.base + self.count
-    }
+    READBACK_SLOTS as u64 * plan_bytes(capacity)
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct Schedule {
     pub time: u32,
-    pub band: u32,
     pub capacity: u32,
     pub dispatch: u32,
     pub bucket_scale: f32,
@@ -188,17 +164,9 @@ impl Plan {
         self.dispatch = schedule.dispatch;
         let data = ScheduleData {
             time: schedule.time,
-            band: schedule.band,
             capacity: schedule.capacity.min(self.capacity as u32),
-            x0: 0,
-            y0: 0,
-            z0: 0,
-            x_count: 0,
-            y_count: 0,
             bucket_scale: schedule.bucket_scale,
             base: schedule.base,
-            z_count: 0,
-            reserved: 0,
         };
         queue.write_buffer(&self.uniform, 0, bytes_of(&data));
         let header = [0u32; HEADER_WORDS + BUCKET_COUNT];
@@ -226,15 +194,11 @@ impl Plan {
     }
 }
 
-pub(crate) struct Plans {
-    pub bands: [Plan; BAND],
-}
-
 pub(crate) struct Planner {
-    plan: ComputePipeline,
+    reduce: ComputePipeline,
     volume_count: ComputePipeline,
     volume_scatter: ComputePipeline,
-    pub view: Plans,
+    pub plan: Plan,
 }
 
 impl Planner {
@@ -257,7 +221,7 @@ impl Planner {
                 cache: pipelines.cache(),
             })
         };
-        let plan_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+        let reduce = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("grana.plan"),
             layout: Some(&layouts.plan_pipeline),
             module: &plan,
@@ -266,25 +230,19 @@ impl Planner {
             cache: pipelines.cache(),
         });
         Self {
-            plan: plan_pipeline,
+            reduce,
             volume_count: pipeline("grana.volume.count", &cull, "volume_count"),
             volume_scatter: pipeline("grana.volume.scatter", &cull, "volume_scatter"),
-            view: Plans {
-                bands: std::array::from_fn(|_| {
-                    Plan::new(device, layouts, "grana.band.plan", capacity)
-                }),
-            },
+            plan: Plan::new(device, layouts, "grana.plan.buffer", capacity),
         }
     }
 
     pub fn bind_arena(&mut self, device: &Device, layouts: &Layouts, arena: &BrickArena) {
-        for plan in &mut self.view.bands {
-            plan.bind_arena(device, layouts, arena);
-        }
+        self.plan.bind_arena(device, layouts, arena);
     }
 
     pub fn bytes(&self) -> u64 {
-        bytes(self.view.bands[0].capacity())
+        bytes(self.plan.capacity())
     }
 
     pub fn encode(&self, encoder: &mut CommandEncoder, scene: &BindGroup) {
@@ -294,20 +252,16 @@ impl Planner {
                 timestamp_writes: None,
             });
             pass.set_bind_group(0, scene, &[]);
-            for plan in &self.view.bands {
-                dispatch(&mut pass, &self.volume_count, plan);
-            }
+            dispatch(&mut pass, &self.volume_count, &self.plan);
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("grana.plan.reduce"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.plan);
-            for plan in &self.view.bands {
-                pass.set_bind_group(0, plan.data_group(), &[]);
-                pass.dispatch_workgroups(1, 1, 1);
-            }
+            pass.set_pipeline(&self.reduce);
+            pass.set_bind_group(0, self.plan.data_group(), &[]);
+            pass.dispatch_workgroups(1, 1, 1);
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -315,9 +269,7 @@ impl Planner {
                 timestamp_writes: None,
             });
             pass.set_bind_group(0, scene, &[]);
-            for plan in &self.view.bands {
-                dispatch(&mut pass, &self.volume_scatter, plan);
-            }
+            dispatch(&mut pass, &self.volume_scatter, &self.plan);
         }
     }
 }
@@ -394,39 +346,6 @@ pub(crate) fn decode_plan(
     })
 }
 
-pub(crate) fn capacities(budget: usize, wanted: &[usize; BAND], count: usize) -> [usize; BAND] {
-    assert!(
-        budget > 0 && count > 0 && count <= BAND,
-        "a ladder divides a budget"
-    );
-    let mut weights = [1usize; BAND];
-    for band in 0..count {
-        weights[band] = wanted[band].max(1);
-    }
-    let total: usize = weights[..count].iter().sum();
-    let mut caps = [0usize; BAND];
-    for band in 0..count {
-        let share = (budget as u128 * weights[band] as u128 / total as u128) as usize;
-        caps[band] = share.max(1);
-    }
-    let mut sum: usize = caps[..count].iter().sum();
-    while sum > budget {
-        let band = (0..count)
-            .max_by_key(|band| caps[*band])
-            .expect("a ladder holds a band");
-        if caps[band] == 0 {
-            break;
-        }
-        caps[band] -= 1;
-        sum -= 1;
-    }
-    assert!(
-        caps[..count].iter().any(|cap| *cap > 0),
-        "a ladder reserves at least one brick"
-    );
-    caps
-}
-
 pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -> f32 {
     let eye = camera.eye();
     let mut far = 0.0f32;
@@ -443,6 +362,38 @@ pub(crate) fn bucket_scale(camera: &Camera, origin: [f32; 3], world: [f32; 3]) -
 
 pub(crate) fn volume_dispatch(table: &crate::brick::BrickTable) -> u32 {
     table.grid.count() as u32
+}
+
+pub(crate) fn volume_bricks(
+    pyramid: &Pyramid,
+    camera: &Camera,
+    region: Region,
+    aspect: f32,
+    level: usize,
+) -> Vec<u32> {
+    assert!(aspect > 0.0, "a view has a positive aspect");
+    let radius = 0.5 * Vec3::from(pyramid.level(0).world_extent()).length();
+    let planes = crate::frame::planes(camera.view_projection(aspect, radius));
+    let frustum = crate::culling::Frustum::new(planes, region);
+    frustum.gather(pyramid.level(level))
+}
+
+pub(crate) fn volume_count(
+    pyramid: &Pyramid,
+    camera: &Camera,
+    region: Region,
+    aspect: f32,
+    level: usize,
+    hollow: Option<crate::hollow::Cursor<'_>>,
+) -> usize {
+    assert!(aspect > 0.0, "a view has a positive aspect");
+    let radius = 0.5 * Vec3::from(pyramid.level(0).world_extent()).length();
+    let planes = crate::frame::planes(camera.view_projection(aspect, radius));
+    let frustum = crate::culling::Frustum::new(planes, region);
+    let source = pyramid.level(level);
+    let grid = BrickGrid::new(source.extent()).counts();
+    let mask = hollow.and_then(|hollow| hollow.mask(level, grid));
+    frustum.count(source, mask.as_ref())
 }
 
 #[derive(Clone, Copy)]
@@ -485,114 +436,14 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
     .max(first)
 }
 
-pub(crate) struct Counts<'a> {
-    frustum: crate::culling::Frustum,
-    pyramid: &'a Pyramid,
-    scale: f32,
-    first: usize,
-    hollow: Option<crate::hollow::Cursor<'a>>,
-    bands: Vec<crate::culling::Counts>,
-}
-
-impl<'a> Counts<'a> {
-    pub(crate) fn new(
-        pyramid: &'a Pyramid,
-        camera: &Camera,
-        region: Region,
-        aspect: f32,
-        height: u32,
-        first: usize,
-        hollow: Option<crate::hollow::Cursor<'a>>,
-    ) -> Self {
-        assert!(aspect > 0.0, "a view has a positive aspect");
-        let scale =
-            camera.pixels_per_world_at(height as f32) * crate::material::samples_per_voxel(pyramid);
-        let radius = 0.5 * Vec3::from(pyramid.level(first).world_extent()).length();
-        let planes = crate::frame::planes(camera.view_projection(aspect, radius));
-        Self {
-            frustum: crate::culling::Frustum::new(planes, camera.eye(), region),
-            pyramid,
-            scale,
-            first,
-            hollow,
-            bands: Vec::new(),
-        }
-    }
-
-    pub(crate) fn volume(&mut self, base: usize, count: usize) -> [usize; BAND] {
-        for level in base..base + count {
-            self.ensure(level);
-        }
-        let mut wanted = [0usize; BAND];
-        for (band, slot) in wanted.iter_mut().enumerate().take(count) {
-            let level = self.bands.get(base + band - self.first);
-            *slot = level.map_or(0, |counts| counts.band(band, count));
-        }
-        wanted
-    }
-
-    pub(crate) fn bricks(&self, level: usize) -> Vec<u32> {
-        self.frustum.gather(self.pyramid.level(level))
-    }
-
-    fn ensure(&mut self, level: usize) -> crate::culling::Counts {
-        while self.first + self.bands.len() <= level {
-            let held = self.first + self.bands.len();
-            self.bands.push(self.band(held));
-        }
-        self.bands[level - self.first]
-    }
-
-    fn band(&self, level: usize) -> crate::culling::Counts {
-        let source = self.pyramid.level(level);
-        let lower = BAND_FLOOR * Vec3::from(source.voxel()).min_element() * self.scale;
-        let upper = match level + 1 {
-            next if next < self.pyramid.level_count() => {
-                BAND_CEIL * Vec3::from(self.pyramid.level(next).voxel()).min_element() * self.scale
-            }
-            _ => f32::INFINITY,
-        };
-        let grid = BrickGrid::new(source.extent()).counts();
-        let mask = self.hollow.and_then(|hollow| hollow.mask(level, grid));
-        self.frustum.counts(source, lower, upper, mask.as_ref())
-    }
-}
-
-pub(crate) fn ladder_count(
-    projection: CameraProjection,
-    levels: usize,
-    base: usize,
-    single: bool,
-) -> usize {
-    if single || projection == CameraProjection::Orthographic {
-        1
-    } else {
-        BAND.min(levels - base)
-    }
-}
-
-pub(crate) fn volume_demand(
-    pyramid: &Pyramid,
-    camera: &Camera,
-    region: Region,
-    aspect: f32,
-    height: u32,
-    base: usize,
-    count: usize,
-) -> [usize; BAND] {
-    assert!(
-        count > 0 && base + count <= pyramid.level_count(),
-        "a ladder spans levels the pyramid holds"
-    );
-    Counts::new(pyramid, camera, region, aspect, height, base, None).volume(base, count)
-}
-
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
     let (low, high) = level.bounds();
     let low = Vec3::from(low);
     let high = Vec3::from(high);
     (eye.clamp(low, high) - eye).length()
 }
+
+const LEVEL_HYSTERESIS: f32 = 1.2;
 
 fn hold_level(
     levels: usize,
@@ -621,7 +472,7 @@ fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grana_display::{Camera, CameraProjection};
+    use grana_display::Camera;
     use grana_volume::{
         Calibration, ChannelInfo, ColorTable, Extent, Intensity, Level, Spacing, Statistics,
         VoxelFormat, VoxelSemantics,
@@ -666,25 +517,6 @@ mod tests {
         assert!(
             kept < held,
             "a categorical volume keeps two samples per voxel: level {kept} against {held}"
-        );
-        assert_eq!(
-            ladder_count(
-                CameraProjection::Perspective,
-                categorical.level_count(),
-                kept,
-                crate::material::single_level(&categorical),
-            ),
-            1,
-            "a categorical volume never mixes a coarser level into its surface"
-        );
-        assert!(
-            ladder_count(
-                CameraProjection::Perspective,
-                scalar.level_count(),
-                held,
-                crate::material::single_level(&scalar),
-            ) > 1,
-            "a scalar volume still blends the distance bands"
         );
     }
 }

@@ -25,8 +25,6 @@ const TAU_SHADER: &str = concat!(
     "\n",
     include_str!("shader/brick.wgsl"),
     "\n",
-    include_str!("shader/band.wgsl"),
-    "\n",
     include_str!("shader/volume_sample.wgsl"),
     "\n",
     include_str!("shader/occupancy.wgsl"),

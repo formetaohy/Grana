@@ -11,7 +11,3 @@ pub(crate) fn samples_per_voxel(pyramid: &Pyramid) -> f32 {
         1.0
     }
 }
-
-pub(crate) fn single_level(pyramid: &Pyramid) -> bool {
-    samples_per_voxel(pyramid) > 1.0
-}

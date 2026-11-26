@@ -1,7 +1,7 @@
 use grana_display::Camera;
 use grana_volume::{Pyramid, Region};
 
-use crate::planner::{Counts, TargetView, ladder_count, volume_demand, volume_target};
+use crate::planner::{TargetView, volume_bricks, volume_count, volume_target};
 
 pub const EXPORT_CEILING: u64 = 4 << 30;
 
@@ -23,7 +23,7 @@ pub struct Visible {
     pub bricks: Vec<u32>,
 }
 
-pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Region) -> Residency {
+fn target(pyramid: &Pyramid, camera: &Camera, size: [u32; 2]) -> usize {
     assert!(
         pyramid.level_count() > 0,
         "a pyramid holds at least one level"
@@ -32,70 +32,30 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Reg
         size[0] > 0 && size[1] > 0,
         "an export covers a positive surface"
     );
-    let height = size[1];
-    let aspect = size[0] as f32 / height as f32;
-    let target = volume_target(TargetView {
+    volume_target(TargetView {
         pyramid,
         camera,
-        height: height as f32,
+        height: size[1] as f32,
         first: 0,
         current: None,
-    });
-    let count = ladder_count(
-        camera.projection(),
-        pyramid.level_count(),
-        target.min(pyramid.level_count() - 1),
-        crate::material::single_level(pyramid),
-    );
-    let bands = volume_demand(pyramid, camera, region, aspect, height, target, count);
-    let bricks = bands[..count].iter().sum();
+    })
+}
+
+pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Region) -> Residency {
+    let level = target(pyramid, camera, size);
+    let aspect = size[0] as f32 / size[1] as f32;
+    let bricks = volume_count(pyramid, camera, region, aspect, level, None);
     Residency {
-        detail: Detail {
-            level: target,
-            bricks,
-        },
+        detail: Detail { level, bricks },
         slots: (bricks + 1).max(1),
     }
 }
 
-pub fn visible_bricks(
-    pyramid: &Pyramid,
-    camera: &Camera,
-    size: [u32; 2],
-    region: Region,
-) -> Vec<Visible> {
-    assert!(
-        pyramid.level_count() > 0,
-        "a pyramid holds at least one level"
-    );
-    assert!(
-        size[0] > 0 && size[1] > 0,
-        "an export covers a positive surface"
-    );
-    let height = size[1];
-    let aspect = size[0] as f32 / height as f32;
-    let target = volume_target(TargetView {
-        pyramid,
-        camera,
-        height: height as f32,
-        first: 0,
-        current: None,
-    })
-    .min(pyramid.level_count() - 1);
-    let count = ladder_count(
-        camera.projection(),
-        pyramid.level_count(),
-        target,
-        crate::material::single_level(pyramid),
-    );
-    let counts = Counts::new(pyramid, camera, region, aspect, height, 0, None);
-    (0..count)
-        .map(|band| {
-            let level = target + band;
-            Visible {
-                level,
-                bricks: counts.bricks(level),
-            }
-        })
-        .collect()
+pub fn visible(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Region) -> Visible {
+    let level = target(pyramid, camera, size);
+    let aspect = size[0] as f32 / size[1] as f32;
+    Visible {
+        level,
+        bricks: volume_bricks(pyramid, camera, region, aspect, level),
+    }
 }

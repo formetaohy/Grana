@@ -64,7 +64,6 @@ impl Shot {
 struct Prepared {
     shot: Shot,
     levels: Levels,
-    ladder: Ladder,
     data: FrameData,
     started: timing::Started,
     reserved: Option<usize>,
@@ -239,7 +238,7 @@ impl Renderer {
             prefetch: frame.delivery.prefetches(),
             hollow: Some(crate::hollow::Cursor::new(&resources.atlas, frame.time)),
         });
-        resources.retire(frame.time, outlook.ladder.base, outlook.ladder.count);
+        resources.retire(frame.time, outlook.levels.level);
         let channel = channel_style(scene.channels);
         if residence.style_outdated(channel) {
             resources.scene.publish(
@@ -254,7 +253,7 @@ impl Renderer {
         let stale = residence.passes_outdated(scene.versions);
         info.settled = outlook.settled;
         info.view = residence.view();
-        info.view.level = outlook.ladder.base;
+        info.view.level = outlook.levels.level;
         info.truncated = outlook.truncated;
         plan::prepare(plan::Tables {
             bricks: &mut resources.bricks,
@@ -267,13 +266,13 @@ impl Renderer {
             content: residence.content(),
         });
         transfer.add(resources.upload.flush(device, queue));
-        let tables = plan::tables(&resources.bricks, outlook.levels);
-        let reach = crate::frame::reach(frame.camera, &tables);
-        let (step, ray_bounds) =
-            match plan::ray(frame.camera, tables[0], scene.step_scale, view.height) {
-                Ok(ray) => ray,
-                Err(detail) => return Err(Halt::Fail(detail)),
-            };
+        let table = plan::table(&resources.bricks, outlook.levels);
+        let reach = crate::frame::reach(frame.camera, table);
+        let (step, ray_bounds) = match plan::ray(frame.camera, table, scene.step_scale, view.height)
+        {
+            Ok(ray) => ray,
+            Err(detail) => return Err(Halt::Fail(detail)),
+        };
         let layers = shot.transparent.then_some(crate::fragment::LAYERS);
         if let Err(detail) = allocate::targets(
             device,
@@ -300,7 +299,7 @@ impl Renderer {
         let planned = plan::shadow(plan::ShadowFrame {
             scene,
             pyramid: &resources.pyramid,
-            ladder: outlook.ladder,
+            level: outlook.levels.level,
             versions: scene.versions,
             summary: &mut resources.summary,
             channel,
@@ -320,8 +319,7 @@ impl Renderer {
             clip: frame.clip,
             view,
             time: frame.time,
-            ladder: outlook.ladder,
-            tables: &tables,
+            table,
             scene,
             ray: crate::frame::Ray {
                 step,
@@ -332,7 +330,7 @@ impl Renderer {
             translucent: shot.translucent,
             stale: shot.stale,
             content: residence.content(),
-            table: &resources.scene,
+            channels: &resources.scene,
             oit: target.oit.as_ref(),
         });
         let signature = Signature {
@@ -346,12 +344,12 @@ impl Renderer {
             epoch: residence.epoch(),
             size: target.size,
             step: scene.step_scale,
-            levels: LevelKey::of(outlook.levels),
+            level: outlook.levels.level,
             stale: shot.stale,
         };
         let started = timing::begin(Begin {
             target,
-            levels: LevelKey::of(outlook.levels),
+            level: outlook.levels.level,
             layers: signature.layers(),
             content: signature.content(),
             classification: signature.classification(),
@@ -406,7 +404,6 @@ impl Renderer {
         Ok(Prepared {
             shot,
             levels: outlook.levels,
-            ladder: outlook.ladder,
             data,
             started,
             reserved,
@@ -451,7 +448,7 @@ impl Renderer {
         let shot = prepared.shot;
         let view = shot.view;
         let started = prepared.started;
-        let ladder = prepared.ladder;
+        let level = prepared.levels.level;
         let data = &mut prepared.data;
         let phase = target.phase;
         let offset = jitter::offset(phase, [view.region[2], view.region[3]]);
@@ -473,12 +470,12 @@ impl Renderer {
         data.tag[2] = splats.as_ref().map_or(0, SplatPasses::count);
         resources.scene.write_frame(queue, *data);
         if std::mem::take(&mut prepared.replan) {
-            let tables = plan::tables(&resources.bricks, prepared.levels);
+            let table = plan::table(&resources.bricks, prepared.levels);
             plan::schedule(
                 &mut resources.planner,
                 queue,
                 frame.camera,
-                &tables,
+                table,
                 prepared.levels,
                 frame.time,
             );
@@ -490,15 +487,9 @@ impl Renderer {
         }
         let content = data.tag[3];
         if shot.volume && !shot.slice {
-            let mut ladder_levels = [0usize; BAND];
-            let mut count = 0;
-            for level in ladder.levels() {
-                ladder_levels[count] = level;
-                count += 1;
-            }
             let entries = resources.baked.collect(
                 &resources.atlas,
-                &ladder_levels[..count],
+                level,
                 frame.time,
                 content,
                 resources.bake.capacity(),

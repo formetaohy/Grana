@@ -38,7 +38,7 @@ mod upload;
 mod volume;
 
 pub use budget::{Demand, FrameBudget, splat_budget, target_bytes, texture_budget};
-pub use detail::{Detail, EXPORT_CEILING, Residency, Visible, residency, visible_bricks};
+pub use detail::{Detail, EXPORT_CEILING, Residency, Visible, residency, visible};
 pub use fragment::{Fragment, fit as fragment_fit};
 pub use image::{
     Pixels, bytes as picture_bytes, stride as picture_stride, target as picture_target,

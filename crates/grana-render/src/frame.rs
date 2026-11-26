@@ -3,7 +3,6 @@ use glam::{Mat4, Vec3};
 use grana_volume::{Clip, Region};
 
 use crate::brick::BrickTable;
-use crate::planner::{BAND, Ladder};
 use crate::shadow::ShadowSpace;
 use grana_display::{Camera, Shading};
 
@@ -31,14 +30,12 @@ pub(crate) struct FrameData {
     pub oit: [u32; 4],
     pub clip: [f32; 4],
     pub tag: [u32; 4],
-    pub dims: [[f32; 4]; BAND],
-    pub grids: [[u32; 4]; BAND],
-    pub origins: [[f32; 4]; BAND],
-    pub axes: [[f32; 4]; BAND * 3],
-    pub inverses: [[f32; 4]; BAND * 3],
-    pub bases: [u32; 4],
-    pub bands: [u32; 4],
-    pub edge: [f32; 4],
+    pub dims: [f32; 4],
+    pub grids: [u32; 4],
+    pub origin: [f32; 4],
+    pub axes: [[f32; 4]; 3],
+    pub inverses: [[f32; 4]; 3],
+    pub base: [u32; 4],
     pub projection: [f32; 4],
     pub lens: [f32; 4],
     pub sampling: [f32; 4],
@@ -53,40 +50,31 @@ pub(crate) struct FrameData {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(crate) struct ScheduleData {
     pub time: u32,
-    pub band: u32,
     pub capacity: u32,
-    pub x0: u32,
-    pub y0: u32,
-    pub z0: u32,
-    pub x_count: u32,
-    pub y_count: u32,
     pub bucket_scale: f32,
     pub base: u32,
-    pub z_count: u32,
-    pub reserved: u32,
 }
 
 const _: () = {
-    assert!(size_of::<FrameData>() == 1392);
+    assert!(size_of::<FrameData>() == 928);
     assert!(std::mem::offset_of!(FrameData, region_axis) == 224);
     assert!(std::mem::offset_of!(FrameData, planes) == 352);
     assert!(std::mem::offset_of!(FrameData, light_view) == 448);
     assert!(std::mem::offset_of!(FrameData, dims) == 640);
-    assert!(std::mem::offset_of!(FrameData, origins) == 768);
-    assert!(std::mem::offset_of!(FrameData, axes) == 832);
-    assert!(std::mem::offset_of!(FrameData, inverses) == 1024);
-    assert!(std::mem::offset_of!(FrameData, bases) == 1216);
-    assert!(std::mem::offset_of!(FrameData, bands) == 1232);
-    assert!(std::mem::offset_of!(FrameData, edge) == 1248);
-    assert!(std::mem::offset_of!(FrameData, projection) == 1264);
-    assert!(std::mem::offset_of!(FrameData, lens) == 1280);
-    assert!(std::mem::offset_of!(FrameData, sampling) == 1296);
-    assert!(std::mem::offset_of!(FrameData, slice) == 1312);
-    assert!(std::mem::offset_of!(FrameData, slice_view) == 1328);
-    assert!(std::mem::offset_of!(FrameData, occupancy) == 1344);
-    assert!(std::mem::offset_of!(FrameData, bounds) == 1360);
-    assert!(std::mem::offset_of!(FrameData, packs) == 1376);
-    assert!(size_of::<ScheduleData>() == 48);
+    assert!(std::mem::offset_of!(FrameData, grids) == 656);
+    assert!(std::mem::offset_of!(FrameData, origin) == 672);
+    assert!(std::mem::offset_of!(FrameData, axes) == 688);
+    assert!(std::mem::offset_of!(FrameData, inverses) == 736);
+    assert!(std::mem::offset_of!(FrameData, base) == 784);
+    assert!(std::mem::offset_of!(FrameData, projection) == 800);
+    assert!(std::mem::offset_of!(FrameData, lens) == 816);
+    assert!(std::mem::offset_of!(FrameData, sampling) == 832);
+    assert!(std::mem::offset_of!(FrameData, slice) == 848);
+    assert!(std::mem::offset_of!(FrameData, slice_view) == 864);
+    assert!(std::mem::offset_of!(FrameData, occupancy) == 880);
+    assert!(std::mem::offset_of!(FrameData, bounds) == 896);
+    assert!(std::mem::offset_of!(FrameData, packs) == 912);
+    assert!(size_of::<ScheduleData>() == 16);
 };
 
 pub(crate) struct VolumeView<'a> {
@@ -96,7 +84,6 @@ pub(crate) struct VolumeView<'a> {
     pub aspect: f32,
     pub height: u32,
     pub time: u32,
-    pub samples_per_voxel: f32,
 }
 
 pub(crate) struct Ray {
@@ -105,22 +92,14 @@ pub(crate) struct Ray {
     pub(crate) channels: usize,
 }
 
-const UNREACHED: f32 = 1.0e19;
-
 impl FrameData {
     pub fn new(
         view: VolumeView<'_>,
-        ladder: Ladder,
-        tables: &[&BrickTable],
+        table: &BrickTable,
         shading: Shading,
         ray: Ray,
         space: ShadowSpace,
     ) -> Self {
-        assert_eq!(
-            tables.len(),
-            ladder.count,
-            "the ladder carries one table per band"
-        );
         assert!(
             ray.step.is_finite() && ray.step > 0.0,
             "a frame marches at a positive step"
@@ -136,13 +115,8 @@ impl FrameData {
             aspect,
             height,
             time,
-            samples_per_voxel,
         } = view;
-        assert!(
-            samples_per_voxel >= 1.0 && samples_per_voxel.is_finite(),
-            "a frame samples at least one sample per voxel"
-        );
-        let first = tables[0];
+        let first = table;
         let view_projection = camera.view_projection(aspect, 0.5 * first.world.length());
         let (slice, slice_view) = match camera.slice() {
             Some(frame) => {
@@ -166,27 +140,7 @@ impl FrameData {
         };
         let eye = camera.eye();
         let light = shading.light();
-        let mut dims = [[0.0; 4]; BAND];
-        let mut grids = [[0; 4]; BAND];
-        let mut origins = [[0.0; 4]; BAND];
-        let mut axes = [[0.0; 4]; BAND * 3];
-        let mut inverses = [[0.0; 4]; BAND * 3];
-        let mut bases = [0; 4];
-        let mut edge = [UNREACHED; 4];
-        for (band, table) in tables.iter().enumerate() {
-            let counts = table.grid.counts();
-            dims[band] = [table.dims.x, table.dims.y, table.dims.z, 0.0];
-            grids[band] = [counts[0], counts[1], counts[2], 0];
-            origins[band] = [table.origin.x, table.origin.y, table.origin.z, 0.0];
-            for axis in 0..3 {
-                axes[band * 3 + axis] = table.axes[axis].extend(0.0).to_array();
-                inverses[band * 3 + axis] = table.inverses[axis].extend(0.0).to_array();
-            }
-            bases[band] = table.record_base();
-            if band > 0 && !orthographic {
-                edge[band - 1] = table.voxel.min_element() * pixel_scale * samples_per_voxel;
-            }
-        }
+        let counts = first.grid.counts();
         Self {
             view_projection: view_projection.to_cols_array_2d(),
             inv_view_projection: view_projection.inverse().to_cols_array_2d(),
@@ -220,14 +174,12 @@ impl FrameData {
                 [normal[0], normal[1], normal[2], offset]
             },
             tag: [time, 0, 0, 0],
-            dims,
-            grids,
-            origins,
-            axes,
-            inverses,
-            bases,
-            bands: [ladder.count as u32, 0, 0, 0],
-            edge,
+            dims: [first.dims.x, first.dims.y, first.dims.z, 0.0],
+            grids: [counts[0], counts[1], counts[2], 0],
+            origin: [first.origin.x, first.origin.y, first.origin.z, 0.0],
+            axes: std::array::from_fn(|axis| first.axes[axis].extend(0.0).to_array()),
+            inverses: std::array::from_fn(|axis| first.inverses[axis].extend(0.0).to_array()),
+            base: [first.record_base(), 0, 0, 0],
             projection: [
                 f32::from(u8::from(orthographic)),
                 0.0,
@@ -261,19 +213,17 @@ pub(crate) fn lens(camera: &Camera, index: u32, samples: u32, aspect: f32) -> [f
     ]
 }
 
-pub(super) fn reach(camera: &Camera, tables: &[&BrickTable]) -> f32 {
+pub(super) fn reach(camera: &Camera, table: &BrickTable) -> f32 {
     let eye = camera.eye();
     let mut far = (camera.pivot() - eye).length();
-    for table in tables {
-        let (low, high) = table.bounds;
-        for corner in 0..8 {
-            let point = Vec3::new(
-                if corner & 1 == 0 { low.x } else { high.x },
-                if corner & 2 == 0 { low.y } else { high.y },
-                if corner & 4 == 0 { low.z } else { high.z },
-            );
-            far = far.max((point - eye).length());
-        }
+    let (low, high) = table.bounds;
+    for corner in 0..8 {
+        let point = Vec3::new(
+            if corner & 1 == 0 { low.x } else { high.x },
+            if corner & 2 == 0 { low.y } else { high.y },
+            if corner & 4 == 0 { low.z } else { high.z },
+        );
+        far = far.max((point - eye).length());
     }
     let far = far.max(1.0e-3);
     assert!(

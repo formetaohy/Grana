@@ -653,10 +653,9 @@ impl Atlas {
         self.unavailable.clear_time(time);
     }
 
-    pub fn retire(&mut self, time: u32, base: usize, count: usize) {
-        self.unavailable.retain(|held, level| {
-            held > time || (held == time && (base..base + count).contains(&level))
-        });
+    pub fn retire(&mut self, time: u32, level: usize) {
+        self.unavailable
+            .retain(|held, held_level| held > time || (held == time && held_level == level));
     }
 
     pub fn remember(&mut self, time: u32) -> Vec<u32> {
