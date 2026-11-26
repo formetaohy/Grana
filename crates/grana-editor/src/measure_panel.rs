@@ -406,7 +406,7 @@ fn plot_bar<'a>(
         .collect::<Vec<_>>();
     let lasso = state.measure.lasso().is_some();
     let gated = match view {
-        MeasureView::Ripley | MeasureView::NearestNeighbour => false,
+        MeasureView::Ripley | MeasureView::NearestNeighbour | MeasureView::Enrichment => false,
         MeasureView::Trend => state
             .measure
             .filters()
@@ -442,6 +442,7 @@ fn plot_bar<'a>(
         MeasureView::Ripley | MeasureView::NearestNeighbour => {
             items.extend(target_combo(ctx, state));
         }
+        MeasureView::Enrichment => {}
         MeasureView::Distribution | MeasureView::Trend => {
             items.push(field_label(ctx, grana_i18n::measure::value(language)));
             items.push(combo(
@@ -1094,6 +1095,7 @@ fn view_label(language: Language, view: MeasureView) -> &'static str {
         MeasureView::Trend => grana_i18n::measure::trend(language),
         MeasureView::Ripley => grana_i18n::measure::ripley(language),
         MeasureView::NearestNeighbour => grana_i18n::measure::nearest(language),
+        MeasureView::Enrichment => grana_i18n::measure::enrichment(language),
     }
 }
 

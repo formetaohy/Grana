@@ -1,4 +1,4 @@
-use grana_object::{Link, Track, TrackId, TrackLink, TrackNode, TrackSet};
+use grana_object::{Link, SolvedConfidence, Track, TrackId, TrackLink, TrackNode, TrackSet};
 
 use super::chain::Chains;
 use super::detection::Detections;
@@ -42,29 +42,31 @@ pub(super) fn build(chains: &Chains, detections: &Detections, frame_interval: f3
         .collect::<Vec<_>>();
     let mut incoming = vec![0u8; count];
     let mut outgoing = vec![0u8; count];
-    for &(parent, child) in chains.links() {
-        outgoing[parent] += 1;
-        incoming[child] += 1;
+    for link in chains.links() {
+        outgoing[link.parent] += 1;
+        incoming[link.child] += 1;
     }
     let links = chains
         .links()
         .iter()
-        .map(|&(parent, child)| {
-            let kind = if outgoing[parent] == 2 {
+        .map(|link| {
+            let kind = if outgoing[link.parent] == 2 {
                 Link::Division
-            } else if incoming[child] == 2 {
+            } else if incoming[link.child] == 2 {
                 Link::Merge
             } else {
                 Link::Gap
             };
-            TrackLink::new(
+            TrackLink::solved(
                 TrackId::FIRST
-                    .after(slot[parent])
+                    .after(slot[link.parent])
                     .expect("a tracked chain lies inside the id space"),
                 TrackId::FIRST
-                    .after(slot[child])
+                    .after(slot[link.child])
                     .expect("a tracked chain lies inside the id space"),
                 kind,
+                SolvedConfidence::new(link.confidence)
+                    .expect("the solver writes a calibrated probability"),
             )
         })
         .collect::<Vec<_>>();

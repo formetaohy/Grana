@@ -15,6 +15,7 @@ mod metric;
 mod nearest;
 mod pair;
 mod plot;
+mod random;
 mod relation;
 mod sample;
 mod scope;
@@ -23,7 +24,10 @@ mod spatial;
 mod table;
 
 pub use child::{Child, ChildField, ChildMetric};
-pub use classifier::{Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL};
+pub use classifier::{
+    CLASS_KEY, CLASS_LABEL, CLASS_THRESHOLD, Classifier, ClassifierState, SCORE_KEY, SCORE_LABEL,
+    class_column,
+};
 pub use cluster::{ClusterSample, ClusteredWelch};
 pub use coloc::{
     COLOC_BINS_MAX, COLOC_BINS_MIN, COLOC_BLOCK_DEFAULT, COLOC_BLOCK_MAX,
@@ -46,6 +50,7 @@ pub use plot::{
     DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries, Histogram, MeasureView,
     Plot, PlotAxis, Population, Scatter, Summary, Trend, TrendPoint,
 };
+pub use random::SplitMix64;
 pub use relation::{RelationField, RelationRow, relation_keys};
 pub use sample::Sample;
 pub use scope::Scope;
@@ -53,8 +58,8 @@ pub use significance::{
     Level, MannWhitney, WelchTest, benjamini_hochberg, hedges_g, hedges_g_pooled, stars,
 };
 pub use spatial::{
-    Census, NearestNeighbour, NearestNeighbourPoint, Ripley, RipleyPoint, RipleyTest, Window,
-    neighbour_distances,
+    Census, Enrichment, EnrichmentClass, EnrichmentPair, NearestNeighbour, NearestNeighbourPoint,
+    Ripley, RipleyPoint, RipleyTest, Window, neighbour_distances,
 };
 pub use table::{
     Aggregate, ColumnValues, Group, NEIGHBOUR_LABEL, Objects, Observation, Table, channel_keys,

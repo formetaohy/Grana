@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use super::grid::Grid;
 use super::{
-    Census, Envelope, Generator, MINIMUM_CELL, SIMULATION_SEED, Timed, Window, inside, radii,
-    sampled, simulations, uniform,
+    Census, Envelope, MINIMUM_CELL, SIMULATION_SEED, Timed, Window, inside, radii, sampled,
+    simulations, uniform,
 };
+use crate::random::SplitMix64;
 use crate::sample::Sample;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -355,7 +356,7 @@ fn envelope(
     simulations: u32,
 ) -> Envelope {
     let mut curves = Vec::with_capacity(simulations as usize);
-    let mut rng = Generator::new(SIMULATION_SEED);
+    let mut rng = SplitMix64::new(SIMULATION_SEED);
     for _ in 0..simulations {
         let mut sums = vec![0.0f64; radii.len()];
         let mut counts = vec![0u32; radii.len()];

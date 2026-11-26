@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Entry {
@@ -9,21 +9,43 @@ pub(super) struct Entry {
 
 const SEARCH_LIMIT: usize = 1 << 15;
 
-pub(super) fn pack(entries: &[Entry], node_count: usize) -> Vec<usize> {
+pub(super) struct Incidence {
+    incidents: Vec<Vec<u32>>,
+}
+
+impl Incidence {
+    pub(super) fn new(entries: &[Entry], node_count: usize) -> Self {
+        let mut incidents = vec![Vec::new(); node_count];
+        for (index, entry) in entries.iter().enumerate() {
+            if entry.weight <= 0.0 {
+                continue;
+            }
+            for node in &entry.nodes[..entry.count as usize] {
+                incidents[*node as usize].push(index as u32);
+            }
+        }
+        Self { incidents }
+    }
+
+    pub(super) fn pack(
+        &self,
+        entries: &[Entry],
+        members: &[usize],
+        node_count: usize,
+    ) -> Vec<usize> {
+        if members.is_empty() || node_count == 0 {
+            return Vec::new();
+        }
+        solve(entries, &self.incidents, members, node_count)
+    }
+}
+
+pub(super) fn components(entries: &[Entry], node_count: usize) -> Vec<Vec<usize>> {
     if entries.is_empty() || node_count == 0 {
         return Vec::new();
     }
-    let mut incident = vec![Vec::<u32>::new(); node_count];
-    for (index, entry) in entries.iter().enumerate() {
-        if entry.weight <= 0.0 {
-            continue;
-        }
-        for node in &entry.nodes[..entry.count as usize] {
-            incident[*node as usize].push(index as u32);
-        }
-    }
     let mut roots = (0..node_count).collect::<Vec<usize>>();
-    for entry in entries.iter().filter(|entry| entry.weight > 0.0) {
+    for entry in entries {
         let root = find(&mut roots, entry.nodes[0] as usize);
         for node in &entry.nodes[1..entry.count as usize] {
             let other = find(&mut roots, *node as usize);
@@ -32,20 +54,12 @@ pub(super) fn pack(entries: &[Entry], node_count: usize) -> Vec<usize> {
             }
         }
     }
-    let mut groups = HashMap::<usize, Vec<usize>>::new();
+    let mut groups = BTreeMap::<usize, Vec<usize>>::new();
     for (index, entry) in entries.iter().enumerate() {
-        if entry.weight <= 0.0 {
-            continue;
-        }
         let root = find(&mut roots, entry.nodes[0] as usize);
         groups.entry(root).or_default().push(index);
     }
-    let mut chosen = Vec::new();
-    for (_, members) in groups {
-        chosen.extend(component(entries, &incident, &members, node_count));
-    }
-    chosen.sort_unstable();
-    chosen
+    groups.into_values().collect()
 }
 
 fn find(roots: &mut [usize], index: usize) -> usize {
@@ -62,14 +76,15 @@ fn find(roots: &mut [usize], index: usize) -> usize {
     root
 }
 
-fn component(
+fn solve(
     entries: &[Entry],
-    incident: &[Vec<u32>],
+    incidents: &[Vec<u32>],
     members: &[usize],
     node_count: usize,
 ) -> Vec<usize> {
     let mut nodes = members
         .iter()
+        .filter(|index| entries[**index].weight > 0.0)
         .flat_map(|index| entries[*index].nodes[..entries[*index].count as usize].iter())
         .map(|node| *node as usize)
         .collect::<Vec<_>>();
@@ -77,7 +92,7 @@ fn component(
     nodes.dedup();
     let mut search = Search {
         entries,
-        incident,
+        incidents,
         nodes: &nodes,
         used: vec![false; node_count],
         blocked: vec![false; entries.len()],
@@ -110,6 +125,9 @@ fn greedy(entries: &[Entry], members: &[usize], node_count: usize) -> (Vec<usize
     let mut score = 0.0;
     for index in order {
         let entry = &entries[index];
+        if entry.weight <= 0.0 {
+            continue;
+        }
         if entry.nodes[..entry.count as usize]
             .iter()
             .any(|node| used[*node as usize])
@@ -127,7 +145,7 @@ fn greedy(entries: &[Entry], members: &[usize], node_count: usize) -> (Vec<usize
 
 struct Search<'a> {
     entries: &'a [Entry],
-    incident: &'a [Vec<u32>],
+    incidents: &'a [Vec<u32>],
     nodes: &'a [usize],
     used: Vec<bool>,
     blocked: Vec<bool>,
@@ -160,7 +178,7 @@ impl Search<'_> {
             return;
         }
         let node = self.nodes[position];
-        let incident = self.incident[node].clone();
+        let incident = self.incidents[node].clone();
         let mut marked = Vec::new();
         for index in &incident {
             let index = *index as usize;

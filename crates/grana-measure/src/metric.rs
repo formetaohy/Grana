@@ -421,10 +421,11 @@ pub enum TrackMeasurement {
     Displacement,
     Speed,
     Straightness,
+    Confidence,
 }
 
 impl TrackMeasurement {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Track,
         Self::Parent,
         Self::Daughters,
@@ -437,6 +438,7 @@ impl TrackMeasurement {
         Self::Displacement,
         Self::Speed,
         Self::Straightness,
+        Self::Confidence,
     ];
 
     pub fn index(self) -> u8 {
@@ -453,6 +455,7 @@ impl TrackMeasurement {
             Self::Displacement => 9,
             Self::Speed => 10,
             Self::Straightness => 11,
+            Self::Confidence => 12,
         }
     }
 
@@ -474,6 +477,7 @@ impl TrackMeasurement {
             Self::Displacement => "displacement",
             Self::Speed => "speed",
             Self::Straightness => "straightness",
+            Self::Confidence => "confidence",
         }
     }
 
@@ -508,6 +512,7 @@ impl TrackMeasurement {
             Self::Displacement => (length_key("displacement"), Unit::Micrometer, 3),
             Self::Speed => (speed_key("speed"), Unit::MicrometerPerSecond, 4),
             Self::Straightness => ("straightness".to_string(), Unit::Count, 4),
+            Self::Confidence => ("confidence".to_string(), Unit::Count, 3),
         }
     }
 
@@ -529,6 +534,7 @@ impl TrackMeasurement {
             Self::Straightness => statistics
                 .straightness()
                 .map_or(f32::NAN, |straightness| straightness as f32),
+            Self::Confidence => set.confidence(track).map_or(f32::NAN, |value| value as f32),
         }
     }
 }

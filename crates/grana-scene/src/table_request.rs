@@ -272,22 +272,37 @@ impl TableRequest {
             basis,
         )?;
         if let Some(classifier) = &classifier {
-            let column = match group {
-                Group::Object => Some((classifier.column(), classifier.scores(&table, &keys))),
-                Group::Track | Group::Timepoint | Group::Molecule => Some((
-                    classifier.aggregate_column(aggregate),
-                    aggregate_scores(
+            match group {
+                Group::Object => {
+                    let scores = classifier.scores(&table, &keys);
+                    let classes = scores
+                        .iter()
+                        .map(|score| {
+                            score.map(|value| {
+                                if value >= grana_measure::CLASS_THRESHOLD {
+                                    1.0
+                                } else {
+                                    0.0
+                                }
+                            })
+                        })
+                        .collect();
+                    table = table
+                        .with_column(classifier.column(), scores)
+                        .with_column(grana_measure::class_column(), classes);
+                }
+                Group::Track | Group::Timepoint | Group::Molecule => {
+                    let column = classifier.aggregate_column(aggregate);
+                    let values = aggregate_scores(
                         source.as_ref(),
                         tracks.as_deref(),
                         aggregate,
                         group,
                         &table,
                         classifier,
-                    ),
-                )),
-            };
-            if let Some((column, values)) = column {
-                table = table.with_column(column, values);
+                    );
+                    table = table.with_column(column, values);
+                }
             }
         }
         if let Some(coloc) = &coloc {

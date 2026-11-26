@@ -83,11 +83,40 @@ pub enum Link {
     Merge,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolvedConfidence(f64);
+
+impl SolvedConfidence {
+    pub fn new(value: f64) -> Option<Self> {
+        (value.is_finite() && value > 0.0 && value <= 1.0).then_some(Self(value))
+    }
+
+    pub fn value(self) -> f64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LinkConfidence {
+    Solved(SolvedConfidence),
+    Manual,
+}
+
+impl LinkConfidence {
+    pub fn value(self) -> Option<f64> {
+        match self {
+            Self::Solved(confidence) => Some(confidence.value()),
+            Self::Manual => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrackLink {
     parent: TrackId,
     child: TrackId,
     kind: Link,
+    confidence: LinkConfidence,
 }
 
 impl TrackLink {
@@ -97,7 +126,19 @@ impl TrackLink {
             parent,
             child,
             kind,
+            confidence: LinkConfidence::Manual,
         }
+    }
+
+    pub fn solved(
+        parent: TrackId,
+        child: TrackId,
+        kind: Link,
+        confidence: SolvedConfidence,
+    ) -> Self {
+        let mut link = Self::new(parent, child, kind);
+        link.confidence = LinkConfidence::Solved(confidence);
+        link
     }
 
     pub fn parent(self) -> TrackId {
@@ -110,6 +151,18 @@ impl TrackLink {
 
     pub fn kind(self) -> Link {
         self.kind
+    }
+
+    pub fn confidence(self) -> LinkConfidence {
+        self.confidence
+    }
+
+    fn reidentified(self, parent: TrackId, child: TrackId) -> Self {
+        Self {
+            parent,
+            child,
+            ..self
+        }
     }
 }
 
@@ -406,6 +459,26 @@ impl TrackSet {
         &self.links
     }
 
+    pub fn uncertain(&self, below: f64) -> impl Iterator<Item = TrackLink> + '_ {
+        assert!(
+            SolvedConfidence::new(below).is_some(),
+            "an uncertainty threshold is a probability"
+        );
+        self.links
+            .iter()
+            .copied()
+            .filter(move |link| link.confidence().value().is_some_and(|value| value < below))
+    }
+
+    pub fn confidence(&self, id: TrackId) -> Option<f64> {
+        let mut weakest = None;
+        for link in self.parents(id).chain(self.child_links(id)) {
+            let value = link.confidence().value()?;
+            weakest = Some(weakest.map_or(value, |held: f64| held.min(value)));
+        }
+        weakest
+    }
+
     pub fn divisions(&self) -> usize {
         self.divisions
     }
@@ -464,14 +537,13 @@ impl TrackSet {
             .links
             .iter()
             .map(|link| {
-                TrackLink::new(
+                link.reidentified(
                     *rename
                         .get(&link.parent())
                         .expect("a track link joins the tracks of its set"),
                     *rename
                         .get(&link.child())
                         .expect("a track link joins the tracks of its set"),
-                    link.kind(),
                 )
             })
             .collect();
@@ -772,14 +844,13 @@ impl TrackSet {
         );
         let mut links = self.links.clone();
         links.extend(other.links.iter().map(|link| {
-            TrackLink::new(
+            link.reidentified(
                 *rename
                     .get(&link.parent())
                     .expect("a track link joins the tracks of its set"),
                 *rename
                     .get(&link.child())
                     .expect("a track link joins the tracks of its set"),
-                link.kind(),
             )
         }));
         Self::assembled(self.frame_interval, tracks, links, source)

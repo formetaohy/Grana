@@ -5,11 +5,18 @@ use crate::table::{Objects, Table};
 
 pub const SCORE_KEY: &str = "classifier_score";
 pub const SCORE_LABEL: &str = "classifier";
+pub const CLASS_KEY: &str = "class";
+pub const CLASS_LABEL: &str = "class";
+pub const CLASS_THRESHOLD: f32 = 0.5;
 const REGULARIZATION: f64 = 0.05;
 const ITERATIONS: usize = 32;
 const MINIMUM_SAMPLES: usize = 2;
 const FOLDS: usize = 5;
 const SCALE_FLOOR: f64 = 1.0e-6;
+
+pub fn class_column() -> Column {
+    Column::new(CLASS_LABEL, CLASS_KEY, Unit::Count, 0).possibly_absent()
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Classifier {

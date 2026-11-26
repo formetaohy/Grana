@@ -9,7 +9,7 @@ use grana_render::{
 use grana_volume::{
     BrickCoord, BrickGrid, BrickRequest, Calibration, Channel, ChannelInfo, ChannelSet, Clip,
     Damage, Extent, Intensity, Level, PackedBrick, Pyramid, Region, Spacing, Statistics, Volume,
-    VoxelData, VoxelFormat,
+    VolumeSeries, VoxelData, VoxelFormat,
 };
 
 use crate::support::{
@@ -394,6 +394,88 @@ fn streams_and_shades_two_channels() {
         drift < 0.5,
         "the converged frame keeps drifting instead of converging: {drift:.3}"
     );
+}
+
+#[test]
+fn revisits_a_hollow_frame_without_asking_for_its_bricks_again() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = Extent::new(64, 64, 32);
+    let spacing = Spacing::new(0.1, 0.1, 0.2);
+    let blank = spheres(extent, spacing, &[], 60_000);
+    let count = 12u32;
+    let frames = (0..count).map(|_| blank.clone()).collect::<Vec<_>>();
+    let pyramid = VolumeSeries::new(frames.clone(), 1.0).pyramid().clone();
+    let transfers = pyramid
+        .channels()
+        .iter()
+        .map(|channel| TransferFunction::tinted(channel.tint()))
+        .collect::<Vec<_>>();
+    let rows = channels(&pyramid, &transfers);
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(frames[0].world_extent()), 1.0);
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &rows,
+        shading: Shading::default(),
+        step_scale: 0.5,
+        layers: &[],
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let first = stream_frame(&gpu, &mut renderer, &view, &frames, 0);
+    assert!(
+        first > 0,
+        "the first look at an empty frame reads its bricks"
+    );
+    for time in 1..count {
+        stream_frame(&gpu, &mut renderer, &view, &frames, time);
+    }
+    let again = stream_frame(&gpu, &mut renderer, &view, &frames, 0);
+    assert_eq!(
+        again, 0,
+        "a hollow frame asked for {again} bricks again when the view returned to it"
+    );
+}
+
+fn stream_frame(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    view: &View<'_>,
+    frames: &[Volume],
+    time: u32,
+) -> usize {
+    let mut requested = 0;
+    for _ in 0..8 {
+        let info = renderer
+            .draw(
+                gpu.device(),
+                gpu.queue(),
+                Frame {
+                    time,
+                    ..frame(view)
+                },
+            )
+            .expect("the frame draws");
+        assert!(info.drawn, "the frame draws");
+        if let Some(requests) = next_demand(gpu, renderer) {
+            requested += requests.volume.len();
+            renderer.upload(&pack(&frames[requests.time as usize], &requests.volume));
+        }
+    }
+    requested
 }
 
 fn brick_region(pyramid: &Pyramid, level: usize, coord: BrickCoord) -> Region {

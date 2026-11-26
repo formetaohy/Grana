@@ -112,6 +112,11 @@ fn plot_page(
             grana_i18n::measure::y_nearest(language).to_string(),
             grana_i18n::measure::x_radius(language).to_string(),
         ),
+        Plot::Enrichment(_) => (
+            grana_i18n::measure::enrichment_title(language).to_string(),
+            grana_i18n::measure::y_index_class(language).to_string(),
+            grana_i18n::measure::x_neighbour_class(language).to_string(),
+        ),
     };
     let target = measure
         .target()
@@ -135,6 +140,7 @@ fn plot_page(
             y: range(measure.filters(), trend.column()),
         },
         Plot::Ripley(_) | Plot::NearestNeighbour(_) => Gates::default(),
+        Plot::Enrichment(_) => Gates::default(),
     };
     Some(Chart {
         heading: Heading::new(title, y, x)
@@ -155,6 +161,7 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
         }
         Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
         Plot::Ripley(_) | Plot::NearestNeighbour(_) => grana_i18n::measure::no_spatial(language),
+        Plot::Enrichment(_) => grana_i18n::measure::no_classes(language),
     }
 }
 
@@ -237,5 +244,6 @@ fn caption(plot: &Plot, table: &Table, language: Language, target: Option<&str>)
         }
         Plot::Ripley(ripley) => crate::plot::ripley_caption(language, ripley, target),
         Plot::NearestNeighbour(nearest) => crate::plot::nearest_caption(language, nearest, target),
+        Plot::Enrichment(enrichment) => crate::plot::enrichment_caption(language, enrichment),
     }
 }

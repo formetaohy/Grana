@@ -1,12 +1,16 @@
+mod enrichment;
 mod grid;
 mod nearest;
 mod ripley;
 
+pub use enrichment::{Enrichment, EnrichmentClass, EnrichmentPair};
+pub(crate) use enrichment::{EnrichmentPoint, enrichment};
 pub(crate) use nearest::nearest_neighbour;
 pub use nearest::{NearestNeighbour, NearestNeighbourPoint};
 pub(crate) use ripley::ripley;
 pub use ripley::{Ripley, RipleyPoint, RipleyTest};
 
+use crate::random::SplitMix64;
 use crate::sample::Sample;
 use grid::Grid;
 
@@ -26,7 +30,7 @@ const SIMULATION_VISITS: u64 = 400_000_000;
 
 const VISIT_NEIGHBOURS: u64 = 27;
 
-const SIMULATION_SEED: u64 = 0x5153_5441_5449_5354;
+pub(crate) const SIMULATION_SEED: u64 = 0x5153_5441_5449_5354;
 
 pub(crate) type Timed = (u32, Vec<[f32; 3]>);
 
@@ -168,7 +172,7 @@ pub(crate) fn radii(window: Window) -> Option<(Vec<f32>, f32)> {
     Some((radii, step))
 }
 
-pub(crate) fn uniform(rng: &mut Generator, window: Window, count: usize) -> Vec<[f32; 3]> {
+pub(crate) fn uniform(rng: &mut SplitMix64, window: Window, count: usize) -> Vec<[f32; 3]> {
     (0..count)
         .map(|_| {
             [
@@ -184,25 +188,6 @@ pub(crate) fn simulations(points: u64) -> u32 {
     let visits = VISIT_NEIGHBOURS.saturating_mul(points.max(1));
     let allowed = (SIMULATION_VISITS / visits).max(1) as u32;
     allowed.clamp(SIMULATION_MINIMUM, SIMULATIONS)
-}
-
-pub(crate) struct Generator {
-    state: u64,
-}
-
-impl Generator {
-    pub(crate) fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    fn unit(&mut self) -> f32 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut value = self.state;
-        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        value = value ^ (value >> 31);
-        (value >> 40) as f32 / 16_777_216.0
-    }
 }
 
 pub(crate) struct Envelope {

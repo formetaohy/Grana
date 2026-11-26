@@ -304,7 +304,9 @@ impl Session {
         }
         let stem = match self.measure.view() {
             grana_measure::MeasureView::Ripley => "ripley",
-            _ => "nearest",
+            grana_measure::MeasureView::NearestNeighbour => "nearest",
+            grana_measure::MeasureView::Enrichment => "cozi",
+            _ => return,
         };
         let file_name = format!(
             "{}-{}-{stem}.csv",
@@ -325,6 +327,7 @@ impl Session {
         let text = match self.measure.plot() {
             Some(grana_measure::Plot::Ripley(ripley)) => ripley.table(),
             Some(grana_measure::Plot::NearestNeighbour(nearest)) => nearest.table(),
+            Some(grana_measure::Plot::Enrichment(enrichment)) => enrichment.table(),
             _ => return,
         };
         self.message = match grana_file::write(&path, text.as_bytes()) {

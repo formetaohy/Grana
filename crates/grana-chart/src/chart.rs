@@ -126,6 +126,9 @@ impl View<'_> {
                 &self.decor,
                 empty,
             ),
+            Plot::Enrichment(enrichment) => {
+                crate::enrichment::paint(painter, rect, enrichment, &style, empty)
+            }
         }
     }
 }

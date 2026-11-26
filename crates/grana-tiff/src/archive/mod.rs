@@ -292,9 +292,17 @@ impl Sink {
                 .collect::<Result<Vec<_>, String>>()
                 .map_err(|detail| Error::write(&self.path, detail))?;
             for bytes in blocks {
-                offsets.push(self.cursor);
-                counts.push(bytes.len() as u64);
-                self.write(&bytes)?;
+                match bytes {
+                    Some(bytes) => {
+                        offsets.push(self.cursor);
+                        counts.push(bytes.len() as u64);
+                        self.write(&bytes)?;
+                    }
+                    None => {
+                        offsets.push(0);
+                        counts.push(0);
+                    }
+                }
                 self.done += 1;
                 progress(self.done, self.total);
             }

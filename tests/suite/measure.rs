@@ -811,3 +811,173 @@ fn pairs_a_second_object_set_for_spatial_statistics() {
 fn lone_spot(spot: Spot) -> SpotSet {
     spot_set(0, vec![spot], IntensityTable::new(1, vec![None]))
 }
+
+#[test]
+fn measures_multi_class_neighbourhood_enrichment() {
+    let layout = [
+        ([0.50, 0.50, 1.00], 0.0),
+        ([1.30, 0.50, 1.00], 0.0),
+        ([0.90, 0.90, 1.00], 0.0),
+        ([0.50, 1.30, 1.00], 0.0),
+        ([1.30, 1.30, 1.00], 0.0),
+        ([0.90, 0.50, 1.00], 1.0),
+        ([0.50, 0.90, 1.00], 1.0),
+        ([1.30, 0.90, 1.00], 1.0),
+        ([0.90, 1.30, 1.00], 1.0),
+        ([1.45, 1.45, 1.48], 2.0),
+        ([1.40, 1.45, 1.48], 2.0),
+        ([1.45, 1.40, 1.48], 2.0),
+        ([1.45, 1.45, 1.50], 2.0),
+    ];
+    let objects = spot_set(
+        0,
+        layout
+            .iter()
+            .map(|(position, class)| {
+                Spot::new(*position, 0.02, if *class == 2.0 { 0.8 } else { 0.2 })
+            })
+            .collect(),
+        IntensityTable::new(1, vec![None; layout.len()]),
+    );
+    let source = measure_source(Kind::Spots, &[CHANNEL], [objects.clone()]);
+    let window = Window::new([0.0; 3], [2.0; 3]).expect("the wide cube is a window");
+    let unclassified = Table::build(
+        Arc::clone(&source),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the unclassified table builds");
+    assert!(
+        unclassified
+            .plot(
+                MeasureView::Enrichment,
+                [0, 0],
+                &Mask::all(unclassified.rows()),
+                window,
+                None,
+            )
+            .is_none(),
+        "a table without a class column holds no neighbourhood enrichment"
+    );
+    let table = Table::build(source, None, 1.0, Group::Object, Aggregate::MEAN, None)
+        .expect("the classified table builds")
+        .with_column(
+            grana_measure::class_column(),
+            layout
+                .iter()
+                .map(|(_, class)| grana_measure::Measured::new(*class, 1))
+                .collect(),
+        );
+    let mask = Mask::all(table.rows());
+    let plot = table
+        .plot(MeasureView::Enrichment, [0, 0], &mask, window, None)
+        .expect("the classified table holds neighbourhood enrichment");
+    let Plot::Enrichment(enrichment) = plot else {
+        panic!("the enrichment view plots a matrix");
+    };
+    let codes = enrichment
+        .classes()
+        .iter()
+        .map(grana_measure::EnrichmentClass::code)
+        .collect::<Vec<_>>();
+    assert_eq!(codes, vec![0, 1, 2]);
+    assert_eq!(enrichment.classes()[0].index_cells(), 5);
+    assert_eq!(enrichment.classes()[1].index_cells(), 4);
+    assert_eq!(enrichment.classes()[2].index_cells(), 4);
+    assert_eq!(enrichment.radius(), 0.5);
+    assert_eq!(enrichment.permutations(), 199);
+    let census = enrichment.census();
+    assert_eq!(census.frames(), 1);
+    assert_eq!(census.valid(), 1);
+    assert_eq!(census.single(), 0);
+    assert_eq!(census.objects(), 13);
+    assert_eq!(census.partners(), 36);
+    assert_eq!(census.sampled(), 13);
+    let observed = [[0.0, 2.4, 0.0], [3.0, 0.0, 0.0], [0.0, 0.0, 3.0]];
+    let ccr = [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+    for index in 0..codes.len() {
+        for neighbour in 0..codes.len() {
+            let pair = enrichment.pair(index, neighbour);
+            assert_eq!(pair.index(), index);
+            assert_eq!(pair.neighbour(), neighbour);
+            assert!(
+                (pair.observed() - observed[index][neighbour]).abs() < 1.0e-12,
+                "S({index}, {neighbour}) reads {} instead of {}",
+                pair.observed(),
+                observed[index][neighbour]
+            );
+            assert!(
+                (pair.ccr() - ccr[index][neighbour]).abs() < 1.0e-12,
+                "CCR({index}, {neighbour}) reads {} instead of {}",
+                pair.ccr(),
+                ccr[index][neighbour]
+            );
+            assert!(
+                pair.q() < 0.05,
+                "the q value of ({index}, {neighbour}) stays significant"
+            );
+            assert!(pair.q() >= pair.p());
+            assert!(pair.significant());
+        }
+    }
+    assert_eq!(enrichment.significant(), codes.len() * codes.len());
+    for (index, neighbour) in [(0, 1), (1, 0), (2, 2)] {
+        assert!(
+            enrichment.pair(index, neighbour).z() > 2.0,
+            "the enrichment of ({index}, {neighbour}) is positive"
+        );
+    }
+    for (index, neighbour) in [(0, 0), (0, 2), (1, 1), (1, 2), (2, 0), (2, 1)] {
+        assert!(
+            enrichment.pair(index, neighbour).z() < -2.0,
+            "the depletion of ({index}, {neighbour}) is negative"
+        );
+    }
+    let text = enrichment.table();
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 10);
+    assert_eq!(
+        lines[0],
+        "class_i,class_j,s_obs,mean,sd,z,q,ccr,significant"
+    );
+    assert!(lines[1].starts_with("0,0,0.0000,"));
+    assert!(lines[2].starts_with("0,1,2.4000,"));
+    assert!(lines[4].starts_with("1,0,3.0000,"));
+    assert!(lines[9].starts_with("2,2,3.0000,"));
+    assert!(lines[1..].iter().all(|line| line.ends_with(",1")));
+    let volume = spheres(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0), &[], 0);
+    let mut scene = Scene::new(Dataset::synthetic("enrichment", volume.pyramid()));
+    let set = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(set, 0, ObjectFrame::from_spots(objects));
+    scene
+        .train_classifier(
+            set,
+            &[grana_measure::Measurement::Contrast],
+            &(0..9).collect::<Vec<_>>(),
+        )
+        .expect("the contrast separates the two classes");
+    let measured = scene
+        .table(set, Group::Object, Aggregate::MEAN)
+        .expect("the classified set measures its table");
+    assert!(measured.column(grana_measure::CLASS_KEY).is_some());
+    let Plot::Enrichment(scene_enrichment) = measured
+        .plot(
+            MeasureView::Enrichment,
+            [0, 0],
+            &Mask::all(measured.rows()),
+            window,
+            None,
+        )
+        .expect("the classifier writes a class column")
+    else {
+        panic!("the classified set plots an enrichment matrix");
+    };
+    assert_eq!(scene_enrichment.classes().len(), 2);
+    let repeated = table
+        .plot(MeasureView::Enrichment, [0, 0], &mask, window, None)
+        .expect("the enrichment repeats");
+    assert_eq!(Plot::Enrichment(enrichment), repeated);
+}

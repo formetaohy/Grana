@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use grana_measure::ColocSignificance;
+use grana_measure::{ColocSignificance, SplitMix64};
 
 use crate::schedule;
 
@@ -164,30 +164,8 @@ impl TestWorker {
     }
 }
 
-struct SplitMix64 {
-    state: u64,
-}
-
-impl SplitMix64 {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    fn next(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut value = self.state;
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        value ^ (value >> 31)
-    }
-
-    fn below(&mut self, bound: usize) -> usize {
-        (self.next() % bound as u64) as usize
-    }
-}
-
 fn randomization_seed(base: u64, randomization: u32) -> u64 {
-    SplitMix64::new(base ^ (u64::from(randomization) << 1 | 1)).next()
+    SplitMix64::new(base ^ (u64::from(randomization) << 1 | 1)).next_u64()
 }
 
 fn shuffle(order: &mut [u32], rng: &mut SplitMix64) {

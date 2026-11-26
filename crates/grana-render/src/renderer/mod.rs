@@ -640,7 +640,14 @@ impl Renderer {
             splats: self.demand.splats || demand.splats,
             ..demand
         };
-        let split = budget::split(self.total, self.ceiling, size, demand, self.splat_budget())?;
+        let split = budget::split(
+            self.total,
+            self.ceiling,
+            size,
+            self.demand,
+            self.targets.bytes(),
+            self.splat_budget(),
+        )?;
         self.frames = split.frames;
         self.settle()?;
         if split
@@ -761,6 +768,7 @@ impl Renderer {
             self.ceiling,
             size,
             self.demand,
+            0,
             self.splat_budget(),
         )?;
         self.frames = split.frames;
@@ -804,6 +812,10 @@ impl Renderer {
         }
         let info = self.render(device, queue, &mut target, frame, shot);
         self.targets.put(target);
+        assert!(
+            self.targets.bytes() <= self.frames,
+            "the frame charge covers the frame target the renderer holds"
+        );
         info
     }
 
@@ -923,7 +935,7 @@ impl Renderer {
             payload,
             prefetched,
             prefetch_hits,
-            frames: self.targets.bytes(),
+            frames: self.frames,
             splats: self.splats.as_ref().map_or(0, SplatPasses::bytes),
             splat_instances: self.splats.as_ref().map_or(0, SplatPasses::instances),
             residency,

@@ -101,6 +101,18 @@ impl Image {
         }
     }
 
+    pub fn empty(
+        &self,
+        time: u32,
+        level: usize,
+        coord: grana_volume::BrickCoord,
+    ) -> Result<Option<NoData>, Error> {
+        match &self.kind {
+            Kind::Group(image) => image.empty(time, level, coord),
+            Kind::Scene(_) => Ok(None),
+        }
+    }
+
     pub fn name(&self) -> &str {
         match &self.kind {
             Kind::Group(image) => image.name(),
@@ -472,6 +484,62 @@ impl GroupImage {
 
     pub fn pyramid(&self) -> &Pyramid {
         &self.pyramid
+    }
+
+    fn empty(
+        &self,
+        time: u32,
+        level: usize,
+        coord: grana_volume::BrickCoord,
+    ) -> Result<Option<NoData>, Error> {
+        if self.root.path().is_none() {
+            return Ok(None);
+        }
+        let Some(held) = self.levels.get(level) else {
+            return Ok(None);
+        };
+        if time >= held.layout.frame_count() {
+            return Ok(None);
+        }
+        let grid = grana_volume::BrickGrid::new(held.layout.extent);
+        let counts = grid.counts();
+        if coord.x() >= counts[0] || coord.y() >= counts[1] || coord.z() >= counts[2] {
+            return Ok(None);
+        }
+        let ranges = grid.padded_range(coord);
+        let storage = held.array.storage();
+        for channel in 0..held.layout.channel_count() {
+            let subset = ArraySubset::new_with_ranges(&held.layout.ranges(
+                u64::from(time),
+                channel,
+                ranges[0].clone(),
+                ranges[1].clone(),
+                ranges[2].clone(),
+            ));
+            let Some(chunks) = held
+                .array
+                .chunks_in_array_subset(&subset)
+                .map_err(|error| Error::Read {
+                    array: held.path.clone(),
+                    detail: error.to_string(),
+                })?
+            else {
+                return Ok(None);
+            };
+            for indices in chunks.indices() {
+                let present =
+                    storage
+                        .size_key(&held.array.chunk_key(&indices))
+                        .map_err(|error| Error::Read {
+                            array: held.path.clone(),
+                            detail: error.to_string(),
+                        })?;
+                if present.is_some() {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(held.no_data))
     }
 
     pub fn read_region(

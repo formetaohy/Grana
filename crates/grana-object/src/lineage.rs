@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::NodeRef;
 use crate::identity::{ObjectId, TrackId, TrackIdSource, TrackIds};
-use crate::{Link, Track, TrackLink, TrackNode, TrackSet};
+use crate::{Link, LinkConfidence, Track, TrackLink, TrackNode, TrackSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -38,11 +38,12 @@ struct Detection {
     centroid: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Edge {
     source: usize,
     target: usize,
     kind: Kind,
+    confidence: LinkConfidence,
 }
 
 struct Adjacency {
@@ -92,6 +93,7 @@ impl Lineage {
                         source: start + index - 1,
                         target: start + index,
                         kind: Kind::Continue,
+                        confidence: LinkConfidence::Manual,
                     });
                 }
             }
@@ -111,6 +113,7 @@ impl Lineage {
                     .expect("the parent track exists")]],
                 target: remap[first[set.position(link.child()).expect("the child track exists")]],
                 kind: Kind::of(link.kind()),
+                confidence: link.confidence(),
             });
         }
         Self {
@@ -161,6 +164,7 @@ impl Lineage {
                 source,
                 target,
                 kind,
+                confidence: LinkConfidence::Manual,
             });
         }
         let mut lineage = Self {
@@ -227,6 +231,7 @@ impl Lineage {
             source,
             target,
             kind,
+            confidence: LinkConfidence::Manual,
         });
         self.normalize();
     }
@@ -251,11 +256,13 @@ impl Lineage {
             source: parent,
             target: first,
             kind: Kind::Division,
+            confidence: LinkConfidence::Manual,
         });
         self.edges.push(Edge {
             source: parent,
             target: second,
             kind: Kind::Division,
+            confidence: LinkConfidence::Manual,
         });
         self.normalize();
     }
@@ -296,11 +303,13 @@ impl Lineage {
             source: first,
             target: child,
             kind: Kind::Merge,
+            confidence: LinkConfidence::Manual,
         });
         self.edges.push(Edge {
             source: second,
             target: child,
             kind: Kind::Merge,
+            confidence: LinkConfidence::Manual,
         });
         self.normalize();
     }
@@ -332,6 +341,7 @@ impl Lineage {
             source: parent,
             target: child,
             kind: Kind::Gap,
+            confidence: LinkConfidence::Manual,
         });
         self.normalize();
     }
@@ -374,6 +384,7 @@ impl Lineage {
                     source,
                     target,
                     kind: edge.kind,
+                    confidence: edge.confidence,
                 })
             })
             .collect();
@@ -449,11 +460,13 @@ impl Lineage {
             let Some(kind) = edge.kind.link() else {
                 continue;
             };
-            links.push(TrackLink::new(
-                ids[chain_of[edge.source]],
-                ids[chain_of[edge.target]],
-                kind,
-            ));
+            let (parent, child) = (ids[chain_of[edge.source]], ids[chain_of[edge.target]]);
+            links.push(match edge.confidence {
+                LinkConfidence::Solved(confidence) => {
+                    TrackLink::solved(parent, child, kind, confidence)
+                }
+                LinkConfidence::Manual => TrackLink::new(parent, child, kind),
+            });
         }
         TrackSet::assembled(frame_interval, tracks, links, source.clone())
     }
@@ -498,12 +511,18 @@ impl Lineage {
         self.edges.dedup_by_key(|edge| (edge.source, edge.target));
         let adjacency = self.adjacency();
         for edge in &mut self.edges {
-            if adjacency.outgoing[edge.source].len() == 2 {
-                edge.kind = Kind::Division;
+            let kind = if adjacency.outgoing[edge.source].len() == 2 {
+                Kind::Division
             } else if adjacency.incoming[edge.target].len() == 2 {
-                edge.kind = Kind::Merge;
-            } else if matches!(edge.kind, Kind::Division | Kind::Merge) {
-                edge.kind = Kind::Gap;
+                Kind::Merge
+            } else if edge.kind == Kind::Continue {
+                Kind::Continue
+            } else {
+                Kind::Gap
+            };
+            if edge.kind != kind {
+                edge.kind = kind;
+                edge.confidence = LinkConfidence::Manual;
             }
         }
     }

@@ -129,11 +129,12 @@ pub(crate) fn split(
     ceiling: u64,
     size: [u32; 2],
     demand: Demand,
+    held: u64,
     splats: u64,
 ) -> Result<Split, String> {
     assert!(total > 0, "a renderer needs a positive texture budget");
     assert!(ceiling > 0, "a renderer keeps a positive residency ceiling");
-    let single = Frames::of(size, demand).bytes();
+    let single = Frames::of(size, demand).bytes().max(held);
     if single.saturating_add(splats) >= total {
         return Err(format!(
             "a {} × {} view needs {:.1} MiB of frame targets and {:.1} MiB of splats, above the {:.1} MiB render budget; shorten the window or close running analyses",

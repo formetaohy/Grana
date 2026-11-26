@@ -281,7 +281,7 @@ impl Measure {
         }
         let table = Arc::clone(self.table.as_ref()?);
         let mask = self.fresh_rows()?.admitted();
-        let paired = match (self.view.spatial(), self.target) {
+        let paired = match (self.view.targeted(), self.target) {
             (true, Some(_)) => Some(Arc::clone(self.target_table.as_ref()?)),
             _ => None,
         };
@@ -619,7 +619,7 @@ impl Measure {
 
     fn target_request(&mut self, scene: &Scene) -> Option<TableRequest> {
         let target = self.target?;
-        if !self.view.spatial() {
+        if !self.view.targeted() {
             return None;
         }
         if scene.objects.get(target).is_none() {

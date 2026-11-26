@@ -5,8 +5,10 @@ mod scatter;
 mod summary;
 mod trend;
 
+use std::collections::BTreeMap;
+
 use crate::mask::Mask;
-use crate::spatial::{NearestNeighbour, Ripley, Window};
+use crate::spatial::{Enrichment, NearestNeighbour, Ripley, Window};
 use crate::table::Table;
 
 pub use distribution::{DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries};
@@ -24,10 +26,11 @@ pub enum MeasureView {
     Trend,
     Ripley,
     NearestNeighbour,
+    Enrichment,
 }
 
 impl MeasureView {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Table,
         Self::Histogram,
         Self::Scatter,
@@ -35,6 +38,7 @@ impl MeasureView {
         Self::Trend,
         Self::Ripley,
         Self::NearestNeighbour,
+        Self::Enrichment,
     ];
 
     pub fn index(self) -> u8 {
@@ -46,6 +50,7 @@ impl MeasureView {
             Self::Trend => 4,
             Self::Ripley => 5,
             Self::NearestNeighbour => 6,
+            Self::Enrichment => 7,
         }
     }
 
@@ -62,6 +67,7 @@ impl MeasureView {
             Self::Trend => "trend",
             Self::Ripley => "ripley",
             Self::NearestNeighbour => "nearest-neighbour",
+            Self::Enrichment => "enrichment",
         }
     }
 
@@ -77,11 +83,19 @@ impl MeasureView {
             | Self::Distribution
             | Self::Trend
             | Self::Ripley
-            | Self::NearestNeighbour => Some(self),
+            | Self::NearestNeighbour
+            | Self::Enrichment => Some(self),
         }
     }
 
     pub fn spatial(self) -> bool {
+        matches!(
+            self,
+            Self::Ripley | Self::NearestNeighbour | Self::Enrichment
+        )
+    }
+
+    pub fn targeted(self) -> bool {
         matches!(self, Self::Ripley | Self::NearestNeighbour)
     }
 }
@@ -118,6 +132,7 @@ pub enum Plot {
     Trend(Trend),
     Ripley(Ripley),
     NearestNeighbour(NearestNeighbour),
+    Enrichment(Enrichment),
 }
 
 impl Plot {
@@ -129,6 +144,7 @@ impl Plot {
             Self::Trend(_) => MeasureView::Trend,
             Self::Ripley(_) => MeasureView::Ripley,
             Self::NearestNeighbour(_) => MeasureView::NearestNeighbour,
+            Self::Enrichment(_) => MeasureView::Enrichment,
         }
     }
 }
@@ -176,6 +192,51 @@ impl Table {
                     &source,
                     target.as_deref(),
                     window,
+                )?))
+            }
+            MeasureView::Enrichment => {
+                if self.group() != crate::table::Group::Object {
+                    return None;
+                }
+                let column = self.column(crate::classifier::CLASS_KEY)?;
+                let values = self.materialize(column);
+                let mut frames = BTreeMap::<u32, Vec<crate::spatial::EnrichmentPoint>>::new();
+                for row in 0..self.rows() {
+                    if !gated.contains(row) {
+                        continue;
+                    }
+                    let Some(class) = values[row].present() else {
+                        continue;
+                    };
+                    assert!(
+                        class.is_finite()
+                            && (0.0..=16_777_216.0).contains(&class)
+                            && class.fract() == 0.0,
+                        "a class column holds non-negative integer class codes"
+                    );
+                    let Some(position) = self.position(row) else {
+                        continue;
+                    };
+                    let Some(time) = self.observation(row).time() else {
+                        continue;
+                    };
+                    frames
+                        .entry(time)
+                        .or_default()
+                        .push(crate::spatial::EnrichmentPoint::new(position, class as u32));
+                }
+                let count = frames
+                    .values()
+                    .map(|points| points.len() as u64)
+                    .sum::<u64>();
+                let frames = frames.into_iter().collect::<Vec<_>>();
+                let radius = *crate::spatial::radii(window)?.0.last()?;
+                Some(Plot::Enrichment(crate::spatial::enrichment(
+                    &frames,
+                    window,
+                    radius,
+                    crate::spatial::simulations(count),
+                    crate::spatial::SIMULATION_SEED,
                 )?))
             }
         }

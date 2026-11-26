@@ -17,10 +17,11 @@ use grana_measure::{
     ColocSettings, ColocSignificance, ColocThresholds, ObjectColoc, ObjectColocValue,
 };
 use grana_object::{
-    CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link, MaskEdit,
-    MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair, RelationReading,
-    SampleStatistics, Spot, SpotSet, SurfaceSet, SurfaceStatistics, SurfaceTopology, Track,
-    TrackId, TrackIds, TrackLink, TrackNode, TrackSet, Truncation,
+    CellSet, FilamentSet, FilamentStatistics, FilamentTopology, IntensityTable, Link,
+    LinkConfidence, MaskEdit, MaskMode, MaskTool, ObjectId, ObjectIds, RelationFrame, RelationPair,
+    RelationReading, SampleStatistics, SolvedConfidence, Spot, SpotSet, SurfaceSet,
+    SurfaceStatistics, SurfaceTopology, Track, TrackId, TrackIds, TrackLink, TrackNode, TrackSet,
+    Truncation,
 };
 use grana_optics::{Kernel, MeasuredPsf, Psf, PsfParams};
 use grana_profile::{Line, Profile, Sample};
@@ -1397,10 +1398,20 @@ impl Decode for TrackLink {
             2 => Link::Merge,
             _ => return Err(FAULT_VALUE),
         };
+        let confidence = match reader.u8()? {
+            0 => LinkConfidence::Manual,
+            1 => LinkConfidence::Solved(SolvedConfidence::new(reader.f64()?).ok_or(FAULT_VALUE)?),
+            _ => return Err(FAULT_VALUE),
+        };
         if parent == child {
             return Err(FAULT_SHAPE);
         }
-        Ok(Self::new(parent, child, kind))
+        Ok(match confidence {
+            LinkConfidence::Solved(confidence) => {
+                TrackLink::solved(parent, child, kind, confidence)
+            }
+            LinkConfidence::Manual => TrackLink::new(parent, child, kind),
+        })
     }
 }
 
@@ -2470,4 +2481,53 @@ fn decode_ids(reader: &mut Reader<'_>) -> Result<ObjectIds, &'static str> {
         ids.push(decode_id(reader)?);
     }
     ObjectIds::checked(ids).ok_or(FAULT_VALUE)
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::atomic::AtomicBool;
+
+    use grana_codec::Encoder;
+    use grana_object::{Link, SolvedConfidence, TrackId, TrackLink};
+
+    use crate::codec::{Decode, Encode, Reader};
+
+    fn round_trip(link: TrackLink) -> TrackLink {
+        let mut bytes = Vec::new();
+        let mut encoder = Encoder::memory(&mut bytes);
+        link.encode(&mut encoder);
+        let length = bytes.len();
+        let mut source = bytes.as_slice();
+        let cancel = AtomicBool::new(false);
+        let mut report = |_: usize| {};
+        let mut reader = Reader::new(
+            &mut source,
+            length,
+            grana_store::SpillStore::memory(),
+            &cancel,
+            &mut report,
+        );
+        let decoded = TrackLink::decode(&mut reader).expect("a track link reads back");
+        assert_eq!(
+            reader.remaining(),
+            0,
+            "a track link spends its whole record"
+        );
+        decoded
+    }
+
+    #[test]
+    fn keeps_a_link_confidence_through_the_codec() {
+        let parent = TrackId::FIRST;
+        let child = parent.after(1).expect("the second track id exists");
+        let solved = TrackLink::solved(
+            parent,
+            child,
+            Link::Division,
+            SolvedConfidence::new(0.8125).expect("a probability"),
+        );
+        assert_eq!(round_trip(solved), solved);
+        let manual = TrackLink::new(parent, child, Link::Merge);
+        assert_eq!(round_trip(manual), manual);
+    }
 }

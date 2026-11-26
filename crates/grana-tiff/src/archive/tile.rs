@@ -78,7 +78,7 @@ impl Tile {
         row: u32,
         sample: VoxelFormat,
         fill: &Filler<'_>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let origin = [column * SIDE, row * SIDE, request.z];
         let extent = [
             SIDE.min(info.width - origin[0]),
@@ -106,6 +106,9 @@ impl Tile {
             let to = line * stride;
             self.raw[to..to + width].copy_from_slice(&bytes[from..from + width]);
         }
+        if self.raw.iter().all(|byte| *byte == 0) {
+            return Ok(None);
+        }
         let mut encoder = ZlibEncoder::new(
             Vec::with_capacity(self.raw.len() / 2),
             Compression::default(),
@@ -113,6 +116,9 @@ impl Tile {
         encoder
             .write_all(&self.raw)
             .map_err(|error| error.to_string())?;
-        encoder.finish().map_err(|error| error.to_string())
+        encoder
+            .finish()
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 }

@@ -3,6 +3,7 @@ mod chart;
 mod comparison;
 mod decor;
 mod distribution;
+mod enrichment;
 mod grid;
 mod histogram;
 mod joint;

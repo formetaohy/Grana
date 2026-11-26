@@ -43,7 +43,7 @@ pub use surface::{
     SurfaceStatistics, SurfaceTopology, TopologyInfo, Truncation,
 };
 pub use track::{
-    Link, NodeRef, Track, TrackDetection, TrackLink, TrackNode, TrackSet, TrackStatistics,
-    grouped_tracks,
+    Link, LinkConfidence, NodeRef, SolvedConfidence, Track, TrackDetection, TrackLink, TrackNode,
+    TrackSet, TrackStatistics, grouped_tracks,
 };
 pub use weight::{SpotWeight, SpotWeightSampler};

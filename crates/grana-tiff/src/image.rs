@@ -382,6 +382,47 @@ impl Image {
         &self.pyramid
     }
 
+    pub fn empty(
+        &self,
+        time: u32,
+        level: usize,
+        coord: grana_volume::BrickCoord,
+    ) -> Result<Option<NoData>, Error> {
+        let Some(held) = self.levels.get(level) else {
+            return Ok(None);
+        };
+        if time >= held.planes.frames() {
+            return Ok(None);
+        }
+        let grid = grana_volume::BrickGrid::new(held.extent);
+        let counts = grid.counts();
+        if coord.x() >= counts[0] || coord.y() >= counts[1] || coord.z() >= counts[2] {
+            return Ok(None);
+        }
+        let ranges = grid.padded_range(coord);
+        let region = [
+            (ranges[0].start, ranges[0].end),
+            (ranges[1].start, ranges[1].end),
+        ];
+        for channel in 0..held.planes.channels() {
+            for z in ranges[2].clone() {
+                let plane = held.planes.index(time, channel, z);
+                let Some(slot) = held.slots.get(plane).copied() else {
+                    return Ok(None);
+                };
+                let file = self.files.file(slot.file);
+                let page = file.page(slot.page, held.depth)?;
+                let layout = file.layout(slot.page, held.depth)?;
+                let sample = if page.planar { channel } else { 0 };
+                let blocks = layout.covering(&region, held.extent.x(), held.extent.y(), sample);
+                if blocks.iter().any(|block| block.count > 0) {
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(NoData::zero(held.format)))
+    }
+
     pub fn read_region(
         &self,
         time: u32,

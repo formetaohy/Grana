@@ -209,37 +209,28 @@ impl LevelKey {
 }
 
 pub(super) struct TargetCache {
-    slots: [Option<FrameTarget>; 2],
-    current: usize,
+    target: Option<FrameTarget>,
 }
 
 impl TargetCache {
     pub(super) fn new() -> Self {
-        Self {
-            slots: [None, None],
-            current: 0,
-        }
+        Self { target: None }
     }
 
     pub(super) fn clear(&mut self) {
-        self.slots = [None, None];
-        self.current = 0;
+        self.target = None;
     }
 
     pub(super) fn current(&self) -> Option<&FrameTarget> {
-        self.slots[self.current].as_ref()
+        self.target.as_ref()
     }
 
     pub(super) fn iter_mut(&mut self) -> impl Iterator<Item = &mut FrameTarget> {
-        self.slots.iter_mut().flatten()
+        self.target.iter_mut()
     }
 
     pub(super) fn bytes(&self) -> u64 {
-        self.slots
-            .iter()
-            .flatten()
-            .map(FrameTarget::bytes)
-            .sum::<u64>()
+        self.target.as_ref().map_or(0, FrameTarget::bytes)
     }
 
     pub(super) fn take(
@@ -249,36 +240,21 @@ impl TargetCache {
         present: &Present,
         size: [u32; 2],
     ) -> (FrameTarget, bool) {
-        let held = (0..self.slots.len()).find(|index| {
-            self.slots[*index]
-                .as_ref()
-                .is_some_and(|target| target.size == size)
-        });
-        let (slot, created) = match held {
-            Some(index) => (index, false),
-            None => {
-                let index = (0..self.slots.len())
-                    .find(|index| *index != self.current)
-                    .unwrap_or(0);
-                self.slots[index] = Some(FrameTarget::new(device, layouts, present, size));
-                (index, true)
+        match self.target.take() {
+            Some(held) if held.size == size => (held, false),
+            stale => {
+                drop(stale);
+                (FrameTarget::new(device, layouts, present, size), true)
             }
-        };
-        self.current = slot;
-        (
-            self.slots[slot].take().expect("the frame target is ready"),
-            created,
-        )
+        }
     }
 
     pub(super) fn put(&mut self, target: FrameTarget) {
-        let size = target.size;
-        for (index, slot) in self.slots.iter_mut().enumerate() {
-            if index != self.current && slot.as_ref().is_some_and(|held| held.size != size) {
-                *slot = None;
-            }
-        }
-        self.slots[self.current] = Some(target);
+        assert!(
+            self.target.is_none(),
+            "a drawn frame returns the target it took"
+        );
+        self.target = Some(target);
     }
 }
 

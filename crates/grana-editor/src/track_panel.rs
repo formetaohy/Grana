@@ -2,7 +2,7 @@ use glam::Vec2;
 use grana_display::Palette;
 use grana_i18n::Language;
 use grana_measure::{Aggregate, TrackMeasurement};
-use grana_object::{Link, TrackId, TrackSet};
+use grana_object::{Link, TrackId, TrackLink, TrackSet};
 use grana_scene::{Job, ObjectSet, ObjectSetId, RelationField, TrackColor};
 use grana_session::Command;
 use grana_ui::{
@@ -19,6 +19,7 @@ const ROW: f32 = 13.0;
 const AXIS: f32 = 18.0;
 const SIDE: f32 = 10.0;
 const INSPECTOR_WIDTH: f32 = 316.0;
+const UNCERTAIN: f64 = 0.8;
 
 pub fn view<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -332,6 +333,9 @@ fn header<'a>(
     let divisions = object.tracks().map_or(0, |layer| layer.set().divisions());
     let merges = object.tracks().map_or(0, |layer| layer.set().merges());
     let tracks = object.tracks().map_or(0, |layer| layer.set().len());
+    let uncertain = object
+        .tracks()
+        .map_or(0, |layer| layer.set().uncertain(UNCERTAIN).count());
     let joining = state.workspace.join.is_some();
     let language = ctx.language();
     let join = if joining {
@@ -385,6 +389,15 @@ fn header<'a>(
         ),
     ];
     let badge_tint = ctx.theme().palette.tertiary;
+    if uncertain > 0 {
+        left_items.push(grana_ui::widget::badge(
+            &grana_i18n::track::uncertain_count(language, uncertain),
+            badge_tint,
+        ));
+    }
+    if object.tracks().is_some() {
+        left_items.push(link_legend(ctx, language));
+    }
     if joining {
         left_items.push(grana_ui::widget::badge(
             grana_i18n::track::select_join_target(language),
@@ -732,7 +745,7 @@ fn lineage<'a>(
                             painter,
                             Vec2::new(parent_end, parent_y),
                             Vec2::new(start, y),
-                            link.kind(),
+                            link,
                             tint,
                         );
                     }
@@ -1035,6 +1048,12 @@ fn summary<'a>(
             grana_i18n::track::straightness(language),
             &statistics
                 .straightness()
+                .map_or_else(|| "—".to_string(), |value| format!("{value:.3}")),
+        ),
+        view::labelled(
+            ctx,
+            grana_i18n::track::confidence(language),
+            &set.confidence(selected)
                 .map_or_else(|| "—".to_string(), |value| format!("{value:.3}")),
         ),
     ];
@@ -1495,17 +1514,73 @@ fn combo<'a>(
     )
 }
 
-fn draw_link(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, kind: Link, tint: Color) {
-    match kind {
-        Link::Gap => dashed(painter, from, to, 1.0, tint.with_alpha(0.35)),
-        Link::Division => {
-            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
-        }
-        Link::Merge => {
-            painter.segment(from, to, 1.2, tint.with_alpha(0.50));
-            painter.ring(from, 2.0, 1.0, 0.0, std::f32::consts::TAU, tint);
-        }
+fn draw_link(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, link: TrackLink, tint: Color) {
+    let confidence = link.confidence().value().map(|value| value as f32);
+    let alpha = confidence.map_or(0.45, |value| 0.18 + 0.5 * value);
+    let width = confidence.map_or(1.1, |value| 0.6 + 0.7 * value);
+    if link.kind() == Link::Gap {
+        dashed(painter, from, to, width, tint.with_alpha(alpha));
+    } else {
+        painter.segment(from, to, width, tint.with_alpha(alpha));
     }
+    if link.kind() == Link::Merge {
+        painter.ring(
+            from,
+            2.0,
+            1.0,
+            0.0,
+            std::f32::consts::TAU,
+            tint.with_alpha(alpha),
+        );
+    }
+}
+
+fn link_legend<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    language: Language,
+) -> Element<'a, Message> {
+    let palette = ctx.theme().palette;
+    let certain = grana_i18n::track::certain(language).to_string();
+    let uncertain = grana_i18n::track::uncertain(language).to_string();
+    grana_ui::canvas(Length::Fixed(118.0), 16.0)
+        .key(Key::new("tracks.legend"))
+        .view_static(move |painter, info| {
+            let rect = info.rect;
+            let y = rect.center().y;
+            let style =
+                TextStyle::new(TypeStyle::new(9.0, 500.0, 12.0), palette.on_surface_variant);
+            painter.segment(
+                Vec2::new(rect.min.x, y),
+                Vec2::new(rect.min.x + 16.0, y),
+                1.3,
+                palette.on_surface_variant.with_alpha(0.68),
+            );
+            painter.text_in(
+                Rect::from_min_size(
+                    Vec2::new(rect.min.x + 20.0, rect.min.y),
+                    Vec2::new(38.0, rect.height()),
+                ),
+                &certain,
+                style,
+                Align::Center,
+            );
+            let second = rect.min.x + 60.0;
+            painter.segment(
+                Vec2::new(second, y),
+                Vec2::new(second + 16.0, y),
+                0.7,
+                palette.on_surface_variant.with_alpha(0.24),
+            );
+            painter.text_in(
+                Rect::from_min_size(
+                    Vec2::new(second + 20.0, rect.min.y),
+                    Vec2::new(38.0, rect.height()),
+                ),
+                &uncertain,
+                style,
+                Align::Center,
+            );
+        })
 }
 
 fn dashed(painter: &mut grana_ui::Painter, from: Vec2, to: Vec2, width: f32, color: Color) {

@@ -23,6 +23,9 @@ labels! {
     displacement => "Displacement" / "位移";
     speed => "Speed" / "速度";
     straightness => "Straightness" / "直线度";
+    confidence => "Confidence" / "置信度";
+    certain => "Certain" / "确信";
+    uncertain => "Uncertain" / "存疑";
     selected_track => "Selected Track" / "所选轨迹";
     set => "Set" / "对象集";
     parameters => "Parameters" / "参数";
@@ -58,6 +61,7 @@ labels! {
 
 messages! {
     track_counts(tracks: usize, divisions: usize, merges: usize) => "{tracks} · ÷{divisions} · +{merges}" / "{tracks} · ÷{divisions} · +{merges}";
+    uncertain_count(count: usize) => "{count} uncertain" / "{count} 条存疑";
     track_summary(tracks: usize, divisions: usize, merges: usize, frames: usize) => "{tracks} · ÷{divisions} · +{merges} · {frames}f" / "{tracks} · ÷{divisions} · +{merges} · {frames}帧";
     frame_count(frames: u32) => "{frames}f" / "{frames} 帧";
     track_number(track: usize) => "Track #{track}" / "轨迹 #{track}";

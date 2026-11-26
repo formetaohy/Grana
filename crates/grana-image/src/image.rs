@@ -138,11 +138,39 @@ impl Image {
                 detail: "the brick lies outside the level".to_string(),
             });
         }
+        if let Some(fill) = self.missing(time, level, coord, warps)? {
+            return Ok(BrickData::new(
+                (0..self.pyramid.channel_count())
+                    .map(|_| grana_volume::blank_brick(fill))
+                    .collect(),
+            ));
+        }
         let bricks = (0..self.pyramid.channel_count())
             .into_par_iter()
             .map(|channel| self.brick(time, level, channel, coord, warps.get(channel)))
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(BrickData::new(bricks))
+    }
+
+    fn missing(
+        &self,
+        time: u32,
+        level: usize,
+        coord: BrickCoord,
+        warps: &Warps,
+    ) -> Result<Option<NoData>, Error> {
+        if level >= self.pyramid.stored() || !warps.identity() {
+            return Ok(None);
+        }
+        let Some(fill) = self.vault.reader().empty(time, level, coord)? else {
+            return Ok(None);
+        };
+        let uniform = self
+            .pyramid
+            .channels()
+            .iter()
+            .all(|channel| channel.format() == fill.format());
+        Ok(uniform.then_some(fill))
     }
 
     fn brick(

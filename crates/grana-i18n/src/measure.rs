@@ -37,6 +37,7 @@ pub fn term(language: Language, english: &str) -> Option<String> {
         "displacement" => "位移",
         "speed" => "速度",
         "straightness" => "直线度",
+        "confidence" => "置信度",
         "mean" => "均值",
         "minimum" => "最小值",
         "maximum" => "最大值",
@@ -54,6 +55,7 @@ pub fn term(language: Language, english: &str) -> Option<String> {
         "partners" => "配对数量",
         "intensity" => "强度",
         "classifier" => "分类器",
+        "class" => "类别",
         "target" => "目标",
         "children" => "子对象",
         "Pearson" => "皮尔逊",
@@ -87,6 +89,11 @@ labels! {
     nearest_title => "Nearest neighbour" / "最近邻分布";
     nearest_curve => "G(r)" / "G(r)";
     nearest_expected => "CSR" / "CSR";
+    enrichment => "Enrichment" / "邻域富集";
+    enrichment_title => "COZI enrichment" / "COZI 邻域富集";
+    y_index_class => "Y: index class" / "Y: 索引类别";
+    x_neighbour_class => "X: neighbour class" / "X: 邻居类别";
+    no_classes => "No classes" / "无类别";
     target => "Target" / "对照集";
     no_spatial => "No spatial frames" / "无可分析的空间帧";
     box_plot => "Box" / "箱线图";
@@ -218,6 +225,9 @@ messages! {
     ripley_summary(frames: u32, objects: u64) => "{frames}f · {objects} objects" / "{frames} 帧 · {objects} 个对象";
     paired_summary(frames: u32, objects: u64, partners: u64, target: &str) => "{frames}f · {objects} vs {partners} {target}" / "{frames} 帧 · {objects} 对 {partners} {target}";
     nearest_readout(radius: &str, value: &str, low: &str, high: &str, expected: &str, frames: u64) => "r {radius} µm · G {value} · CI {low}–{high} · CSR {expected} · {frames}f" / "r {radius} µm · G {value} · CI {low}–{high} · CSR {expected} · {frames} 帧";
+    enrichment_summary(classes: usize, radius: &str, permutations: u32) => "{classes} classes · r {radius} µm · {permutations} permutations" / "{classes} 个类别 · r {radius} µm · {permutations} 次置换";
+    enrichment_significant(significant: usize) => "{significant} significant pairs" / "{significant} 个显著类型对";
+    enrichment_readout(index: u32, neighbour: u32, observed: &str, z: &str, q: &str, ccr: &str) => "class {index} → {neighbour} · S {observed} · z {z} · q {q} · CCR {ccr}" / "类别 {index} → {neighbour} · S {observed} · z {z} · q {q} · CCR {ccr}";
     ripley_single(single: u32) => "{single} single-object frames" / "{single} 帧仅一个对象";
     ripley_envelope(simulations: u32) => "CSR 95% · {simulations}" / "CSR 95% · {simulations}";
     ripley_test(p: &str, beyond: u32) => "p {p} · {beyond}" / "p {p} · {beyond}";

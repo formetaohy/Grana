@@ -11,9 +11,10 @@ use grana_pipeline::Channels;
 use grana_pipeline::export::{ChannelLayer, DatasetSpec, LabelLayer, cropped_levels};
 use grana_scene::{Dataset, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{
-    Basis, Calibration, Channel, ColorTable, Extent, Intensity, Level, Region, Spacing, Volume,
-    VolumeSeries, VoxelData, VoxelSemantics,
+    Basis, BrickCoord, Calibration, Channel, ColorTable, Extent, Intensity, Level, NoData, Region,
+    Spacing, Volume, VolumeSeries, VoxelData, VoxelFormat, VoxelSemantics,
 };
+use grana_warp::{Warp, Warps};
 use grana_zarr::write_image;
 
 use crate::support::Temp;
@@ -3361,5 +3362,212 @@ fn reads_packed_samples_in_the_declared_bit_order() {
         values,
         twelve.to_vec(),
         "a twelve bit tile keeps every value it stores"
+    );
+}
+
+fn write_sparse_zarr(root: &std::path::Path) {
+    let levels = [Level::new(
+        Extent::new(24, 16, 8),
+        Spacing::new(0.5, 0.5, 1.0),
+    )];
+    let channels = [WriteChannel {
+        name: "DAPI",
+        tint: [0.0, 0.0, 1.0],
+        data: Intensity::new(0.0, 4096.0),
+        window: Intensity::new(0.0, 2048.0),
+        color_table: None,
+    }];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let mut values = vec![0.0f32; block.voxels()];
+        for z in 0..block.extent[2] {
+            for y in 0..block.extent[1] {
+                for x in 0..block.extent[0] {
+                    let index = x as usize
+                        + block.extent[0] as usize
+                            * (y as usize + block.extent[1] as usize * z as usize);
+                    values[index] = sample(
+                        block.channel,
+                        block.frame,
+                        [
+                            block.origin[0] + x,
+                            block.origin[1] + y,
+                            block.origin[2] + z,
+                        ],
+                    ) as f32;
+                }
+            }
+        }
+        Ok(VoxelData::F32(values))
+    };
+    let mut progress = |_, _| {};
+    write_image(
+        root,
+        &mut ImageSpec {
+            name: "empty",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0, 0.0, 0.0],
+            frames: 1,
+            interval: Some(1.0),
+            sample: VoxelFormat::F32,
+            calibration: Calibration::Assumed,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the empty image writes");
+}
+
+fn clear_chunks(root: &std::path::Path) -> usize {
+    let store =
+        Arc::new(zarrs::filesystem::FilesystemStore::new(root).expect("the array store opens"));
+    let array = zarrs::array::Array::open(store, "/0").expect("the finest level opens");
+    let shape = array.chunk_grid_shape().to_vec();
+    let mut removed = 0;
+    for time in 0..shape[0] {
+        for channel in 0..shape[1] {
+            for z in 0..shape[2] {
+                for y in 0..shape[3] {
+                    for x in 0..shape[4] {
+                        let key = array.chunk_key(&[time, channel, z, y, x]);
+                        if std::fs::remove_file(root.join(key.as_str())).is_ok() {
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    removed
+}
+
+#[test]
+fn reads_a_missing_zarr_chunk_without_decoding_it() {
+    let temp = Temp::new("suite-zarr-empty");
+    let path = temp.path().join("empty.ome.zarr");
+    write_sparse_zarr(&path);
+    let source = Source::file(path.clone());
+    let coord = BrickCoord::new(0, 0, 0);
+    let warps = Warps::new(vec![Warp::IDENTITY]);
+    let stored = Image::open_with_cache(&source, None).expect("the image opens");
+    let brick = stored
+        .read_brick(0, 0, coord, &warps)
+        .expect("the stored brick reads");
+    let decoded = stored
+        .decode()
+        .expect("a zarr image reports its decode")
+        .decoded_bytes();
+    assert!(decoded > 0, "a stored chunk decodes its block");
+    assert!(
+        lit(&brick),
+        "the stored brick holds the values the image writes"
+    );
+    let missing = clear_chunks(&path);
+    assert!(missing > 0, "the image stores chunks to remove");
+    let empty = Image::open_with_cache(&source, None).expect("the image opens");
+    let blank = empty
+        .read_brick(0, 0, coord, &warps)
+        .expect("the missing brick reads");
+    assert!(
+        !lit(&blank),
+        "a brick whose chunks are all missing holds nothing"
+    );
+    assert_eq!(
+        empty
+            .decode()
+            .expect("a zarr image reports its decode")
+            .decoded_bytes(),
+        0,
+        "a brick whose chunks are all missing decodes nothing"
+    );
+}
+
+fn lit(brick: &grana_volume::BrickData) -> bool {
+    match &brick.channels()[0] {
+        VoxelData::F32(values) => values.iter().any(|value| *value != 0.0),
+        _ => panic!("the sparse fixture stores thirty two bit samples"),
+    }
+}
+
+#[test]
+fn a_sparse_ome_tiff_archive_reports_the_tiles_it_does_not_store() {
+    let temp = Temp::new("suite-ome-tiff-sparse");
+    let levels = [Level::new(
+        Extent::new(512, 256, 1),
+        Spacing::new(0.2, 0.2, 1.0),
+    )];
+    let channels = [WriteChannel {
+        name: "signal",
+        tint: [0.2, 0.7, 1.0],
+        data: Intensity::new(0.0, 4096.0),
+        window: Intensity::new(0.0, 4096.0),
+        color_table: None,
+    }];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let extent = block.extent;
+        let origin = block.origin;
+        let mut values = vec![0u16; block.voxels()];
+        for z in 0..extent[2] {
+            for y in 0..extent[1] {
+                for x in 0..extent[0] {
+                    let index = x as usize
+                        + extent[0] as usize * (y as usize + extent[1] as usize * z as usize);
+                    values[index] = if origin[0] + x < 256 { 4000 } else { 0 };
+                }
+            }
+        }
+        Ok(VoxelData::U16(values))
+    };
+    let mut progress = |_, _| {};
+    let path = temp.path().join("sparse.ome.tif");
+    grana_tiff::write_archive(
+        &path,
+        &mut ImageSpec {
+            name: "sparse",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0, 0.0, 0.0],
+            frames: 1,
+            interval: None,
+            sample: VoxelFormat::U16,
+            calibration: Calibration::Assumed,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the sparse archive writes");
+    let archive = grana_tiff::Image::open(&path, 0).expect("the archive opens");
+    assert_eq!(
+        archive
+            .empty(0, 0, BrickCoord::new(9, 0, 0))
+            .expect("the empty query answers"),
+        Some(NoData::zero(VoxelFormat::U16)),
+        "a brick the archive leaves out of its tiles holds nothing"
+    );
+    assert_eq!(
+        archive
+            .empty(0, 0, BrickCoord::new(0, 0, 0))
+            .expect("the empty query answers"),
+        None,
+        "a brick the archive stores holds its samples"
+    );
+    let source = Source::file(path.clone());
+    let image = Image::open_with_cache(&source, None).expect("the sparse image opens");
+    let brick = image
+        .read_brick(
+            0,
+            0,
+            BrickCoord::new(9, 0, 0),
+            &Warps::new(vec![Warp::IDENTITY]),
+        )
+        .expect("the sparse brick reads");
+    let VoxelData::U16(values) = &brick.channels()[0] else {
+        panic!("the sparse fixture stores sixteen bit samples");
+    };
+    assert!(
+        values.iter().all(|value| *value == 0),
+        "a brick the archive does not store reads as zeros"
     );
 }

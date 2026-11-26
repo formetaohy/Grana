@@ -11,7 +11,7 @@ use grana_volume::CHANNEL_LIMIT;
 
 use grana_volume::{PACK_LIMIT, components};
 
-const HOLLOW_FRAMES: usize = 8;
+const HOLLOW_BYTES: u64 = 8 << 20;
 
 const ABSENT: u32 = u32::MAX;
 
@@ -228,24 +228,35 @@ impl Frames {
             .get(&(time, level))
             .map(|frame| frame.words.as_slice())
     }
+
+    fn holds_time(&self, time: u32) -> bool {
+        self.frames.keys().any(|(held, _)| *held == time)
+    }
+
+    fn bytes(&self) -> u64 {
+        self.frames
+            .values()
+            .map(|frame| frame.words.len() as u64 * size_of::<u64>() as u64)
+            .sum()
+    }
 }
 
 struct Hollows {
     frames: Frames,
-    remembered: Vec<u32>,
+    order: Vec<u32>,
 }
 
 impl Hollows {
     fn new() -> Self {
         Self {
             frames: Frames::default(),
-            remembered: Vec::new(),
+            order: Vec::new(),
         }
     }
 
     fn clear(&mut self) {
         self.frames.reset();
-        self.remembered.clear();
+        self.order.clear();
     }
 
     fn holds(&self, time: u32, level: usize, index: usize) -> bool {
@@ -262,17 +273,28 @@ impl Hollows {
     }
 
     fn release(&mut self, time: u32, level: usize, index: usize) -> bool {
-        self.frames.clear(time, level, index)
+        let released = self.frames.clear(time, level, index);
+        if released && !self.frames.holds_time(time) {
+            self.order.retain(|held| *held != time);
+        }
+        released
     }
 
     fn remember(&mut self, time: u32) -> Vec<u32> {
-        if self.remembered.contains(&time) {
+        if !self.frames.holds_time(time) {
             return Vec::new();
         }
-        self.remembered.push(time);
+        match self.order.iter().position(|held| *held == time) {
+            Some(position) if position + 1 == self.order.len() => return Vec::new(),
+            Some(position) => {
+                self.order.remove(position);
+            }
+            None => {}
+        }
+        self.order.push(time);
         let mut forgotten = Vec::new();
-        while self.remembered.len() > HOLLOW_FRAMES {
-            let dropped = self.remembered.remove(0);
+        while self.order.len() > 1 && self.frames.bytes() > HOLLOW_BYTES {
+            let dropped = self.order.remove(0);
             self.frames.drop_frame(dropped);
             forgotten.push(dropped);
         }
@@ -281,6 +303,22 @@ impl Hollows {
 
     fn words(&self, time: u32, level: usize) -> Option<&[u64]> {
         self.frames.words(time, level)
+    }
+
+    fn contents(&self) -> Vec<(u32, usize, Vec<u64>)> {
+        let mut contents = Vec::with_capacity(self.order.len());
+        for time in &self.order {
+            let mut held = self
+                .frames
+                .frames
+                .iter()
+                .filter(|((frame, _), _)| frame == time)
+                .map(|((_, level), frame)| (*level, frame.words.clone()))
+                .collect::<Vec<_>>();
+            held.sort_unstable_by_key(|(level, _)| *level);
+            contents.extend(held.into_iter().map(|(level, words)| (*time, level, words)));
+        }
+        contents
     }
 }
 
@@ -520,7 +558,7 @@ impl Atlas {
                 });
             }
         }
-        let remembered = self.hollow.remembered.clone();
+        let remembered = self.hollow.order.clone();
         for time in remembered {
             if self.hollow.release(time, level, index) {
                 released.push(time);
@@ -613,12 +651,7 @@ impl Atlas {
     }
 
     pub fn hollow_words(&self) -> Vec<(u32, usize, Vec<u64>)> {
-        self.hollow
-            .frames
-            .frames
-            .iter()
-            .map(|((time, level), frame)| (*time, *level, frame.words.clone()))
-            .collect()
+        self.hollow.contents()
     }
 
     pub fn restore_hollow(&mut self, words: Vec<(u32, usize, Vec<u64>)>) {

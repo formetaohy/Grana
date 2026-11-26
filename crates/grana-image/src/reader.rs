@@ -168,6 +168,19 @@ impl Reader {
         }
     }
 
+    pub(crate) fn empty(
+        &self,
+        time: u32,
+        level: usize,
+        coord: grana_volume::BrickCoord,
+    ) -> Result<Option<grana_volume::NoData>, Error> {
+        match self {
+            Self::Zarr(image) => Ok(image.empty(time, level, coord)?),
+            Self::Tiff(image) => Ok(image.empty(time, level, coord)?),
+            Self::Memory(_) | Self::Czi(_) | Self::Readout(_) => Ok(None),
+        }
+    }
+
     pub(crate) fn read_plane(
         &self,
         level: usize,

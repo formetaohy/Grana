@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use glam::Vec3;
 use grana_object::TrackParams;
@@ -6,10 +6,6 @@ use grana_object::TrackParams;
 use super::chain::Chains;
 use super::detection::Detections;
 
-const CONFIDENCE_CEILING: f64 = 0.98;
-const LINK_GAIN: f64 = 0.45;
-const DIVISION_GAIN: f64 = 0.45;
-const MERGE_GAIN: f64 = 0.45;
 const DIVISION_SEPARATION: f64 = 1.0;
 const DIVISION_SPREAD: f64 = 0.9;
 const DIVISION_VOLUME_SPREAD: f64 = 1.0;
@@ -19,8 +15,8 @@ const MERGE_VOLUME_SPREAD: f64 = 0.6;
 const GAP_SHARE: f64 = 0.5;
 const LINK_ZONE: f64 = 0.7;
 const PAIRS: usize = 24;
-const TARGET_WEIGHT: f64 = 1.0;
 const EVENT_FLOOR: f64 = 0.3;
+const SCORE_CEILING: f64 = 1.0 - 1.0e-6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Choice {
@@ -43,7 +39,8 @@ pub(super) enum Choice {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Candidate {
     pub(super) choice: Choice,
-    pub(super) weight: f64,
+    pub(super) score: f64,
+    pub(super) gap: f64,
 }
 
 pub(super) fn predict(detections: &Detections, chains: &Chains, index: usize, time: u32) -> Vec3 {
@@ -65,7 +62,7 @@ pub(super) fn candidates(
         return Vec::new();
     }
     let grid = detections.grid(frame, step);
-    let mut reachable = HashMap::<usize, Vec<(usize, f32)>>::new();
+    let mut reachable = BTreeMap::<usize, Vec<(usize, f32)>>::new();
     let mut found = Vec::new();
     for &source in open {
         let chain = chains.chain(source);
@@ -78,12 +75,11 @@ pub(super) fn candidates(
                 .entry(target)
                 .or_default()
                 .push((source, distance));
-            let score = link_score(distance) * motion * gap_share(reach);
-            found.extend(weighted(
+            let score = link_score(distance) * motion;
+            found.extend(candidate(
                 Choice::Link { source, target },
                 score,
-                LINK_GAIN,
-                1,
+                gap_share(reach).ln(),
             ));
         });
     }
@@ -162,15 +158,14 @@ fn divisions(
                 if score < EVENT_FLOOR {
                     continue;
                 }
-                found.extend(weighted(
+                found.extend(candidate(
                     Choice::Divide {
                         source,
                         first: daughter,
                         second: other,
                     },
                     score,
-                    DIVISION_GAIN,
-                    2,
+                    0.0,
                 ));
             }
         }
@@ -180,7 +175,7 @@ fn divisions(
 fn merges(
     detections: &Detections,
     chains: &Chains,
-    reachable: &HashMap<usize, Vec<(usize, f32)>>,
+    reachable: &BTreeMap<usize, Vec<(usize, f32)>>,
     params: TrackParams,
     time: u32,
     found: &mut Vec<Candidate>,
@@ -239,27 +234,25 @@ fn merges(
                 if score < EVENT_FLOOR {
                     continue;
                 }
-                found.extend(weighted(
+                found.extend(candidate(
                     Choice::Merge {
                         first: left,
                         second: right,
                         target,
                     },
                     score,
-                    MERGE_GAIN,
-                    1,
+                    0.0,
                 ));
             }
         }
     }
 }
 
-fn weighted(choice: Choice, score: f64, gain: f64, covered: u8) -> Option<Candidate> {
-    let confidence = (0.5 + gain * score.clamp(0.0, 1.0)).min(CONFIDENCE_CEILING);
-    let odds = (confidence / (1.0 - confidence)).ln();
-    (odds > 0.0).then_some(Candidate {
+fn candidate(choice: Choice, score: f64, gap: f64) -> Option<Candidate> {
+    (score > 0.0).then(|| Candidate {
         choice,
-        weight: odds + TARGET_WEIGHT * f64::from(covered),
+        score: score.min(SCORE_CEILING),
+        gap,
     })
 }
 

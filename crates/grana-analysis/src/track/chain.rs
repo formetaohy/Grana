@@ -34,10 +34,17 @@ impl Chain {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ChainLink {
+    pub(super) parent: usize,
+    pub(super) child: usize,
+    pub(super) confidence: f64,
+}
+
 #[derive(Default)]
 pub(super) struct Chains {
     chains: Vec<Chain>,
-    links: Vec<(usize, usize)>,
+    links: Vec<ChainLink>,
 }
 
 impl Chains {
@@ -61,7 +68,7 @@ impl Chains {
         self.chains[index].last()
     }
 
-    pub fn links(&self) -> &[(usize, usize)] {
+    pub fn links(&self) -> &[ChainLink] {
         &self.links
     }
 
@@ -89,7 +96,7 @@ impl Chains {
         chain.velocity = velocity;
     }
 
-    pub fn attach(&mut self, parent: usize, child: usize) {
+    pub fn attach(&mut self, parent: usize, child: usize, confidence: f64) {
         assert!(
             self.chains[parent].end < self.chains[child].start,
             "a link leaves a parent before its child starts"
@@ -98,7 +105,15 @@ impl Chains {
             self.chains[parent].outgoing < 2,
             "a chain leads to at most two chains"
         );
+        assert!(
+            confidence.is_finite() && confidence > 0.0 && confidence <= 1.0,
+            "a solved chain link carries a probability"
+        );
         self.chains[parent].outgoing += 1;
-        self.links.push((parent, child));
+        self.links.push(ChainLink {
+            parent,
+            child,
+            confidence,
+        });
     }
 }

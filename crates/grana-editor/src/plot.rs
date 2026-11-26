@@ -4,8 +4,8 @@ use grana_chart::{
 };
 use grana_i18n::Language;
 use grana_measure::{
-    Distribution, Filter, Histogram, Lasso, MeasureView, Measured, NearestNeighbour, Observation,
-    Plot, Ripley, Scatter, Table, Trend,
+    Distribution, Enrichment, Filter, Histogram, Lasso, MeasureView, Measured, NearestNeighbour,
+    Observation, Plot, Ripley, Scatter, Table, Trend,
 };
 use grana_scene::{Item, Measure, ObjectSetId, Selection};
 use grana_session::Command;
@@ -41,6 +41,7 @@ enum Readout {
         radius: f32,
         point: Option<usize>,
     },
+    Enrichment(usize),
 }
 
 struct PlotView<'a> {
@@ -89,6 +90,7 @@ impl PlotView<'_> {
                 y: range(self.filters, trend.column()),
             },
             Plot::Ripley(_) | Plot::NearestNeighbour(_) => Gates::default(),
+            Plot::Enrichment(_) => Gates::default(),
         }
     }
 
@@ -120,7 +122,7 @@ impl PlotView<'_> {
                     self.table.cached_value(row, trend.column())?.present()?,
                 )))
             }
-            Plot::Ripley(_) | Plot::NearestNeighbour(_) => None,
+            Plot::Ripley(_) | Plot::NearestNeighbour(_) | Plot::Enrichment(_) => None,
         }
     }
 
@@ -170,12 +172,14 @@ pub fn view<'a>(
         Plot::Trend(trend) if hovering => trend_readout(trend, frame, pointer),
         Plot::Ripley(ripley) if hovering => ripley_readout(ripley, frame, pointer),
         Plot::NearestNeighbour(nearest) if hovering => nearest_readout(nearest, frame, pointer),
+        Plot::Enrichment(enrichment) if hovering => enrichment_readout(enrichment, frame, pointer),
         Plot::Histogram(_)
         | Plot::Scatter(_)
         | Plot::Distribution(_)
         | Plot::Trend(_)
         | Plot::Ripley(_)
-        | Plot::NearestNeighbour(_) => Readout::None,
+        | Plot::NearestNeighbour(_)
+        | Plot::Enrichment(_) => Readout::None,
     };
     let (title_y, title_x) = titles(plot, table, language);
     let target = measure
@@ -299,6 +303,7 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
         }
         Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
         Plot::Ripley(_) | Plot::NearestNeighbour(_) => grana_i18n::measure::no_spatial(language),
+        Plot::Enrichment(_) => grana_i18n::measure::no_classes(language),
     }
 }
 
@@ -343,6 +348,10 @@ fn titles(plot: &Plot, table: &Table, language: Language) -> (String, String) {
         Plot::NearestNeighbour(_) => (
             grana_i18n::measure::y_nearest(language).to_string(),
             grana_i18n::measure::x_radius(language).to_string(),
+        ),
+        Plot::Enrichment(_) => (
+            grana_i18n::measure::y_index_class(language).to_string(),
+            grana_i18n::measure::x_neighbour_class(language).to_string(),
         ),
     }
 }
@@ -530,6 +539,23 @@ fn summary_text(
         }
         (Plot::NearestNeighbour(nearest), _) => nearest_caption(language, nearest, target),
         (Plot::Ripley(ripley), _) => ripley_caption(language, ripley, target),
+        (Plot::Enrichment(enrichment), Readout::Enrichment(pair)) => {
+            let Some(pair) = enrichment.pairs().get(pair) else {
+                return enrichment_caption(language, enrichment);
+            };
+            let left = enrichment.classes()[pair.index()].code();
+            let right = enrichment.classes()[pair.neighbour()].code();
+            grana_i18n::measure::enrichment_readout(
+                language,
+                left,
+                right,
+                &format!("{:.3}", pair.observed()),
+                &format!("{:.2}", pair.z()),
+                &grana_measure::csv::scientific(pair.q()),
+                &format!("{:.2}", pair.ccr()),
+            )
+        }
+        (Plot::Enrichment(enrichment), _) => enrichment_caption(language, enrichment),
         (Plot::Trend(trend), _) => {
             if trend.points().is_empty() {
                 grana_i18n::measure::no_frames_trend(language).to_string()
@@ -699,6 +725,19 @@ fn nearest_readout(nearest: &NearestNeighbour, frame: Rect, pointer: Vec2) -> Re
     Readout::Radius { radius, point }
 }
 
+fn enrichment_readout(enrichment: &Enrichment, frame: Rect, pointer: Vec2) -> Readout {
+    if !frame.contains(pointer) {
+        return Readout::None;
+    }
+    let count = enrichment.classes().len();
+    if count == 0 {
+        return Readout::None;
+    }
+    let column = (((pointer.x - frame.min.x) / frame.width().max(1.0)) * count as f32) as usize;
+    let row = (((frame.max.y - pointer.y) / frame.height().max(1.0)) * count as f32) as usize;
+    Readout::Enrichment(row.min(count - 1) * count + column.min(count - 1))
+}
+
 fn ripley_axis_of(radius: f32) -> Axis {
     Axis::new(0.0, radius, 5)
 }
@@ -758,7 +797,7 @@ pub fn apply(
             distribution_apply(event, measure, table, distribution, workspace, commands)
         }
         Plot::Trend(trend) => trend_apply(event, measure, table, trend, workspace, commands),
-        Plot::Ripley(_) | Plot::NearestNeighbour(_) => {
+        Plot::Ripley(_) | Plot::NearestNeighbour(_) | Plot::Enrichment(_) => {
             if workspace.drag.view.is_some() {
                 workspace.drag = PlotDrag::default();
             }
@@ -1215,7 +1254,7 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
         MeasureView::Scatter => column == axes[0] || column == axes[1],
         MeasureView::Distribution => column == axes[0],
         MeasureView::Trend => column == axes[0],
-        MeasureView::Ripley | MeasureView::NearestNeighbour => false,
+        MeasureView::Ripley | MeasureView::NearestNeighbour | MeasureView::Enrichment => false,
     };
     let mut indices = measure
         .filters()
@@ -1274,6 +1313,24 @@ pub(crate) fn nearest_caption(
         )
     } else {
         summary
+    }
+}
+
+pub(crate) fn enrichment_caption(language: Language, enrichment: &Enrichment) -> String {
+    let summary = grana_i18n::measure::enrichment_summary(
+        language,
+        enrichment.classes().len(),
+        &format!("{:.2}", enrichment.radius()),
+        enrichment.permutations(),
+    );
+    let significant = enrichment.significant();
+    if significant == 0 {
+        summary
+    } else {
+        format!(
+            "{summary} · {}",
+            grana_i18n::measure::enrichment_significant(language, significant)
+        )
     }
 }
 
