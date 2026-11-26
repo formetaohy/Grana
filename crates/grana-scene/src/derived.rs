@@ -365,7 +365,7 @@ impl DerivedSpec {
         let semantics = if self.operation.mask().is_some() {
             VoxelSemantics::Presence
         } else {
-            source.semantics()
+            VoxelSemantics::Scalar
         };
         let info = ChannelInfo::new(
             self.name.clone(),

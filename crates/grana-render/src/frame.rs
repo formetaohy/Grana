@@ -96,6 +96,7 @@ pub(crate) struct VolumeView<'a> {
     pub aspect: f32,
     pub height: u32,
     pub time: u32,
+    pub samples_per_voxel: f32,
 }
 
 pub(crate) struct Ray {
@@ -135,7 +136,12 @@ impl FrameData {
             aspect,
             height,
             time,
+            samples_per_voxel,
         } = view;
+        assert!(
+            samples_per_voxel >= 1.0 && samples_per_voxel.is_finite(),
+            "a frame samples at least one sample per voxel"
+        );
         let first = tables[0];
         let view_projection = camera.view_projection(aspect, 0.5 * first.world.length());
         let (slice, slice_view) = match camera.slice() {
@@ -178,7 +184,7 @@ impl FrameData {
             }
             bases[band] = table.record_base();
             if band > 0 && !orthographic {
-                edge[band - 1] = table.voxel.min_element() * pixel_scale;
+                edge[band - 1] = table.voxel.min_element() * pixel_scale * samples_per_voxel;
             }
         }
         Self {

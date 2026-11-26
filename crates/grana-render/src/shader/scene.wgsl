@@ -46,7 +46,7 @@ struct ChannelData {
     threshold: f32,
     mode: f32,
     nearest: f32,
-    reserved: f32,
+    material: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
@@ -226,6 +226,10 @@ fn pack_active(pack: u32) -> bool {
 
 fn channel_nearest(index: u32) -> bool {
     return channels[index].nearest > 0.5;
+}
+
+fn channel_categorical(index: u32) -> bool {
+    return channels[index].material > 0.5;
 }
 
 fn pack_nearest(pack: u32) -> u32 {

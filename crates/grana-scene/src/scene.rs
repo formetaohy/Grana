@@ -92,7 +92,7 @@ impl Scene {
             channels,
             selected: 0,
             shading: Shading::default(),
-            step_scale: 1.0,
+            step_scale: 0.5,
             exposure: 1.0,
             region,
             clip: Clip::none(),

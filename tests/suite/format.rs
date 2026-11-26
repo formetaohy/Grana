@@ -1997,8 +1997,8 @@ fn reads_a_tiff_stack_past_the_page_limit() {
     );
     assert_eq!(
         image.pyramid().channels()[0].semantics(),
-        VoxelSemantics::Label,
-        "a stack of few distinct values is a label volume"
+        VoxelSemantics::Scalar,
+        "a stack without a colour table holds scalar values, however few distinct ones it stores"
     );
     let palette = temp.path().join("palette.tif");
     let pages = 105u32;

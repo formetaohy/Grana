@@ -1,6 +1,6 @@
 use bytemuck::cast_slice;
 use grana_gpu::Table;
-use grana_volume::{CHANNEL_LIMIT, Intensity, PACK, PACK_LIMIT, Pyramid, VoxelSemantics};
+use grana_volume::{CHANNEL_LIMIT, Intensity, PACK, PACK_LIMIT, Pyramid};
 use half::f16;
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, Buffer, BufferUsages, Device,
@@ -32,7 +32,7 @@ struct ChannelData {
     threshold: f32,
     mode: f32,
     nearest: f32,
-    reserved: f32,
+    material: f32,
 }
 
 #[repr(C)]
@@ -65,6 +65,7 @@ pub(crate) struct SceneTable {
     thresholds: Vec<Option<f32>>,
     floor: f32,
     packs: [u32; 4],
+    quality: f32,
     group: BindGroup,
     channels_count: usize,
 }
@@ -133,6 +134,7 @@ impl SceneTable {
             thresholds: vec![None; channels],
             floor: 0.0,
             packs: [0; 4],
+            quality: 1.0,
             group,
             channels_count: channels,
         }
@@ -174,10 +176,15 @@ impl SceneTable {
         self.channels.write(device, queue, &data.rows);
         self.floor = data.floor;
         self.packs = data.packs;
+        self.quality = data.quality;
     }
 
     pub fn threshold_floor(&self) -> f32 {
         self.floor
+    }
+
+    pub fn samples_per_voxel(&self) -> f32 {
+        self.quality
     }
 
     pub fn packs(&self) -> [u32; 4] {
@@ -266,6 +273,7 @@ struct ChannelTable {
     rows: Vec<ChannelData>,
     floor: f32,
     packs: [u32; 4],
+    quality: f32,
 }
 
 fn channel_data(
@@ -284,16 +292,16 @@ fn channel_data(
                 (0.0..=1.0).contains(&row.opacity),
                 "a channel opacity lies in the unit interval"
             );
-            let range = pyramid.channels()[index].intensity();
+            let info = &pyramid.channels()[index];
+            let categorical = crate::material::categorical(info);
+            let range = info.intensity();
             let (start, inverse) = window(range, row.intensity);
             let opaque = thresholds[index];
             let mode = row.volume.mode();
             let visible =
                 opaque.map_or(f32::INFINITY, |position| unit_at(start, inverse, position));
             let threshold = match mode {
-                VolumeMode::Isosurface if pyramid.channels()[index].color_table().is_some() => {
-                    visible
-                }
+                VolumeMode::Isosurface if categorical => visible,
                 VolumeMode::Isosurface => unit_at(start, inverse, row.volume.isovalue()),
                 VolumeMode::Blend | VolumeMode::Maximum => match opaque {
                     Some(position) if position <= 0.0 => f32::NEG_INFINITY,
@@ -320,12 +328,8 @@ fn channel_data(
                 lut_row: (index as f32 + 0.5) / rows.len() as f32,
                 threshold,
                 mode: mode.index() as f32,
-                nearest: if matches!(pyramid.channels()[index].semantics(), VoxelSemantics::Label) {
-                    1.0
-                } else {
-                    0.0
-                },
-                reserved: 0.0,
+                nearest: f32::from(u8::from(categorical)),
+                material: f32::from(u8::from(categorical)),
             }
         })
         .collect();
@@ -339,6 +343,7 @@ fn channel_data(
         rows,
         floor,
         packs: [channels, packs, peaks, 0],
+        quality: crate::material::samples_per_voxel(pyramid),
     }
 }
 

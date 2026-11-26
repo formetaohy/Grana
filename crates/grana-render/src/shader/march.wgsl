@@ -86,11 +86,29 @@ fn march_volume(
             );
             let segment = min(advance, limit - cursor);
             let tau = sample.extinction * segment * walk.voxels;
-            let alpha = 1.0 - exp(-tau);
+            let surfacing = sample.surface != 0u;
+            var surface_normal = vec4<f32>(0.0);
+            if (surfacing) {
+                let normal = categorical_normal(
+                    walk.tap,
+                    local,
+                    walk.sight.band,
+                    sample.surface - 1u,
+                );
+                surface_normal = vec4<f32>(normal, 1.0);
+            }
+            let alpha = select(1.0 - exp(-tau), sample.alpha, surfacing);
+            let weight = select(sample.extinction, sample.alpha, surfacing);
             if (alpha > 0.0) {
                 let world = origin + direction * cursor;
-                let albedo = sample.emission / max(sample.extinction, OPTICAL_MINIMUM_TAU);
-                march.radiance += march.transmittance * alpha * structure_lighting(albedo, structure_tap(walk.tap, local), world);
+                let albedo = sample.emission / max(weight, OPTICAL_MINIMUM_TAU);
+                var lit: vec3<f32>;
+                if (surfacing) {
+                    lit = categorical_lighting(albedo, surface_normal.xyz, world);
+                } else {
+                    lit = structure_lighting(albedo, structure_tap(walk.tap, local), world);
+                }
+                march.radiance += march.transmittance * alpha * lit;
                 march.transmittance *= 1.0 - alpha;
                 if (march.surface.x >= UNREACHED_DEPTH) {
                     march.surface.x = clip_depth(world);
@@ -99,7 +117,11 @@ fn march_volume(
             if (march.surface.y >= 1.0
                 && (1.0 - march.transmittance >= SURFACE_OPACITY || sample.peak)) {
                 march.surface.y = clip_depth(origin + direction * cursor);
-                march.normal = structure_sample_normal(structure_tap(walk.tap, local));
+                if (surfacing) {
+                    march.normal = surface_normal;
+                } else {
+                    march.normal = structure_sample_normal(structure_tap(walk.tap, local));
+                }
             }
             cursor += segment;
             samples += 1u;

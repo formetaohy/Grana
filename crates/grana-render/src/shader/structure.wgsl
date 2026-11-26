@@ -23,6 +23,9 @@ fn structure_density(texel: vec3<i32>) -> f32 {
             if (channel >= count) {
                 break;
             }
+            if (channel_categorical(channel)) {
+                continue;
+            }
             total += max(values[component], 0.0);
         }
     }
@@ -36,7 +39,7 @@ fn structure_normal(band: u32, origin: vec3<i32>, inner: vec3<i32>) -> vec4<f32>
         - structure_density(origin + inner - vec3<i32>(0, 1, 0));
     let dz = structure_density(origin + inner + vec3<i32>(0, 0, 1))
         - structure_density(origin + inner - vec3<i32>(0, 0, 1));
-    let gradient = level_gradient(band, vec3<f32>(dx, dy, dz) / frame.dims[band].xyz);
+    let gradient = level_gradient(band, vec3<f32>(dx, dy, dz));
     if (dot(gradient, gradient) <= 0.0) {
         return vec4<f32>(0.0);
     }

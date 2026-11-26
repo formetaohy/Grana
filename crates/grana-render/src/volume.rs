@@ -42,6 +42,8 @@ const MARCH: &str = concat!(
     "\n",
     include_str!("shader/shade.wgsl"),
     "\n",
+    include_str!("shader/categorical.wgsl"),
+    "\n",
     include_str!("shader/occupancy.wgsl"),
     "\n",
     include_str!("shader/volume_walk.wgsl"),

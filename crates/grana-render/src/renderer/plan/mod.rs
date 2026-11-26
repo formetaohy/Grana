@@ -228,6 +228,7 @@ pub(super) fn data(frame: Frame<'_>) -> FrameData {
             aspect: view.aspect,
             height: view.height,
             time,
+            samples_per_voxel: table.samples_per_voxel(),
         },
         ladder,
         tables,

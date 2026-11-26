@@ -470,15 +470,16 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
         }
         CameraProjection::Orthographic => 2.0 * camera.half_height() / height.max(1.0),
     };
+    let footprint = pixel_world / crate::material::samples_per_voxel(pyramid);
     let mut target = first;
     for index in first..levels {
-        if minimum_spacing(pyramid, index) <= pixel_world {
+        if minimum_spacing(pyramid, index) <= footprint {
             target = index;
         } else {
             break;
         }
     }
-    hold_level(levels, target, current, pixel_world, |index| {
+    hold_level(levels, target, current, footprint, |index| {
         minimum_spacing(pyramid, index)
     })
     .max(first)
@@ -504,7 +505,8 @@ impl<'a> Counts<'a> {
         hollow: Option<crate::hollow::Cursor<'a>>,
     ) -> Self {
         assert!(aspect > 0.0, "a view has a positive aspect");
-        let scale = camera.pixels_per_world_at(height as f32);
+        let scale =
+            camera.pixels_per_world_at(height as f32) * crate::material::samples_per_voxel(pyramid);
         let radius = 0.5 * Vec3::from(pyramid.level(first).world_extent()).length();
         let planes = crate::frame::planes(camera.view_projection(aspect, radius));
         Self {
@@ -608,4 +610,56 @@ fn hold_level(
 fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
     let spacing = pyramid.level(level).spacing();
     spacing.x().min(spacing.y()).min(spacing.z())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grana_display::Camera;
+    use grana_volume::{
+        Calibration, ChannelInfo, ColorTable, Extent, Intensity, Level, Spacing, Statistics,
+        VoxelFormat, VoxelSemantics,
+    };
+
+    fn pyramid(palette: bool) -> Pyramid {
+        let fine = Level::new(Extent::new(1024, 1024, 1024), Spacing::new(1.0, 1.0, 1.0));
+        let mut levels = vec![fine];
+        for _ in 0..2 {
+            let coarser = levels.last().expect("a level").coarser();
+            levels.push(coarser);
+        }
+        let statistics = Statistics::declared(Intensity::new(0.0, 255.0), VoxelSemantics::Scalar);
+        let channel = if palette {
+            ChannelInfo::new("labels", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8)
+                .with_color_table(ColorTable::new(vec![[0.0, 0.0, 0.0], [0.2, 0.6, 0.2]]))
+        } else {
+            ChannelInfo::new("signal", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8)
+        };
+        Pyramid::new(levels, 3, vec![channel], 1, 1.0, Calibration::Recorded)
+    }
+
+    fn target(pyramid: &Pyramid, height: f32) -> usize {
+        let mut camera = Camera::new(35.0);
+        camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+        volume_target(TargetView {
+            pyramid,
+            camera: &camera,
+            height,
+            first: 0,
+            current: None,
+        })
+    }
+
+    #[test]
+    fn keeps_a_categorical_volume_finer_than_the_same_scalar_volume() {
+        let scalar = pyramid(false);
+        let categorical = pyramid(true);
+        let held = target(&scalar, 300.0);
+        let kept = target(&categorical, 300.0);
+        assert!(held > 0, "the scalar volume coarsens at this pixel size");
+        assert!(
+            kept < held,
+            "a categorical volume keeps two samples per voxel: level {kept} against {held}"
+        );
+    }
 }

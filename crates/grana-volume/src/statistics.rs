@@ -2,8 +2,6 @@ use std::collections::BTreeSet;
 
 use crate::{Intensity, NoData, VoxelData, VoxelSemantics};
 
-const LABEL_LIMIT: u32 = 256;
-
 const DISTINCT_LIMIT: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,10 +84,8 @@ impl Statistics {
 fn infer(intensity: Intensity, distinct: u32) -> VoxelSemantics {
     let binary = distinct <= 2 && intensity.min() >= 0.0 && intensity.max() <= 1.0;
     if binary {
-        return VoxelSemantics::Presence;
+        VoxelSemantics::Presence
+    } else {
+        VoxelSemantics::Scalar
     }
-    if distinct <= LABEL_LIMIT {
-        return VoxelSemantics::Label;
-    }
-    VoxelSemantics::Scalar
 }

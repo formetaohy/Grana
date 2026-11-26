@@ -1,9 +1,18 @@
 const OPTICAL_MINIMUM_TAU: f32 = 1.0e-8;
+const SURFACE_EXTINCTION: f32 = 32.0;
 
 struct Optical {
     emission: vec3<f32>,
     extinction: f32,
+    alpha: f32,
+    surface: u32,
     peak: bool,
+}
+
+struct ChannelSample {
+    emission: vec3<f32>,
+    extinction: f32,
+    alpha: f32,
 }
 
 fn iso_density(channel: u32, value: f32) -> f32 {
@@ -16,18 +25,29 @@ fn iso_density(channel: u32, value: f32) -> f32 {
     return ISO_EXTINCTION * smoothstep(threshold - softness, threshold + softness, value);
 }
 
-fn channel_optical(channel: u32, value: f32) -> vec4<f32> {
+fn categorical_sample(channel: u32, value: f32) -> ChannelSample {
+    if (value < channel_threshold(channel)) {
+        return ChannelSample(vec3<f32>(0.0), 0.0, 0.0);
+    }
+    let weight = channel_opacity(channel);
+    return ChannelSample(channel_tau(channel, value).rgb * weight, weight, weight);
+}
+
+fn channel_optical(channel: u32, value: f32) -> ChannelSample {
+    if (channel_categorical(channel) && !channel_maximum(channel)) {
+        return categorical_sample(channel, value);
+    }
     let opacity = channel_opacity(channel);
     if (channel_isosurface(channel)) {
         let density = iso_density(channel, value) * opacity;
-        return vec4<f32>(channel_tau(channel, value).rgb * density, density);
+        return ChannelSample(channel_tau(channel, value).rgb * density, density, 0.0);
     }
     if (value < channel_threshold(channel)) {
-        return vec4<f32>(0.0);
+        return ChannelSample(vec3<f32>(0.0), 0.0, 0.0);
     }
     let extinction = channel_tau(channel, value);
     let weight = extinction.a * opacity;
-    return vec4<f32>(extinction.rgb * weight, weight);
+    return ChannelSample(extinction.rgb * weight, weight, 0.0);
 }
 
 fn channel_extinction(channel: u32, value: f32) -> f32 {
@@ -35,6 +55,12 @@ fn channel_extinction(channel: u32, value: f32) -> f32 {
         return 0.0;
     }
     let opacity = channel_opacity(channel);
+    if (channel_categorical(channel)) {
+        if (value < channel_threshold(channel)) {
+            return 0.0;
+        }
+        return SURFACE_EXTINCTION * opacity;
+    }
     if (channel_isosurface(channel)) {
         return iso_density(channel, value) * opacity;
     }
@@ -46,8 +72,10 @@ fn optical_sample(
     local: vec3<f32>,
     peaks: ptr<function, array<f32, CHANNEL_LIMIT>>,
 ) -> Optical {
-    var tau = 0.0;
+    var extinction = 0.0;
     var emission = vec3<f32>(0.0);
+    var alpha = 0.0;
+    var surface = 0u;
     var grown = false;
     let texel = tap_atlas_texel(tap);
     for (var pack = 0u; pack < PACK_LIMIT; pack += 1u) {
@@ -69,9 +97,13 @@ fn optical_sample(
                 continue;
             }
             let row = channel_optical(channel, values[component]);
-            tau += row.a;
-            emission += row.rgb;
+            extinction += row.extinction;
+            emission += row.emission;
+            if (row.alpha > alpha) {
+                alpha = row.alpha;
+                surface = channel + 1u;
+            }
         }
     }
-    return Optical(emission, tau, grown);
+    return Optical(emission, extinction, alpha, surface, grown);
 }
