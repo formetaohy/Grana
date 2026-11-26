@@ -12,12 +12,10 @@ use rayon::prelude::*;
 use crate::Error;
 use crate::align;
 use crate::reader::{Format, Reader};
-use crate::slice::{Store, Vault, default_root, mix, modified};
+use crate::slice::{Store, Vault, default_root, mix, modified, stamp};
 use crate::{Series, Source};
 
 const RESOLVED_LIMIT: usize = 8;
-
-const RESOLVED_VERSION: u32 = 6;
 
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 
@@ -277,7 +275,7 @@ fn covered_extent(ranges: &[Range<u32>; 3]) -> Extent {
 
 fn geometry(pyramid: &Pyramid) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&RESOLVED_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&stamp(FNV_BASE).to_le_bytes());
     bytes.extend_from_slice(&(pyramid.stored() as u64).to_le_bytes());
     bytes.extend_from_slice(&(pyramid.frame_count() as u64).to_le_bytes());
     for level in pyramid.levels() {

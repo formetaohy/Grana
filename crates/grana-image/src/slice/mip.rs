@@ -1,6 +1,21 @@
-use grana_volume::{NoData, Reduction, VoxelData, VoxelValue};
+use grana_volume::{NoData, Reduction, VoxelData, VoxelSemantics, VoxelValue};
 
 use crate::slice::Plane;
+use crate::slice::store::mix;
+
+const REVISION: u32 = 1;
+
+pub(crate) fn stamp(state: u64) -> u64 {
+    let mut hash = mix(state, &REVISION.to_le_bytes());
+    for semantics in [
+        VoxelSemantics::Scalar,
+        VoxelSemantics::Label,
+        VoxelSemantics::Presence,
+    ] {
+        hash = mix(hash, &[semantics.code(), semantics.reduction().code()]);
+    }
+    hash
+}
 
 pub(crate) fn reduce(
     lower: &Plane,
@@ -83,7 +98,7 @@ fn reduced<T: VoxelValue>(
         for x in 0..out_width {
             let base = (2 * x).min(width - 1);
             let line = (2 * y).min(height - 1);
-            let mut values = [fill; 8];
+            let mut values = [0.0f64; 8];
             let mut present = 0usize;
             for slice in [lower, upper] {
                 for offset in 0..2u32 {
@@ -93,7 +108,7 @@ fn reduced<T: VoxelValue>(
                         if no_data.is_some_and(|no_data| value.is_no_data(no_data)) {
                             continue;
                         }
-                        values[present] = value;
+                        values[present] = value.to_f64();
                         present += 1;
                     }
                 }
@@ -101,48 +116,9 @@ fn reduced<T: VoxelValue>(
             held.push(if present == 0 {
                 fill
             } else {
-                reduce_values(&values[..present], reduction, fill)
+                T::from_f64(reduction.combine(&values[..present], fill.to_f64()))
             });
         }
     }
     held
-}
-
-fn reduce_values<T: VoxelValue>(values: &[T], reduction: Reduction, fill: T) -> T {
-    match reduction {
-        Reduction::Average => {
-            let total = values
-                .iter()
-                .fold(0.0f64, |total, value| total + value.to_f64());
-            T::from_f64(total / values.len() as f64)
-        }
-        Reduction::Presence => values
-            .iter()
-            .copied()
-            .filter(|value| value.to_f64() != fill.to_f64())
-            .max_by(|left, right| left.to_f64().total_cmp(&right.to_f64()))
-            .unwrap_or(fill),
-        Reduction::Dominant => {
-            let mut counts = [(0u32, 0.0f64); 8];
-            let mut distinct = 0usize;
-            for value in values {
-                let fixed = value.to_f64();
-                match counts[..distinct]
-                    .iter_mut()
-                    .find(|(_, held)| *held == fixed)
-                {
-                    Some((count, _)) => *count += 1,
-                    None => {
-                        counts[distinct] = (1, fixed);
-                        distinct += 1;
-                    }
-                }
-            }
-            counts[..distinct]
-                .iter()
-                .filter(|(_, value)| *value != fill.to_f64())
-                .max_by(|left, right| left.0.cmp(&right.0).then(right.1.total_cmp(&left.1)))
-                .map_or(fill, |(_, value)| T::from_f64(*value))
-        }
-    }
 }

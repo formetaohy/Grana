@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use crate::Result;
 use crate::error::Error;
 
@@ -39,10 +41,10 @@ impl Plan {
         QUERIES
     }
 
-    pub(crate) fn of(weights: u64, depth: usize, spare: u64) -> Result<Self> {
+    pub(crate) fn of(weights: u64, depth: usize, spare: u64, peaks: &Peaks) -> Result<Self> {
         let mut least = 0;
         for splits in SPLITS {
-            least = peak(weights, depth, splits);
+            least = weights + growth(depth, splits, peaks);
             if least <= spare {
                 return Ok(Self {
                     splits,
@@ -58,9 +60,50 @@ impl Plan {
     }
 }
 
-fn peak(weights: u64, depth: usize, splits: usize) -> u64 {
+#[derive(Default)]
+pub(crate) struct Peaks {
+    held: Mutex<Vec<Peak>>,
+}
+
+#[derive(Clone, Copy)]
+struct Peak {
+    depth: usize,
+    splits: usize,
+    bytes: u64,
+}
+
+impl Peaks {
+    fn lookup(&self, depth: usize, splits: usize) -> Option<u64> {
+        self.held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .find(|peak| peak.depth == depth && peak.splits == splits)
+            .map(|peak| peak.bytes)
+    }
+
+    pub(crate) fn record(&self, depth: usize, splits: usize, bytes: u64) {
+        let mut held = self.held.lock().unwrap_or_else(|error| error.into_inner());
+        match held
+            .iter_mut()
+            .find(|peak| peak.depth == depth && peak.splits == splits)
+        {
+            Some(peak) => peak.bytes = peak.bytes.max(bytes),
+            None => held.push(Peak {
+                depth,
+                splits,
+                bytes,
+            }),
+        }
+    }
+}
+
+fn growth(depth: usize, splits: usize, peaks: &Peaks) -> u64 {
     let live = encoder() + frame(depth, splits) + page_waste(depth);
-    weights + live / RESERVED_OVER_LIVE.1 * RESERVED_OVER_LIVE.0
+    peaks.lookup(depth, splits).map_or_else(
+        || live / RESERVED_OVER_LIVE.1 * RESERVED_OVER_LIVE.0,
+        |measured| measured.max(live),
+    )
 }
 
 fn encoder() -> u64 {

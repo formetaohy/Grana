@@ -112,6 +112,14 @@ impl ImageSpec<'_> {
             "an indexed channel stores byte indices"
         );
         assert!(
+            !self.fill.derived()
+                || self
+                    .channels
+                    .iter()
+                    .all(|channel| channel.color_table.is_none()),
+            "a derived resolution level averages its voxels while a label channel carries indices"
+        );
+        assert!(
             !self.levels.is_empty(),
             "an exported image carries at least one resolution level"
         );

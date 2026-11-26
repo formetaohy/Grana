@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
@@ -39,6 +39,7 @@ impl Bricks for VolumeBricks {
 
 struct EmptyBricks {
     channels: usize,
+    reads: AtomicUsize,
 }
 
 impl Bricks for EmptyBricks {
@@ -47,6 +48,7 @@ impl Bricks for EmptyBricks {
         _request: BrickRequest,
         _warps: &grana_warp::Warps,
     ) -> Result<BrickData, String> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
         let voxels = (PADDED_SIDE as usize).pow(3);
         Ok(BrickData::new(
             (0..self.channels)
@@ -538,10 +540,14 @@ fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_cover
         100 << 20,
         gpu.pipelines(),
     );
+    let bricks = Arc::new(EmptyBricks {
+        channels: 1,
+        reads: AtomicUsize::new(0),
+    });
     let task = Task {
         plan,
         scene,
-        bricks: Arc::new(EmptyBricks { channels: 1 }),
+        bricks: Arc::clone(&bricks) as Arc<dyn Bricks>,
     };
     match context.run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}
@@ -551,4 +557,9 @@ fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_cover
         Outcome::Cancelled => panic!("the export was cancelled"),
     }
     assert!(path.exists(), "the empty export writes its frame");
+    assert_eq!(
+        bricks.reads.load(Ordering::Relaxed),
+        0,
+        "the export decodes the bricks the storage reports as empty"
+    );
 }

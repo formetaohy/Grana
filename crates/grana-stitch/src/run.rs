@@ -177,6 +177,15 @@ impl Mosaic {
             images.push(image);
         }
         let base = images[0].pyramid();
+        if base
+            .channels()
+            .iter()
+            .any(|channel| channel.color_table().is_some())
+        {
+            return Err(Error::new(
+                "a mosaic blends overlapping tiles by weight while a label channel carries indices; stitch the intensities of the tiles instead",
+            ));
+        }
         let extent = base.level(0).extent();
         let spacing = base.level(0).spacing();
         let channels = base.channel_count();

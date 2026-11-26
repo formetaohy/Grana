@@ -55,7 +55,12 @@ impl Segmenter {
     }
 
     pub fn plan(&self, depth: u32, spare: u64) -> Result<Plan> {
-        Plan::of(self.model.weights(), tile_depth(depth) as usize, spare)
+        Plan::of(
+            self.model.weights(),
+            tile_depth(depth) as usize,
+            spare,
+            self.model.peaks(),
+        )
     }
 
     pub fn graphics_memory(&self) -> Option<u64> {
@@ -73,9 +78,23 @@ impl Segmenter {
         plan: Plan,
         progress: &mut dyn FnMut(usize),
     ) -> Result<Volume> {
+        let idle = self.graphics_memory();
         let prediction = self.predict(planes, width, height, plan, progress)?;
+        self.account(planes.len() as u32, plan, idle, self.graphics_memory());
         let labels = postprocess::labels(&prediction, self.settings);
         Ok(Volume::new(width, height, planes.len() as u32, labels))
+    }
+
+    fn account(&self, depth: u32, plan: Plan, idle: Option<u64>, reserved: Option<u64>) {
+        let Some(measured) = reserved
+            .zip(idle)
+            .and_then(|(reserved, idle)| reserved.checked_sub(idle))
+        else {
+            return;
+        };
+        self.model
+            .peaks()
+            .record(tile_depth(depth) as usize, plan.splits(), measured);
     }
 
     fn predict(

@@ -305,9 +305,6 @@ impl Page {
                 bottom - top,
             );
         }
-        if self.color.inverted() && self.components == 1 {
-            self.invert(out);
-        }
         Ok(())
     }
 
@@ -324,7 +321,13 @@ impl Page {
             sample,
             block.index,
         );
-        blocks().load(key, || self.decode(plane.source, block))
+        blocks().load(key, || {
+            let mut data = self.decode(plane.source, block)?;
+            if self.color.inverted() && self.components == 1 {
+                self.invert(&mut data);
+            }
+            Ok(data)
+        })
     }
 
     fn decode(&self, source: &Source<'_>, block: &Block) -> Result<VoxelData, Error> {
