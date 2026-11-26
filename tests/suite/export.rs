@@ -5,7 +5,11 @@ use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
 use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, ObjectKind, Scene};
-use grana_volume::{BrickData, BrickGrid, BrickRequest, Extent, Pyramid, Region, Spacing, Volume};
+use grana_volume::{
+    BrickData, BrickGrid, BrickRequest, Calibration, ChannelInfo, Extent, Intensity, Level,
+    PADDED_SIDE, Pyramid, Region, Spacing, Statistics, Volume, VoxelData, VoxelFormat,
+    VoxelSemantics,
+};
 use wgpu::TextureFormat;
 
 use crate::support::{Gpu, Temp, gpu, spheres};
@@ -22,6 +26,25 @@ impl Bricks for VolumeBricks {
     fn read(&self, request: BrickRequest, _warps: &grana_warp::Warps) -> Result<BrickData, String> {
         let grid = BrickGrid::new(self.pyramid.level(request.level).extent());
         Ok(self.volume.brick(&grid, request.coord))
+    }
+}
+
+struct EmptyBricks {
+    channels: usize,
+}
+
+impl Bricks for EmptyBricks {
+    fn read(
+        &self,
+        _request: BrickRequest,
+        _warps: &grana_warp::Warps,
+    ) -> Result<BrickData, String> {
+        let voxels = (PADDED_SIDE as usize).pow(3);
+        Ok(BrickData::new(
+            (0..self.channels)
+                .map(|_| VoxelData::U16(vec![0u16; voxels]))
+                .collect(),
+        ))
     }
 }
 
@@ -383,4 +406,79 @@ fn reserves_only_the_memory_an_export_uses() {
         }
         Outcome::Cancelled => panic!("the export was cancelled"),
     }
+}
+
+#[test]
+fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_covers() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let level = Level::new(Extent::new(1024, 1024, 64), Spacing::new(1.0, 1.0, 1.0));
+    let pyramid = Pyramid::new(
+        vec![level],
+        1,
+        vec![ChannelInfo::new(
+            "signal",
+            [1.0, 1.0, 1.0],
+            Statistics::declared(Intensity::new(0.0, 1.0), VoxelSemantics::Scalar),
+            VoxelFormat::U16,
+        )],
+        1,
+        1.0,
+        Calibration::Recorded,
+    );
+    let scene = Scene::new(Dataset::synthetic("empty", pyramid.clone()));
+    let size = OutputSize::of(320, 224);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
+    let held = grana_render::residency(&pyramid, &camera, size.to_array(), Region::none());
+    assert!(
+        held.detail.bricks > 1000,
+        "the fitted view covers {} of the 2048 bricks of the level",
+        held.detail.bricks
+    );
+    let probed = grana_render::visible_bricks(&pyramid, &camera, size.to_array(), Region::none());
+    assert_eq!(
+        probed
+            .iter()
+            .map(|visible| visible.bricks.len())
+            .sum::<usize>(),
+        held.detail.bricks,
+        "the bricks an export probes are the bricks its claim counts"
+    );
+    let temp = Temp::new("grana-export-empty");
+    let path = temp.path().join("empty.png");
+    let plan = Plan {
+        destination: Destination::Image { path: path.clone() },
+        size,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            camera: camera.state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let ledger = Arc::new(grana_gpu::Ledger::new(200 << 20));
+    let mut context = Offline::new(
+        gpu.device().clone(),
+        gpu.queue().clone(),
+        TextureFormat::Rgba8Unorm,
+        &ledger,
+        100 << 20,
+        gpu.pipelines(),
+    );
+    let task = Task {
+        plan,
+        scene,
+        bricks: Arc::new(EmptyBricks { channels: 1 }),
+    };
+    match context.run(task, &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Complete { .. } => {}
+        Outcome::Failed { detail } => {
+            panic!("an empty volume needs no brick residency to export: {detail}")
+        }
+        Outcome::Cancelled => panic!("the export was cancelled"),
+    }
+    assert!(path.exists(), "the empty export writes its frame");
 }

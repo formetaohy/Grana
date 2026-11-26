@@ -612,6 +612,33 @@ impl Atlas {
         self.identity.clear();
     }
 
+    pub fn hollow_words(&self) -> Vec<(u32, usize, Vec<u64>)> {
+        self.hollow
+            .frames
+            .frames
+            .iter()
+            .map(|((time, level), frame)| (*time, *level, frame.words.clone()))
+            .collect()
+    }
+
+    pub fn restore_hollow(&mut self, words: Vec<(u32, usize, Vec<u64>)>) {
+        for (time, level, bits) in words {
+            let frame = self.hollow.frames.frames.entry((time, level)).or_default();
+            if frame.words.len() < bits.len() {
+                frame.words.resize(bits.len(), 0);
+            }
+            for (held, other) in frame.words.iter_mut().zip(bits) {
+                *held |= other;
+            }
+            frame.count = frame
+                .words
+                .iter()
+                .map(|word| word.count_ones() as usize)
+                .sum();
+            self.hollow.remember(time);
+        }
+    }
+
     pub fn residents(&self, time: u32, level: usize, out: &mut Vec<Resident>) {
         out.clear();
         let mut cursor = self

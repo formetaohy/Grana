@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use grana_display::Camera;
 use grana_gpu::Readback;
-use grana_render::{Delivery, FrameInfo, Renderer};
+use grana_render::{Delivery, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
@@ -240,7 +240,7 @@ impl Export {
         };
         self.attempts += 1;
         if info.truncated {
-            return self.fail(truncation(&info));
+            return self.fail(truncation(renderer));
         }
         if info.drawn
             && let Some(needed) = self.levels.get(self.frame)
@@ -478,10 +478,10 @@ struct Drawn<'a> {
     pose: Pose,
 }
 
-fn truncation(info: &FrameInfo) -> String {
-    let held = info.view;
+fn truncation(renderer: &Renderer) -> String {
     format!(
-        "an export at this size needs {} bricks at level {} but only {} fit in the residency budget; lower the export width or zoom in",
-        held.visible, held.level, held.demand
+        "an export at this size shows {} bricks at its full detail and the residency holds {} of them; lower the export width or zoom in",
+        renderer.wanted(),
+        renderer.slots()
     )
 }

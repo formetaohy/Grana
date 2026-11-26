@@ -14,7 +14,10 @@ use wgpu::{Device, Queue, TextureFormat};
 use crate::compose::Composer;
 use crate::export::{Export, Step};
 use crate::plan::{self, Destination};
+use crate::probe;
 use crate::task::{Bricks, Task};
+
+const READ_BYTES: u64 = 128 << 20;
 
 pub enum Outcome {
     Complete { path: PathBuf },
@@ -26,6 +29,7 @@ pub struct Offline {
     device: Device,
     queue: Queue,
     format: TextureFormat,
+    ledger: Arc<grana_gpu::Ledger>,
     budget: u64,
     renderer: Renderer,
     composer: Composer,
@@ -47,6 +51,7 @@ impl Offline {
             device,
             queue,
             format,
+            ledger: Arc::clone(ledger),
             budget,
             renderer,
             composer,
@@ -119,18 +124,51 @@ impl Offline {
             Ok(needed) => needed,
             Err(detail) => return Outcome::Failed { detail },
         };
-        if let Err(detail) = self
-            .renderer
-            .set_dataset(&self.device, &pyramid, self.budget, size)
-        {
-            return Outcome::Failed { detail };
+        let ceiling =
+            EXPORT_CEILING.min(self.ledger.spare().saturating_add(self.renderer.claimed()));
+        let room = match self.renderer.capacity(
+            &self.device,
+            &pyramid,
+            self.budget,
+            grana_render::Detail {
+                level: needed.detail.level,
+                bricks: usize::MAX / 4,
+            },
+            size,
+            ceiling,
+        ) {
+            Ok(room) => room,
+            Err(detail) => return Outcome::Failed { detail },
+        };
+        let mut detail = needed.detail;
+        let mut hollow = Vec::new();
+        let mut bricks_held = probe::Cache::empty();
+        if room < detail.bricks {
+            let scanned = match probe::scan(probe::Scan {
+                plan: &plan,
+                pyramid: &pyramid,
+                scene: &scene,
+                bricks: bricks.as_ref(),
+                limit: room,
+                cancel,
+                progress,
+            }) {
+                Ok(Some(scanned)) => scanned,
+                Ok(None) => return Outcome::Cancelled,
+                Err(detail) => return Outcome::Failed { detail },
+            };
+            detail = scanned.detail;
+            detail.bricks = detail.bricks.min(needed.detail.bricks);
+            hollow = scanned.hollow;
+            bricks_held = scanned.cache;
         }
         if let Err(detail) =
             self.renderer
-                .reserve(&self.device, &pyramid, needed.detail, size, EXPORT_CEILING)
+                .reserve(&self.device, &pyramid, self.budget, detail, size, ceiling)
         {
             return Outcome::Failed { detail };
         }
+        self.renderer.seed_hollow(hollow);
         let first = self.renderer.first_level();
         if first > needed.detail.level {
             return Outcome::Failed {
@@ -171,7 +209,7 @@ impl Offline {
                     }
                 }
             }
-            if let Err(detail) = self.pump(&bricks, &scene) {
+            if let Err(detail) = self.pump(&bricks, &scene, &mut bricks_held) {
                 export.discard();
                 return Outcome::Failed { detail };
             }
@@ -206,7 +244,12 @@ impl Offline {
         }
     }
 
-    fn pump(&mut self, bricks: &Arc<dyn Bricks>, scene: &Scene) -> Result<(), String> {
+    fn pump(
+        &mut self,
+        bricks: &Arc<dyn Bricks>,
+        scene: &Scene,
+        held: &mut probe::Cache,
+    ) -> Result<(), String> {
         let Some(requests) = self.renderer.poll_requests(&self.device, &HashSet::new())? else {
             return Ok(());
         };
@@ -214,10 +257,23 @@ impl Offline {
             return Ok(());
         }
         let pyramid = scene.dataset.pyramid();
+        let brick = pyramid.brick_bytes().max(1);
+        let mut bytes = 0u64;
         let mut uploaded = Vec::with_capacity(requests.volume.len() + requests.prefetch.len());
         for request in requests.volume.iter().chain(&requests.prefetch) {
+            if let Some(packed) = held.take(request) {
+                uploaded.push((*request, packed));
+                continue;
+            }
+            if bytes.saturating_add(brick) > READ_BYTES && !uploaded.is_empty() {
+                break;
+            }
             let data = bricks.read(*request, &scene.drift_warps(request.time))?;
+            bytes += brick;
             uploaded.push((*request, PackedBrick::of(&data, pyramid, request.channels)));
+        }
+        if uploaded.is_empty() {
+            return Ok(());
         }
         self.renderer.upload(&uploaded);
         Ok(())

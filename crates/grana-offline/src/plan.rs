@@ -89,6 +89,9 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
     if plan.poses.is_empty() {
         return Err("an export holds at least one pose".to_string());
     }
+    if matches!(plan.destination, Destination::Image { .. }) && plan.poses.len() != 1 {
+        return Err("an image export renders exactly one frame".to_string());
+    }
     if matches!(plan.destination, Destination::Lineage { .. }) {
         if plan.poses.len() != 1 {
             return Err("a lineage page highlights exactly one frame".to_string());

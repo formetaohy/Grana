@@ -6,6 +6,7 @@ mod lineage;
 mod offline;
 mod page;
 mod plan;
+mod probe;
 mod quantize;
 mod sink;
 mod surface;

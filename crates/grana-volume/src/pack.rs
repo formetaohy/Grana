@@ -186,4 +186,10 @@ impl PackedBrick {
             .enumerate()
             .filter_map(|(pack, held)| held.as_ref().map(|held| (pack, held)))
     }
+
+    pub fn bytes(&self) -> u64 {
+        self.packs()
+            .map(|(_, block)| (size_of_val(block.rows()) + size_of_val(block.cells())) as u64)
+            .sum()
+    }
 }

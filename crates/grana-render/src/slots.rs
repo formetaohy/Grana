@@ -7,6 +7,10 @@ pub(crate) struct Slots {
 }
 
 impl Slots {
+    pub(crate) fn limit(max_dimension: u32) -> usize {
+        limit(max_dimension)
+    }
+
     pub(crate) fn fitting(wanted: usize, max_dimension: u32) -> Self {
         let limit = limit(max_dimension);
         let wanted = wanted.clamp(1, limit * limit * limit);

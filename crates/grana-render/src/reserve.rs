@@ -118,9 +118,12 @@ impl Plan {
             }
             Allocation::Export { slots, ceiling } => {
                 let record_limit = brick_count(pyramid) + 1;
-                let mut slots = slots.max(MINIMUM_SLOTS as usize);
+                let mut slots = slots
+                    .max(MINIMUM_SLOTS as usize)
+                    .min(Slots::limit(max_dimension).pow(3))
+                    .min(brick_count(pyramid));
                 loop {
-                    let grid = Slots::covering(slots.min(brick_count(pyramid)), max_dimension)?;
+                    let grid = Slots::covering(slots, max_dimension)?;
                     let charges = dataset(pyramid, grid, record_limit);
                     let surface = (charges.of(Charge::Atlas) + charges.of(Charge::Records))
                         / (SURFACE_SHARE - 1);

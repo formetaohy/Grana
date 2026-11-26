@@ -529,6 +529,10 @@ impl<'a> Counts<'a> {
         wanted
     }
 
+    pub(crate) fn bricks(&self, level: usize) -> Vec<u32> {
+        self.frustum.gather(self.pyramid.level(level))
+    }
+
     fn ensure(&mut self, level: usize) -> crate::culling::Counts {
         while self.first + self.bands.len() <= level {
             let held = self.first + self.bands.len();

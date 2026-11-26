@@ -205,6 +205,7 @@ pub struct Renderer {
     wanted: usize,
     deficit: usize,
     export_ceiling: u64,
+    seed: Vec<(u32, usize, Vec<u32>)>,
     reclaim: bool,
     degraded: Option<String>,
     temporal: temporal::Resolve,
@@ -302,6 +303,7 @@ impl Renderer {
             wanted: 0,
             deficit: 0,
             export_ceiling: budget,
+            seed: Vec::new(),
             reclaim: false,
             degraded: None,
             temporal,
@@ -350,6 +352,14 @@ impl Renderer {
         self.residence.generation()
     }
 
+    pub fn wanted(&self) -> usize {
+        self.wanted
+    }
+
+    pub fn claimed(&self) -> u64 {
+        self.claim.bytes()
+    }
+
     pub fn slots(&self) -> usize {
         self.resources.as_ref().map_or(0, Resources::slots)
     }
@@ -358,14 +368,44 @@ impl Renderer {
         self.resources.as_ref().map_or(0, Resources::first_level)
     }
 
+    pub fn capacity(
+        &self,
+        device: &Device,
+        pyramid: &Pyramid,
+        total: u64,
+        detail: crate::Detail,
+        size: [u32; 2],
+        ceiling: u64,
+    ) -> Result<usize, String> {
+        assert!(total > 0, "a renderer needs a texture budget");
+        let plan = reserve::Plan::of(
+            pyramid,
+            reserve::Allocation::Export {
+                slots: detail.bricks + 1,
+                ceiling,
+            },
+            reserve::Footprint {
+                frames: budget::Frames::of(size, budget::FrameDemand::full()).bytes(),
+                splats: budget::splat_budget(total),
+                support: self.support(),
+            },
+            device.limits().max_texture_dimension_3d,
+        )?;
+        Ok(plan.slots().capacity())
+    }
+
     pub fn reserve(
         &mut self,
         device: &Device,
         pyramid: &Pyramid,
+        total: u64,
         detail: crate::Detail,
         size: [u32; 2],
         ceiling: u64,
     ) -> Result<(), String> {
+        assert!(total > 0, "a renderer needs a texture budget");
+        self.total = total;
+        self.ceiling = total;
         self.wanted = detail.bricks + 1;
         self.export_ceiling = ceiling;
         self.deficit = 0;
@@ -382,6 +422,30 @@ impl Renderer {
             Reset::Dataset,
         )
         .map(|_| ())
+    }
+
+    pub fn seed_hollow(&mut self, seed: Vec<(u32, usize, Vec<u32>)>) {
+        self.seed = seed;
+        self.apply_seed();
+    }
+
+    fn apply_seed(&mut self) {
+        let Self {
+            resources, seed, ..
+        } = self;
+        let Some(resources) = resources.as_mut() else {
+            return;
+        };
+        for (time, level, indices) in seed {
+            if *level >= resources.pyramid.level_count() {
+                continue;
+            }
+            for index in indices {
+                resources
+                    .atlas
+                    .assign_hollow(*time, *level, *index as usize);
+            }
+        }
     }
 
     pub fn degraded(&self) -> Option<&str> {
@@ -439,6 +503,10 @@ impl Renderer {
         let mut allocation = allocation;
         let mut shrunk = false;
         let mut held = self.resources.take();
+        let carried = held
+            .as_ref()
+            .filter(|resources| same_layout(&resources.pyramid, pyramid))
+            .map(|resources| resources.atlas.hollow_words());
         let mut peak = held.as_ref().map_or(0, Resources::bytes);
         let outcome = loop {
             let plan = match reserve::Plan::of(pyramid, allocation, self.footprint(), max_dimension)
@@ -505,6 +573,11 @@ impl Renderer {
         self.residency_target = plan.target();
         self.mesh_budget = plan.surface();
         self.resources = Some(resources);
+        if let Some(carried) = carried {
+            let resources = self.resources.as_mut().expect("the dataset is installed");
+            resources.atlas.restore_hollow(carried);
+        }
+        self.apply_seed();
         if let Some(meshes) = self.meshes.as_mut() {
             meshes.set_budget(self.mesh_budget);
         }
@@ -615,13 +688,9 @@ impl Renderer {
     }
 
     pub fn holds(&self, pyramid: &Pyramid) -> bool {
-        self.resources.as_ref().is_some_and(|held| {
-            let held = &held.pyramid;
-            held.levels() == pyramid.levels()
-                && held.frame_count() == pyramid.frame_count()
-                && held.channel_count() == pyramid.channel_count()
-                && held.brick_bytes() == pyramid.brick_bytes()
-        })
+        self.resources
+            .as_ref()
+            .is_some_and(|held| same_layout(&held.pyramid, pyramid))
     }
 
     pub fn invalidate(&mut self, pyramid: &Pyramid) {
@@ -685,6 +754,7 @@ impl Renderer {
         self.total = budget;
         self.wanted = 0;
         self.deficit = 0;
+        self.seed.clear();
         self.reclaim = false;
         self.exporting = false;
         self.degraded = None;
@@ -1163,6 +1233,13 @@ fn unaffordable(bytes: u64) -> String {
         "the graphics device cannot hold the {:.1} MiB of textures this dataset needs together with the running analyses",
         bytes as f64 / (1u64 << 20) as f64
     )
+}
+
+fn same_layout(held: &Pyramid, pyramid: &Pyramid) -> bool {
+    held.levels() == pyramid.levels()
+        && held.frame_count() == pyramid.frame_count()
+        && held.channel_count() == pyramid.channel_count()
+        && held.brick_bytes() == pyramid.brick_bytes()
 }
 
 pub(super) fn ensure_brick(

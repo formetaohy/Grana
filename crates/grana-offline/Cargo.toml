@@ -29,6 +29,7 @@ grana-ui = { workspace = true }
 grana-vector = { workspace = true }
 grana-video = { workspace = true }
 grana-volume = { workspace = true }
+rayon = { workspace = true }
 wgpu = { workspace = true }
 
 [lints]

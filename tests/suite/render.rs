@@ -2162,7 +2162,14 @@ fn claims_an_export_the_ceiling_cannot_hold_at_full_detail() {
     };
     let ceiling = renderer.frames() + renderer.splat_budget() + (32 << 20);
     renderer
-        .reserve(gpu.device(), &pyramid, detail, [SIDE, SIDE], ceiling)
+        .reserve(
+            gpu.device(),
+            &pyramid,
+            budget(BUDGET, [SIDE, SIDE]),
+            detail,
+            [SIDE, SIDE],
+            ceiling,
+        )
         .expect("an export claims the bricks its ceiling can hold rather than refusing outright");
     assert!(
         renderer.slots() > 1 && renderer.slots() < detail.bricks,

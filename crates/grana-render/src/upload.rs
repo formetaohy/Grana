@@ -121,31 +121,49 @@ impl Upload {
                 "an uploaded brick covers every texel of its rows"
             );
         }
-        let width = stride * columns.len();
-        let row_bytes = width.next_multiple_of(ALIGNMENT);
-        let length = row_bytes * extent * extent;
-        let offset = self.reserve_blank(length, ALIGNMENT);
-        self.payload += (width * extent * extent) as u64;
-        self.commanded += 1;
-        for line in 0..extent * extent {
-            let row = &mut self.bytes[offset + line * row_bytes..offset + line * row_bytes + width];
-            for (column, source) in columns.iter().enumerate() {
-                row[column * stride..(column + 1) * stride]
-                    .copy_from_slice(&source[line * stride..(line + 1) * stride]);
-            }
+        let rows = extent * extent;
+        let within = |count: usize| (stride * count).next_multiple_of(ALIGNMENT) * rows;
+        let mut width = columns.len();
+        while width > 1 && within(width) > STAGING_BYTES as usize {
+            width -= 1;
         }
-        self.copies.push(Copy::Texture {
-            texture: texture.clone(),
-            origin,
-            extent: [
-                side * u32::try_from(columns.len()).expect("a brick batch fits u32 columns"),
-                side,
-                side,
-            ],
-            rows: side,
-            row_bytes: u32::try_from(row_bytes).expect("a brick row fits u32"),
-            offset: offset as u64,
-        });
+        let mut first = 0;
+        while first < columns.len() {
+            let last = (first + width).min(columns.len());
+            let held = &columns[first..last];
+            let payload = stride * held.len();
+            let row_bytes = payload.next_multiple_of(ALIGNMENT);
+            let length = row_bytes * rows;
+            let offset = self.reserve_blank(length, ALIGNMENT);
+            self.payload += (payload * rows) as u64;
+            self.commanded += 1;
+            for line in 0..rows {
+                let row =
+                    &mut self.bytes[offset + line * row_bytes..offset + line * row_bytes + payload];
+                for (column, source) in held.iter().enumerate() {
+                    row[column * stride..(column + 1) * stride]
+                        .copy_from_slice(&source[line * stride..(line + 1) * stride]);
+                }
+            }
+            self.copies.push(Copy::Texture {
+                texture: texture.clone(),
+                origin: [
+                    origin[0]
+                        + u32::try_from(first).expect("a brick batch fits u32 columns") * side,
+                    origin[1],
+                    origin[2],
+                ],
+                extent: [
+                    side * u32::try_from(held.len()).expect("a brick run fits u32 columns"),
+                    side,
+                    side,
+                ],
+                rows: side,
+                row_bytes: u32::try_from(row_bytes).expect("a brick row fits u32"),
+                offset: offset as u64,
+            });
+            first = last;
+        }
     }
 
     pub fn buffer(&mut self, target: &Buffer, target_offset: u64, bytes: &[u8]) {
