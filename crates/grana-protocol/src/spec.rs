@@ -2645,7 +2645,7 @@ impl CameraSpec {
             || !(0.0..=grana_display::APERTURE_LIMIT).contains(&self.aperture)
             || !self.focus.is_finite()
             || self.focus <= 0.0
-            || self.focus > grana_display::APERTURE_LIMIT
+            || self.focus > grana_display::FOCUS_LIMIT
             || self.mode().is_none()
             || self.slice.is_some_and(|slice| slice.slice().is_none())
             || (self.slice.is_some()

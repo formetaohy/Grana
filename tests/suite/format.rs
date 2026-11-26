@@ -1738,6 +1738,56 @@ fn reads_ome_tiff_metadata_and_voxels() {
     reads_a_chunky_series(&temp.path().join("chunky.ome.tif"));
 }
 
+#[test]
+fn reads_an_imagej_hyperstack_by_the_axes_it_declares() {
+    let temp = Temp::new("suite-imagej-hyperstack");
+    let path = temp.path().join("hyperstack.tif");
+    let info = "ImageJ=1.53n\nimages=12\nchannels=2\nslices=3\nframes=2\nhyperstack=true\nmode=composite\nunit=um\nspacing=0.8\nfinterval=0.5\n";
+    let pixels = (1..=12u8)
+        .map(|plane| vec![plane * 10; 4])
+        .collect::<Vec<_>>();
+    let pages = pixels
+        .iter()
+        .map(|plane| (2u32, 2u32, plane.as_slice()))
+        .collect::<Vec<_>>();
+    support::imagej_tiff(&path, info, Some((2, 1, 1)), &pages);
+    let image = grana_tiff::Image::open(&path, 0).expect("the imagej hyperstack opens");
+    let pyramid = image.pyramid();
+    assert_eq!(pyramid.level(0).extent(), Extent::new(2, 2, 3));
+    assert_eq!(pyramid.channel_count(), 2);
+    assert_eq!(pyramid.frame_count(), 2);
+    assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.5, 0.5, 0.8));
+    assert_eq!(pyramid.calibration(), Calibration::Recorded);
+    assert_eq!(pyramid.frame_interval(), 0.5);
+    let VoxelData::U8(values) = image
+        .read_region(0, 0, 0, 0..2, 0..2, 0..3)
+        .expect("the first channel reads")
+    else {
+        panic!("the hyperstack stores bytes");
+    };
+    assert_eq!(
+        values,
+        [10u8, 10, 10, 10, 30, 30, 30, 30, 50, 50, 50, 50],
+        "the channel is the fastest axis of an ImageJ hyperstack"
+    );
+    let VoxelData::U8(values) = image
+        .read_region(1, 0, 1, 0..2, 0..2, 0..1)
+        .expect("the last plane reads")
+    else {
+        panic!("the hyperstack stores bytes");
+    };
+    assert_eq!(
+        values, [80u8; 4],
+        "the second channel of the second frame is its own plane"
+    );
+    let Some(series) = image.series().first() else {
+        panic!("the hyperstack declares its series");
+    };
+    assert_eq!(series.extent(), Extent::new(2, 2, 3));
+    assert_eq!(series.channels(), 2);
+    assert_eq!(series.frames(), 2);
+}
+
 const LATE_PLANE: &str = concat!(
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
     "<OME xmlns=\"http://www.openmicroscopy.org/Schemas/OME/2016-06\">\n",

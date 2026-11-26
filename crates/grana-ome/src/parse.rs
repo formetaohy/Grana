@@ -380,7 +380,7 @@ fn point(value: f32, unit: Option<&str>) -> Result<f32, String> {
     }
 }
 
-fn length_unit(unit: Option<&str>) -> Result<f32, String> {
+pub fn length_unit(unit: Option<&str>) -> Result<f32, String> {
     Ok(match unit.unwrap_or("µm") {
         "µm" | "μm" | "um" => 1.0,
         "nm" => 1e-3,

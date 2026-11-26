@@ -5,6 +5,7 @@ mod directory;
 mod error;
 mod fileset;
 mod image;
+mod imagej;
 mod layout;
 mod page;
 mod planes;

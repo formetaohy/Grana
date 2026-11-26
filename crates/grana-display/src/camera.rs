@@ -6,7 +6,9 @@ const PITCH_LIMIT: f32 = 1.45;
 const ORBIT_SENSITIVITY: f32 = 0.007;
 const ZOOM_SENSITIVITY: f32 = 0.15;
 const GOLDEN_ANGLE: f32 = 2.399_963_2;
+const DISTANCE_LIMIT: f32 = 1.0e7;
 pub const APERTURE_LIMIT: f32 = 1.0e4;
+pub const FOCUS_LIMIT: f32 = DISTANCE_LIMIT;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
@@ -178,7 +180,7 @@ impl Camera {
 
     pub fn set_focus(&mut self, focus: f32) {
         assert!(
-            focus.is_finite() && focus > 0.0 && focus <= APERTURE_LIMIT,
+            focus.is_finite() && focus > 0.0 && focus <= FOCUS_LIMIT,
             "a focus distance is a bounded positive length"
         );
         self.focus = focus;
@@ -346,7 +348,8 @@ impl Camera {
     }
 
     pub fn zoom(&mut self, scroll: f32) {
-        self.distance = (self.distance * (1.0 - scroll * ZOOM_SENSITIVITY)).clamp(1e-4, 1.0e7);
+        self.distance =
+            (self.distance * (1.0 - scroll * ZOOM_SENSITIVITY)).clamp(1e-4, DISTANCE_LIMIT);
     }
 
     pub fn focus_at_pivot(&mut self) {
@@ -415,7 +418,7 @@ impl Camera {
                 && (0.0..=APERTURE_LIMIT).contains(&aperture)
                 && focus.is_finite()
                 && focus > 0.0
-                && focus <= APERTURE_LIMIT,
+                && focus <= FOCUS_LIMIT,
             "a camera state describes a plausible view"
         );
         self.pivot = Vec3::from(pivot);

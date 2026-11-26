@@ -7,6 +7,12 @@ enum Axis {
 
 const AXES: [Axis; 3] = [Axis::Z, Axis::C, Axis::T];
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Dialect<'a> {
+    Ome(&'a str),
+    ImageJ,
+}
+
 #[derive(Clone)]
 pub(crate) struct Planes {
     order: Vec<Axis>,
@@ -15,46 +21,25 @@ pub(crate) struct Planes {
 }
 
 impl Planes {
-    pub(crate) fn new(
-        size_z: u32,
-        size_c: u32,
-        size_t: u32,
-        chunky: bool,
-        dimension_order: &str,
-    ) -> Result<Self, String> {
-        let sizes = [size_z, size_c, size_t];
+    pub(crate) fn new(sizes: [u32; 3], chunky: bool, dialect: Dialect<'_>) -> Result<Self, String> {
         for axis in AXES {
             if sizes[slot(axis)] == 0 {
-                return Err("the OME image declares a zero length axis".to_string());
+                return Err("the image declares a zero length axis".to_string());
             }
         }
-        let mut order = Vec::new();
-        let mut seen = [false; 3];
-        for character in dimension_order.chars() {
-            let Some(axis) = axis(character) else {
-                if matches!(character, 'X' | 'Y') {
-                    continue;
-                }
-                return Err(format!(
-                    "the OME dimension order `{dimension_order}` names the unknown axis `{character}`"
-                ));
-            };
-            if seen[slot(axis)] {
-                return Err(format!(
-                    "the OME dimension order `{dimension_order}` names an axis twice"
-                ));
-            }
-            seen[slot(axis)] = true;
-            if axis == Axis::C && chunky {
-                continue;
-            }
-            order.push(axis);
+        let order = match dialect {
+            Dialect::Ome(dimension_order) => order(dimension_order)?,
+            Dialect::ImageJ => vec![Axis::C, Axis::Z, Axis::T],
+        };
+        let mut order = order;
+        if chunky {
+            order.retain(|axis| *axis != Axis::C);
         }
         for axis in AXES {
             let inside_page = chunky && axis == Axis::C;
-            if !inside_page && sizes[slot(axis)] > 1 && !seen[slot(axis)] {
+            if !inside_page && sizes[slot(axis)] > 1 && !order.contains(&axis) {
                 return Err(format!(
-                    "the OME dimension order `{dimension_order}` omits the {} axis",
+                    "the dimension order omits the {} axis it holds",
                     name(axis)
                 ));
             }
@@ -106,6 +91,29 @@ impl Planes {
         }
         index as usize
     }
+}
+
+fn order(dimension_order: &str) -> Result<Vec<Axis>, String> {
+    let mut order = Vec::new();
+    let mut seen = [false; 3];
+    for character in dimension_order.chars() {
+        let Some(axis) = axis(character) else {
+            if matches!(character, 'X' | 'Y') {
+                continue;
+            }
+            return Err(format!(
+                "the OME dimension order `{dimension_order}` names the unknown axis `{character}`"
+            ));
+        };
+        if seen[slot(axis)] {
+            return Err(format!(
+                "the OME dimension order `{dimension_order}` names an axis twice"
+            ));
+        }
+        seen[slot(axis)] = true;
+        order.push(axis);
+    }
+    Ok(order)
 }
 
 fn axis(character: char) -> Option<Axis> {

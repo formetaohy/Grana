@@ -213,10 +213,11 @@ impl Directory {
             .iter()
             .rposition(|byte| *byte != 0)
             .map_or(0, |index| index + 1);
-        let text = std::str::from_utf8(&data[..end]).map_err(|error| {
-            Error::metadata(path, format!("the TIFF tag {tag} is not UTF-8: {error}"))
-        })?;
-        Ok(Some(text.to_string()))
+        let text = match std::str::from_utf8(&data[..end]) {
+            Ok(text) => text.to_string(),
+            Err(_) => data[..end].iter().map(|byte| char::from(*byte)).collect(),
+        };
+        Ok(Some(text))
     }
 
     pub(crate) fn rational(

@@ -344,7 +344,7 @@ impl Decode for CameraState {
         if state.fov_y <= 1.0f32.to_radians()
             || state.fov_y >= 179.0f32.to_radians()
             || state.aperture > grana_display::APERTURE_LIMIT
-            || state.focus > grana_display::APERTURE_LIMIT
+            || state.focus > grana_display::FOCUS_LIMIT
             || (state.slice.is_some()
                 && state.projection != grana_display::CameraProjection::Orthographic)
         {

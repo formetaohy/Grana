@@ -1,4 +1,4 @@
-use grana_display::{APERTURE_LIMIT, CameraState};
+use grana_display::{APERTURE_LIMIT, CameraState, FOCUS_LIMIT};
 
 const KEY_EPSILON: f32 = 1.0e-3;
 const MAX_FPS: u32 = 240;
@@ -283,7 +283,7 @@ fn plausible_camera(camera: &CameraState) -> bool {
         && (0.0..=APERTURE_LIMIT).contains(&camera.aperture)
         && camera.focus.is_finite()
         && camera.focus > 0.0
-        && camera.focus <= APERTURE_LIMIT
+        && camera.focus <= FOCUS_LIMIT
 }
 
 fn mix(hash: u64, value: u64) -> u64 {

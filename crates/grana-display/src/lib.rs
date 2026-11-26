@@ -9,7 +9,7 @@ mod surface;
 mod transfer;
 mod volume;
 
-pub use camera::{APERTURE_LIMIT, Camera, CameraProjection, CameraState, Ray};
+pub use camera::{APERTURE_LIMIT, Camera, CameraProjection, CameraState, FOCUS_LIMIT, Ray};
 pub use color::{ColorState, Coloring, Extent, merged};
 pub use material::Material;
 pub use palette::{CATEGORICAL, GROUP_NEUTRAL, Palette, categorical, group_tint};

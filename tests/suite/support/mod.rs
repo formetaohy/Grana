@@ -735,11 +735,31 @@ impl Snapshot {
 pub const TIFF_ENTRIES: u32 = 12;
 
 pub fn ome_tiff(path: &Path, xml: &str, pages: &[(u32, u32, &[u8])]) {
-    let record = 2 + TIFF_ENTRIES * 12 + 4;
+    stack(path, xml, None, pages);
+}
+
+pub fn imagej_tiff(
+    path: &Path,
+    info: &str,
+    resolution: Option<(u32, u32, u16)>,
+    pages: &[(u32, u32, &[u8])],
+) {
+    stack(path, info, resolution, pages);
+}
+
+fn stack(
+    path: &Path,
+    description: &str,
+    resolution: Option<(u32, u32, u16)>,
+    pages: &[(u32, u32, &[u8])],
+) {
+    let entries = TIFF_ENTRIES + if resolution.is_some() { 3 } else { 0 };
+    let record = 2 + entries * 12 + 4;
     let header = 8u32;
-    let xml_offset = header + pages.len() as u32 * record;
-    let xml_bytes = xml.as_bytes();
-    let mut strip = xml_offset + xml_bytes.len() as u32;
+    let description_offset = header + pages.len() as u32 * record;
+    let description_bytes = description.as_bytes();
+    let rational_offset = description_offset + description_bytes.len() as u32;
+    let mut strip = rational_offset + if resolution.is_some() { 8 } else { 0 };
     let mut offsets = Vec::with_capacity(pages.len());
     for page in pages {
         offsets.push(strip);
@@ -755,7 +775,7 @@ pub fn ome_tiff(path: &Path, xml: &str, pages: &[(u32, u32, &[u8])]) {
         } else {
             header + (index as u32 + 1) * record
         };
-        bytes.extend_from_slice(&(TIFF_ENTRIES as u16).to_le_bytes());
+        bytes.extend_from_slice(&(entries as u16).to_le_bytes());
         let mut entry = |tag: u16, kind: u16, count: u32, value: u32| {
             bytes.extend_from_slice(&tag.to_le_bytes());
             bytes.extend_from_slice(&kind.to_le_bytes());
@@ -767,20 +787,29 @@ pub fn ome_tiff(path: &Path, xml: &str, pages: &[(u32, u32, &[u8])]) {
         entry(258, 3, 1, 8);
         entry(259, 3, 1, 1);
         entry(262, 3, 1, 1);
-        entry(270, 2, xml_bytes.len() as u32, xml_offset);
+        entry(270, 2, description_bytes.len() as u32, description_offset);
         entry(273, 4, 1, offsets[index]);
         entry(277, 3, 1, 1);
         entry(278, 4, 1, height);
         entry(279, 4, 1, pages[index].2.len() as u32);
         entry(284, 3, 1, 1);
         entry(339, 3, 1, 1);
+        if let Some((_, _, unit)) = resolution {
+            entry(282, 5, 1, rational_offset);
+            entry(283, 5, 1, rational_offset);
+            entry(296, 3, 1, u32::from(unit));
+        }
         bytes.extend_from_slice(&next.to_le_bytes());
     }
-    bytes.extend_from_slice(xml_bytes);
+    bytes.extend_from_slice(description_bytes);
+    if let Some((numerator, denominator, _)) = resolution {
+        bytes.extend_from_slice(&numerator.to_le_bytes());
+        bytes.extend_from_slice(&denominator.to_le_bytes());
+    }
     for page in pages {
         bytes.extend_from_slice(page.2);
     }
-    std::fs::write(path, &bytes).expect("the OME-TIFF writes");
+    std::fs::write(path, &bytes).expect("the TIFF writes");
 }
 
 pub fn plate(root: &Path) {

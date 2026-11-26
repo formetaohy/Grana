@@ -371,7 +371,7 @@ pub fn apply(
                 camera.set_aperture(value.clamp(0.0, grana_display::APERTURE_LIMIT));
             }
             Message::SetFocus(value) => {
-                camera.set_focus(value.clamp(1.0e-3, grana_display::APERTURE_LIMIT));
+                camera.set_focus(value.clamp(1.0e-3, grana_display::FOCUS_LIMIT));
             }
             Message::FocusCamera => camera.focus_at_pivot(),
             Message::SetPsfThreshold(value) => {

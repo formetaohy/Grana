@@ -13,8 +13,9 @@ use grana_ome::{Image as OmeImage, TiffData};
 use crate::directory::{self, Directory};
 use crate::error::Error;
 use crate::fileset::{File, Fileset};
+use crate::imagej::ImageJ;
 use crate::page::{Page, Plane, Source as PageSource};
-use crate::planes::Planes;
+use crate::planes::{Dialect, Planes};
 use crate::store::Store;
 use crate::tag::{TAG_IMAGE_DESCRIPTION, TAG_RESOLUTION_UNIT, TAG_X_RESOLUTION, TAG_Y_RESOLUTION};
 
@@ -25,6 +26,8 @@ const BLUE: [f32; 3] = [0.0, 0.0, 1.0];
 const MASK: u64 = 4;
 
 const MPP: &str = "MPP";
+
+const DEFAULT_ORDER: &str = "XYZCT";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Series {
@@ -97,14 +100,15 @@ struct Request {
 impl Image {
     pub fn open(path: &Path, series: usize) -> Result<Self, Error> {
         let first = File::open(path)?;
-        let described = metadata(&first, path)?;
-        if described.binary_only {
+        let described = describe(&first, path)?;
+        let imagej = described.imagej;
+        if described.ome.binary_only {
             return Err(Error::unsupported(
                 path,
                 "the OME-TIFF leaves its pixels in a companion file the metadata names",
             ));
         }
-        let images = described.images;
+        let images = described.ome.images;
         let ome = match images.get(series) {
             Some(ome) => Some(ome),
             None if series == 0 => None,
@@ -125,7 +129,7 @@ impl Image {
                 "the OME-TIFF leaves its pixels in a companion file the metadata names",
             ));
         }
-        let files = Fileset::open(first, described.uuid, ome)?;
+        let files = Fileset::open(first, described.ome.uuid, ome)?;
         let (base_file, base_page) = selected_page(&files, ome)?;
         let page = files.file(base_file).page(base_page, 0)?;
         let chunky = page.channels() > 1;
@@ -136,12 +140,14 @@ impl Image {
         } else {
             0
         };
-        let declared = declared(&images, &page, stacked);
-        let sizes = counts(ome, stacked, samples, chunky, path)?;
-        let order = ome
-            .and_then(|ome| ome.dimension_order.clone())
-            .unwrap_or_else(|| "XYZCT".to_string());
-        let planes = Planes::new(sizes[2], sizes[1], sizes[0], chunky, &order)
+        let sizes = counts(ome, imagej.as_ref(), stacked, samples, chunky, path)?;
+        let declared = declared(&images, &page, sizes);
+        let dialect = match (ome, imagej) {
+            (Some(ome), _) => Dialect::Ome(ome.dimension_order.as_deref().unwrap_or(DEFAULT_ORDER)),
+            (None, Some(_)) => Dialect::ImageJ,
+            (None, None) => Dialect::Ome(DEFAULT_ORDER),
+        };
+        let planes = Planes::new([sizes[2], sizes[1], sizes[0]], chunky, dialect)
             .map_err(|detail| Error::metadata(path, detail))?;
         let placed = assign(&files, ome, &planes, format, path)?;
         if placed.len() != planes.count() as usize {
@@ -202,7 +208,8 @@ impl Image {
                 ));
             }
         }
-        let (spacing, derived) = spacing(ome, files.file(base_file), path, sizes[2])?;
+        let (spacing, derived) =
+            spacing(ome, imagej.as_ref(), files.file(base_file), path, sizes[2])?;
         let extents = levels.iter().map(|level| level.extent).collect::<Vec<_>>();
         let lookup = |key: &str| ome.and_then(|ome| ome.annotation(key));
         let calibration = grana_archive::calibration_from(lookup)
@@ -340,7 +347,10 @@ impl Image {
             };
             channels.push(info);
         }
-        let interval = ome.and_then(|ome| ome.interval).unwrap_or(1.0);
+        let interval = ome
+            .and_then(|ome| ome.interval)
+            .or_else(|| imagej.and_then(|imagej| imagej.interval()))
+            .unwrap_or(1.0);
         let name = ome
             .and_then(|ome| ome.name.clone())
             .filter(|name| !name.is_empty())
@@ -695,15 +705,45 @@ fn gather(
 
 fn counts(
     ome: Option<&OmeImage>,
+    imagej: Option<&ImageJ>,
     pages: usize,
     samples: u32,
     chunky: bool,
     path: &Path,
 ) -> Result<[u32; 3], Error> {
     let Some(ome) = ome else {
-        let depth = u32::try_from(pages)
-            .map_err(|_| Error::metadata(path, "the TIFF stacks more pages than a volume holds"))?;
-        return Ok([1, if chunky { samples } else { 1 }, depth.max(1)]);
+        return match imagej.and_then(ImageJ::sizes) {
+            Some(sizes) => {
+                let channels = if chunky { samples } else { sizes[1] };
+                if chunky && sizes[1] > 1 && sizes[1] != samples {
+                    return Err(Error::metadata(
+                        path,
+                        format!(
+                            "the ImageJ metadata declares {} channels and the pages carry {samples} samples",
+                            sizes[1]
+                        ),
+                    ));
+                }
+                let total = u64::from(sizes[2])
+                    * u64::from(sizes[0])
+                    * if chunky { 1 } else { u64::from(channels) };
+                if total != pages as u64 {
+                    return Err(Error::metadata(
+                        path,
+                        format!(
+                            "the ImageJ metadata describes {total} planes and the image holds {pages}"
+                        ),
+                    ));
+                }
+                Ok([sizes[0], channels, sizes[2]])
+            }
+            None => {
+                let depth = u32::try_from(pages).map_err(|_| {
+                    Error::metadata(path, "the TIFF stacks more pages than a volume holds")
+                })?;
+                Ok([1, if chunky { samples } else { 1 }, depth.max(1)])
+            }
+        };
     };
     let size_c = ome.size_c.unwrap_or(1);
     let size_t = ome.size_t.unwrap_or(1);
@@ -736,20 +776,23 @@ fn step(previous: u32, extent: u32) -> f32 {
 
 fn spacing(
     ome: Option<&OmeImage>,
+    imagej: Option<&ImageJ>,
     volume: &File,
     path: &Path,
     depth: u32,
 ) -> Result<(Spacing, Calibration), Error> {
     let physical = ome.map(|ome| ome.physical).unwrap_or([None; 3]);
-    let x_tag = scale(volume, TAG_X_RESOLUTION, path)?;
-    let y_tag = scale(volume, TAG_Y_RESOLUTION, path)?;
+    let declared = imagej.and_then(ImageJ::unit);
+    let x_tag = scale(volume, TAG_X_RESOLUTION, path, declared)?;
+    let y_tag = scale(volume, TAG_Y_RESOLUTION, path, declared)?;
     let lateral = physical[0].is_some() || x_tag.is_some();
     if !lateral {
         return Ok((Spacing::new(1.0, 1.0, 1.0), Calibration::Uncalibrated));
     }
     let x = physical[0].or(x_tag).unwrap_or(1.0);
     let y = physical[1].or(y_tag).unwrap_or(x);
-    let Some(z) = physical[2] else {
+    let axial = physical[2].or_else(|| imagej.and_then(ImageJ::spacing));
+    let Some(z) = axial else {
         if depth <= 1 {
             return Ok((Spacing::new(x, y, x), Calibration::Recorded));
         }
@@ -829,8 +872,13 @@ fn placement(
     Ok(placed)
 }
 
-fn scale(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
-    Ok(mpp(volume, path)?.or(resolution(volume, tag, path)?))
+fn scale(
+    volume: &File,
+    tag: u16,
+    path: &Path,
+    declared: Option<f32>,
+) -> Result<Option<f32>, Error> {
+    Ok(mpp(volume, path)?.or(resolution(volume, tag, path, declared)?))
 }
 
 fn mpp(volume: &File, path: &Path) -> Result<Option<f32>, Error> {
@@ -856,7 +904,12 @@ fn mpp(volume: &File, path: &Path) -> Result<Option<f32>, Error> {
     Ok(Some(value))
 }
 
-fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error> {
+fn resolution(
+    volume: &File,
+    tag: u16,
+    path: &Path,
+    declared: Option<f32>,
+) -> Result<Option<f32>, Error> {
     let directory = volume.directory();
     let Some(value) = directory
         .rational(&volume.store, tag, path)?
@@ -868,6 +921,10 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
         .integer(&volume.store, TAG_RESOLUTION_UNIT, path)?
         .unwrap_or(2);
     let micrometres = match unit {
+        1 => match declared {
+            Some(declared) => f64::from(declared),
+            None => return Ok(None),
+        },
         2 => 25_400.0,
         3 => 10_000.0,
         _ => return Ok(None),
@@ -875,11 +932,21 @@ fn resolution(volume: &File, tag: u16, path: &Path) -> Result<Option<f32>, Error
     Ok(Some((micrometres / value) as f32))
 }
 
-fn metadata(volume: &File, path: &Path) -> Result<grana_ome::Metadata, Error> {
-    let description = volume
+struct Description {
+    ome: grana_ome::Metadata,
+    imagej: Option<ImageJ>,
+}
+
+fn describe(volume: &File, path: &Path) -> Result<Description, Error> {
+    let text = volume
         .directory()
         .ascii(&volume.store, TAG_IMAGE_DESCRIPTION, path)?;
-    parse_metadata(description.as_deref(), path)
+    let imagej = match &text {
+        Some(text) => ImageJ::parse(text).map_err(|detail| Error::metadata(path, detail))?,
+        None => None,
+    };
+    let ome = parse_metadata(text.as_deref(), path)?;
+    Ok(Description { ome, imagej })
 }
 
 fn parse_metadata(description: Option<&str>, path: &Path) -> Result<grana_ome::Metadata, Error> {
@@ -915,14 +982,12 @@ pub fn series_names(path: &Path) -> Result<Vec<Option<String>>, Error> {
         .map(|ome| ome.name)
         .collect())
 }
-
-fn declared(images: &[OmeImage], page: &Page, stacked: usize) -> Vec<Series> {
+fn declared(images: &[OmeImage], page: &Page, sizes: [u32; 3]) -> Vec<Series> {
     if images.is_empty() {
-        let depth = u32::try_from(stacked).unwrap_or(u32::MAX).max(1);
         return vec![Series::new(
-            Extent::new(page.width, page.height, depth),
-            page.channels() as usize,
-            1,
+            Extent::new(page.width, page.height, sizes[2]),
+            sizes[1] as usize,
+            sizes[0],
             None,
         )];
     }
