@@ -1,5 +1,5 @@
 use glam::Vec3;
-use grana_geometry::{Bounds, Hull, Mesh, MeshVertex, TriangleBudget, simplify};
+use grana_geometry::{Bounds, Hull, Mesh, MeshVertex, SphereTree, TriangleBudget, simplify};
 use grana_object::{
     IntensityTable, Mask, SampleStatistics, SurfaceSet, SurfaceStatistics, Truncation,
 };
@@ -245,4 +245,50 @@ fn hulls_a_sphere_of_points() {
         (diameter - expected).abs() < 0.05 * expected,
         "the hull diameter is {diameter} and not {expected}"
     );
+}
+
+#[test]
+fn a_sphere_tree_sums_the_subtense_within_its_far_field_bound() {
+    let mut noise = crate::support::Noise::new(11);
+    let spheres = (0..4000)
+        .map(|_| {
+            let center = [0, 1, 2].map(|_| noise.value() * 40.0 - 20.0);
+            let bias = ((center[0] + 20.0) * 0.025).powi(2);
+            [
+                center[0],
+                center[1],
+                center[2],
+                0.2 + 0.5 * bias * noise.value(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let tree = SphereTree::new(spheres.iter().copied());
+    assert_eq!(tree.len(), 4000);
+    let mass = spheres
+        .iter()
+        .map(|sphere| f64::from(sphere[3]).powi(2))
+        .sum::<f64>();
+    assert!(
+        (tree.mass() - mass).abs() <= 1.0e-12 * mass,
+        "the root carries the mass of every sphere once"
+    );
+    for (eye, bound) in [
+        (Vec3::ZERO, 0.01),
+        (Vec3::new(60.0, 0.0, 0.0), 0.01),
+        (Vec3::new(4000.0, 0.0, 0.0), 0.0005),
+    ] {
+        let exact = spheres
+            .iter()
+            .map(|sphere| {
+                let apart = eye - Vec3::from([sphere[0], sphere[1], sphere[2]]);
+                let distance = f64::from(apart.length().max(0.5 * sphere[3]).max(1.0e-6));
+                f64::from(sphere[3]).powi(2) / distance.powi(2)
+            })
+            .sum::<f64>();
+        let got = tree.subtense(eye);
+        assert!(
+            (exact - got).abs() <= bound * exact,
+            "the subtense from {eye:?} is {got} against {exact}"
+        );
+    }
 }
