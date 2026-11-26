@@ -48,9 +48,10 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
         target,
         hollow,
     );
+    let single = crate::material::single_level(pyramid);
     let mut fit = None;
     for base in target..level_count {
-        let count = ladder_count(projection, level_count, base);
+        let count = ladder_count(projection, level_count, base, single);
         let estimate = counts.volume(base, count);
         let mut wanted = [0usize; BAND];
         let mut needed = 0usize;
@@ -67,7 +68,7 @@ pub(super) fn levels(input: Input<'_>) -> Planned {
     }
     let (base, count, wanted, truncated) = fit.unwrap_or_else(|| {
         let base = level_count - 1;
-        let count = ladder_count(projection, level_count, base);
+        let count = ladder_count(projection, level_count, base, single);
         let estimate = counts.volume(base, count);
         let mut wanted = [0usize; BAND];
         for (band, slot) in wanted.iter_mut().enumerate().take(count) {

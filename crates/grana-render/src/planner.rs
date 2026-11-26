@@ -558,10 +558,16 @@ impl<'a> Counts<'a> {
     }
 }
 
-pub(crate) fn ladder_count(projection: CameraProjection, levels: usize, base: usize) -> usize {
-    match projection {
-        CameraProjection::Perspective => BAND.min(levels - base),
-        CameraProjection::Orthographic => 1,
+pub(crate) fn ladder_count(
+    projection: CameraProjection,
+    levels: usize,
+    base: usize,
+    single: bool,
+) -> usize {
+    if single || projection == CameraProjection::Orthographic {
+        1
+    } else {
+        BAND.min(levels - base)
     }
 }
 
@@ -615,7 +621,7 @@ fn minimum_spacing(pyramid: &Pyramid, level: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grana_display::Camera;
+    use grana_display::{Camera, CameraProjection};
     use grana_volume::{
         Calibration, ChannelInfo, ColorTable, Extent, Intensity, Level, Spacing, Statistics,
         VoxelFormat, VoxelSemantics,
@@ -654,12 +660,31 @@ mod tests {
     fn keeps_a_categorical_volume_finer_than_the_same_scalar_volume() {
         let scalar = pyramid(false);
         let categorical = pyramid(true);
-        let held = target(&scalar, 300.0);
-        let kept = target(&categorical, 300.0);
+        let held = target(&scalar, 600.0);
+        let kept = target(&categorical, 600.0);
         assert!(held > 0, "the scalar volume coarsens at this pixel size");
         assert!(
             kept < held,
             "a categorical volume keeps two samples per voxel: level {kept} against {held}"
+        );
+        assert_eq!(
+            ladder_count(
+                CameraProjection::Perspective,
+                categorical.level_count(),
+                kept,
+                crate::material::single_level(&categorical),
+            ),
+            1,
+            "a categorical volume never mixes a coarser level into its surface"
+        );
+        assert!(
+            ladder_count(
+                CameraProjection::Perspective,
+                scalar.level_count(),
+                held,
+                crate::material::single_level(&scalar),
+            ) > 1,
+            "a scalar volume still blends the distance bands"
         );
     }
 }

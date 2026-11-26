@@ -121,3 +121,12 @@ fn walk_cell_span(walk: Walk, coord: vec3<u32>, voxel: vec3<f32>) -> f32 {
 fn walk_local(walk: Walk, voxel: vec3<f32>) -> vec3<f32> {
     return tap_local(walk.tap, voxel);
 }
+
+fn walk_stride(walk: Walk, cursor: f32) -> f32 {
+    let held = local_step(cursor);
+    if (!categorical_scene()) {
+        return held;
+    }
+    let rate = max(max(abs(walk.rate.x), abs(walk.rate.y)), abs(walk.rate.z));
+    return min(held, 1.0 / max(rate, 1.0e-9));
+}

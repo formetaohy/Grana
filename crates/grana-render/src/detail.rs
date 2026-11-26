@@ -45,6 +45,7 @@ pub fn residency(pyramid: &Pyramid, camera: &Camera, size: [u32; 2], region: Reg
         camera.projection(),
         pyramid.level_count(),
         target.min(pyramid.level_count() - 1),
+        crate::material::single_level(pyramid),
     );
     let bands = volume_demand(pyramid, camera, region, aspect, height, target, count);
     let bricks = bands[..count].iter().sum();
@@ -81,7 +82,12 @@ pub fn visible_bricks(
         current: None,
     })
     .min(pyramid.level_count() - 1);
-    let count = ladder_count(camera.projection(), pyramid.level_count(), target);
+    let count = ladder_count(
+        camera.projection(),
+        pyramid.level_count(),
+        target,
+        crate::material::single_level(pyramid),
+    );
     let counts = Counts::new(pyramid, camera, region, aspect, height, 0, None);
     (0..count)
         .map(|band| {

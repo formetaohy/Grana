@@ -232,6 +232,10 @@ fn channel_categorical(index: u32) -> bool {
     return channels[index].material > 0.5;
 }
 
+fn categorical_scene() -> bool {
+    return frame.packs.w != 0u;
+}
+
 fn pack_nearest(pack: u32) -> u32 {
     var mask = 0u;
     for (var component = 0u; component < PACK; component += 1u) {

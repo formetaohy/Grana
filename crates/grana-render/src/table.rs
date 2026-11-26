@@ -284,6 +284,7 @@ fn channel_data(
     let mut floor = f32::INFINITY;
     let mut channels = 0u32;
     let mut peaks = 0u32;
+    let mut categoricals = 0u32;
     let rows = rows
         .iter()
         .enumerate()
@@ -310,6 +311,9 @@ fn channel_data(
                 },
             };
             let opacity = if row.visible { row.opacity } else { 0.0 };
+            if categorical {
+                categoricals |= 1 << index;
+            }
             if opacity > 0.0 {
                 channels |= 1 << index;
                 let reach = match mode {
@@ -342,7 +346,7 @@ fn channel_data(
     ChannelTable {
         rows,
         floor,
-        packs: [channels, packs, peaks, 0],
+        packs: [channels, packs, peaks, categoricals],
         quality: crate::material::samples_per_voxel(pyramid),
     }
 }

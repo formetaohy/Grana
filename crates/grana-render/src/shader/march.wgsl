@@ -50,6 +50,8 @@ fn march_volume(
         if (t >= walk.exit) {
             let sight = volume_reachable(origin, band_for(t, dither), walk.sight.band, t, direction);
             walk = walk_open(direction, t, finish, sight);
+            held = 0xffffffffu;
+            occupied = true;
             continue;
         }
         if (!walk.sight.usable) {
@@ -62,7 +64,7 @@ fn march_volume(
         let limit = min(walk.exit, finish);
         while (cursor < limit && samples < frame.bounds.x && cells < frame.bounds.y) {
             cells += 1u;
-            let stride = local_step(cursor);
+            let stride = walk_stride(walk, cursor);
             let voxel = walk_voxel(walk, cursor);
             let coord = walk_cell(walk, voxel);
             let cell = cell_index(coord);
@@ -78,7 +80,11 @@ fn march_volume(
             }
             let local = walk_local(walk, voxel);
             let sample = optical_sample(walk.tap, local, peaks);
-            let ceiling = select(stride * SEGMENT_STRIDE, stride, projection());
+            let ceiling = select(
+                stride * SEGMENT_STRIDE,
+                stride,
+                projection() || categorical_scene(),
+            );
             let advance = clamp(
                 SEGMENT_ERROR / max(sample.extinction * walk.voxels, 1.0e-9),
                 stride,
