@@ -44,13 +44,7 @@ impl Model {
     }
 
     pub(crate) fn encode(&self, input: Tensor<4>, queries: usize) -> Result<Tensor<4>> {
-        let features = self.encoder.forward(input, queries)?;
-        self.device.sync().map_err(|error| {
-            crate::error::Error::device(format!(
-                "the graphics device cannot release the encoder workspace: {error}"
-            ))
-        })?;
-        Ok(features)
+        self.encoder.forward(input, queries)
     }
 
     pub(crate) fn decode(

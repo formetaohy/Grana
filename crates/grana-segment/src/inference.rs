@@ -16,8 +16,8 @@ use crate::postprocess::{self, Prediction};
 use crate::settings::Settings;
 use crate::volume::Volume;
 
-const TILING_THRESHOLD: u32 = 768;
-const TILE: u32 = 512;
+const TILING_THRESHOLD: u32 = SIDE as u32;
+const TILE: u32 = 768;
 const HALO: u32 = 128;
 const SLICE_TILE: u32 = 4;
 const SLICE_HALO: u32 = 2;

@@ -107,6 +107,9 @@ fn divisions(
     for &source in open {
         let chain = chains.chain(source);
         let reach = time - chain.end();
+        if reach > 1 {
+            continue;
+        }
         let predicted = predict(detections, chains, source, time);
         let last = chain.last();
         let position = detections.centroid(last);
@@ -139,8 +142,8 @@ fn divisions(
                     continue;
                 }
                 let offset = Vec3::distance(near, seat);
-                let reach = detections.radius(daughter) + detections.radius(other);
-                if !(0.2..=1.8).contains(&(offset / reach)) {
+                let radii = detections.radius(daughter) + detections.radius(other);
+                if !(0.2..=1.8).contains(&(offset / radii)) {
                     continue;
                 }
                 let opening = separation(
