@@ -2643,7 +2643,7 @@ fn writes_and_reads_a_label_image() {
     assert_eq!(
         labelled.pyramid().channels()[0].semantics(),
         grana_volume::VoxelSemantics::Label,
-        "a label image samples its nearest child instead of averaging its ids"
+        "a label image keeps a label per block instead of averaging its ids"
     );
     let coarse = Extent::new(
         extent.x().div_ceil(2),
@@ -2675,15 +2675,28 @@ fn writes_and_reads_a_label_image() {
     for z in 0..coarse.z() {
         for y in 0..coarse.y() {
             for x in 0..coarse.x() {
-                let child = extent.index(
-                    (2 * x).min(extent.x() - 1),
-                    (2 * y).min(extent.y() - 1),
-                    (2 * z).min(extent.z() - 1),
-                ) as usize;
+                let mut counts = std::collections::BTreeMap::<u32, usize>::new();
+                for depth in 0..2u32 {
+                    for row in 0..2u32 {
+                        for column in 0..2u32 {
+                            let child = extent.index(
+                                (2 * x + column).min(extent.x() - 1),
+                                (2 * y + row).min(extent.y() - 1),
+                                (2 * z + depth).min(extent.z() - 1),
+                            ) as usize;
+                            *counts.entry(fine[child] as u32).or_default() += 1;
+                        }
+                    }
+                }
+                let dominant = counts
+                    .iter()
+                    .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+                    .map(|(label, _)| *label)
+                    .expect("a block holds one label per child");
                 assert_eq!(
                     sampled[coarse.index(x, y, z) as usize],
-                    fine[child],
-                    "the derived label at {x},{y},{z} keeps the nearest id"
+                    dominant as f32,
+                    "the derived label at {x},{y},{z} keeps the label most of its children hold"
                 );
             }
         }

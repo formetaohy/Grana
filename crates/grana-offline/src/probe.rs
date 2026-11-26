@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_render::Detail;
 use grana_scene::Scene;
-use grana_volume::{BrickGrid, BrickRequest, PackedBrick, Pyramid, fill_maximum};
+use grana_volume::{BrickGrid, BrickRequest, PackedBrick, Pyramid, fill_is_background};
 use rayon::prelude::*;
 
 use crate::plan::{self, Plan};
@@ -89,17 +89,17 @@ pub(crate) fn scan(scan: Scan<'_>) -> Result<Option<Probe>, String> {
                         let Some(fill) = bricks.empty(request, &warps)? else {
                             let data = bricks.read(request, &warps)?;
                             let packed = PackedBrick::of(&data, pyramid, request.channels);
-                            let maximum = packed
-                                .packs()
-                                .map(|(_, block)| block.maximum())
-                                .fold(0.0f32, f32::max);
-                            return Ok((*index, Some((request, packed)), maximum));
+                            let empty = packed.empty();
+                            return Ok((*index, Some((request, packed)), empty));
                         };
-                        Ok((*index, None, fill_maximum(pyramid, fill, request.channels)))
+                        Ok((
+                            *index,
+                            None,
+                            fill_is_background(pyramid, fill, request.channels),
+                        ))
                     })
                     .collect::<Result<Vec<_>, String>>()?;
-                for (index, packed, maximum) in probed {
-                    let hollow = maximum <= 0.0;
+                for (index, packed, hollow) in probed {
                     known.insert((*time, visible.level, index), hollow);
                     if hollow {
                         continue;

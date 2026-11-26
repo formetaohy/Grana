@@ -195,6 +195,7 @@ impl Renderer {
             info,
             residence,
             pipelines,
+            transfer,
             ..
         } = self;
         let Some(resources) = resources.as_mut() else {
@@ -265,7 +266,7 @@ impl Renderer {
             time: frame.time,
             content: residence.content(),
         });
-        resources.upload.flush(device, queue);
+        transfer.add(resources.upload.flush(device, queue));
         let tables = plan::tables(&resources.bricks, outlook.levels);
         let reach = crate::frame::reach(frame.camera, &tables);
         let (step, ray_bounds) =

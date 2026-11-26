@@ -58,6 +58,13 @@ impl Segmenter {
         Plan::of(self.model.weights(), tile_depth(depth) as usize, spare)
     }
 
+    pub fn graphics_memory(&self) -> Option<u64> {
+        self.model
+            .device()
+            .memory_pool_usage()
+            .map(|usage| usage.bytes_reserved)
+    }
+
     pub fn segment(
         &self,
         planes: &[Vec<f32>],

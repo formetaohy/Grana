@@ -18,3 +18,18 @@ pub struct Statistics {
     pub surfaces: u64,
     pub unavailable: u64,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Transfer {
+    pub(super) copies: u64,
+    pub(super) staged: u64,
+    pub(super) payload: u64,
+}
+
+impl Transfer {
+    pub(super) fn add(&mut self, counters: crate::upload::Counters) {
+        self.copies += counters.copies;
+        self.staged += counters.staged;
+        self.payload += counters.payload;
+    }
+}

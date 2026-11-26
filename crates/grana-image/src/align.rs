@@ -130,7 +130,7 @@ pub(crate) fn resample(
         no_data.format(),
         "a resampled volume holds the no-data value of its format"
     );
-    let nearest = !semantics.averages();
+    let nearest = !semantics.reduction().averages();
     let declared = no_data.declared();
     macro_rules! resample {
         ($($variant:ident),*) => {

@@ -8,6 +8,13 @@ const ALIGNMENT: usize = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
 
 pub(crate) const STAGING_BYTES: u64 = 4 << 20;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Counters {
+    pub(crate) copies: u64,
+    pub(crate) staged: u64,
+    pub(crate) payload: u64,
+}
+
 enum Copy {
     Texture {
         texture: Texture,
@@ -63,10 +70,6 @@ impl Upload {
 
     pub fn bytes() -> u64 {
         STAGING_BYTES
-    }
-
-    pub fn counters(&self) -> (u64, u64, u64) {
-        (self.commanded, self.staged, self.payload)
     }
 
     pub fn texture(
@@ -185,7 +188,7 @@ impl Upload {
         });
     }
 
-    pub fn flush(&mut self, device: &Device, queue: &Queue) {
+    pub fn flush(&mut self, device: &Device, queue: &Queue) -> Counters {
         let chunk = STAGING_BYTES as usize;
         let mut first = 0;
         while first < self.copies.len() {
@@ -208,18 +211,30 @@ impl Upload {
             queue.submit([encoder.finish()]);
             first = last;
         }
+        let counters = Counters {
+            copies: self.commanded,
+            staged: self.staged,
+            payload: self.payload,
+        };
         self.copies.clear();
         self.bytes.clear();
         self.filled = 0;
+        self.commanded = 0;
+        self.staged = 0;
+        self.payload = 0;
         if self.bytes.capacity() as u64 > 4 * STAGING_BYTES {
             self.bytes.shrink_to_fit();
         }
+        counters
     }
 
     pub fn discard(&mut self) {
         self.copies.clear();
         self.bytes.clear();
         self.filled = 0;
+        self.commanded = 0;
+        self.staged = 0;
+        self.payload = 0;
     }
 
     fn reserve(&mut self, bytes: &[u8], alignment: usize) -> usize {

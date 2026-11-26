@@ -170,7 +170,7 @@ impl Member {
             .pyramid()
             .channels()
             .get(channel)
-            .is_none_or(|info| info.semantics().averages())
+            .is_none_or(|info| info.semantics().reduction().averages())
         {
             Filter::Linear
         } else {

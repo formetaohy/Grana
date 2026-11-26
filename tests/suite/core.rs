@@ -1,9 +1,9 @@
 use grana_gpu::{Consumer, Ledger};
 use grana_image::{Image, Source};
 use grana_volume::{
-    BrickCoord, BrickData, BrickGrid, Calibration, Channel, ChannelInfo, ChannelSet, Extent,
-    Intensity, Level, NoData, PADDED_SIDE, PackedBrick, Pyramid, Spacing, Volume, VolumeSeries,
-    VoxelData, VoxelFormat, blank_brick, fill_maximum,
+    BrickCoord, BrickData, BrickGrid, Calibration, Channel, ChannelInfo, ChannelSet, ColorTable,
+    Extent, Intensity, Level, NoData, PADDED_SIDE, PackedBrick, Pyramid, Spacing, Volume,
+    VolumeSeries, VoxelData, VoxelFormat, blank_brick, fill_is_background,
 };
 use grana_warp::Warp;
 
@@ -200,7 +200,7 @@ fn keeps_a_shifted_region_at_its_intensity_across_the_volume_edge() {
 }
 
 #[test]
-fn a_filled_brick_reaches_the_maximum_the_pack_stages() {
+fn a_brick_at_the_channel_background_packs_empty() {
     fn channel(name: &str, intensity: Intensity, no_data: Option<NoData>) -> ChannelInfo {
         let info = ChannelInfo::declared(name, [1.0, 1.0, 1.0], intensity, VoxelFormat::U16);
         match no_data {
@@ -210,39 +210,79 @@ fn a_filled_brick_reaches_the_maximum_the_pack_stages() {
     }
     let fill = NoData::U16(30);
     let level = Level::new(Extent::new(64, 64, 64), Spacing::new(1.0, 1.0, 1.0));
-    let pyramid = Pyramid::new(
+    let buried = Pyramid::new(
         vec![level],
         1,
         vec![
-            channel("over the fill", Intensity::new(0.0, 100.0), None),
             channel("absent at the fill", Intensity::new(0.0, 100.0), Some(fill)),
             channel("under the fill", Intensity::new(40.0, 100.0), None),
-            channel("over the fill again", Intensity::new(10.0, 100.0), None),
-            channel(
-                "absent elsewhere",
-                Intensity::new(0.0, 100.0),
-                Some(NoData::U16(0)),
-            ),
-            channel("under the fill again", Intensity::new(31.0, 100.0), None),
+            channel("at the fill", Intensity::new(30.0, 100.0), None),
         ],
         1,
         1.0,
         Calibration::Recorded,
     );
     let blank = BrickData::new(
-        pyramid
+        buried
             .channels()
             .iter()
             .map(|_| blank_brick(fill))
             .collect::<Vec<_>>(),
     );
-    let staged = PackedBrick::of(&blank, &pyramid, ChannelSet::ALL)
-        .packs()
-        .map(|(_, block)| block.maximum())
-        .fold(0.0f32, f32::max);
-    assert_eq!(
-        fill_maximum(&pyramid, fill, ChannelSet::ALL),
-        staged,
-        "a brick the storage layer leaves empty decides its hollowness from the fill alone"
+    assert!(
+        PackedBrick::of(&blank, &buried, ChannelSet::ALL).empty(),
+        "a brick every channel carries its background through holds nothing"
+    );
+    assert!(
+        fill_is_background(&buried, fill, ChannelSet::ALL),
+        "the storage layer and the pack agree on the brick they filled"
+    );
+    let shown = Pyramid::new(
+        buried.levels().to_vec(),
+        1,
+        vec![
+            channel("absent at the fill", Intensity::new(0.0, 100.0), Some(fill)),
+            channel("over the fill", Intensity::new(0.0, 100.0), None),
+        ],
+        1,
+        1.0,
+        Calibration::Recorded,
+    );
+    assert!(
+        !fill_is_background(&shown, fill, ChannelSet::ALL),
+        "a channel that shows the fill value fills the brick with content"
+    );
+    let indexed = Pyramid::new(
+        buried.levels().to_vec(),
+        1,
+        vec![
+            ChannelInfo::declared(
+                "label",
+                [0.0, 1.0, 0.0],
+                Intensity::new(0.0, 3.0),
+                VoxelFormat::U8,
+            )
+            .with_color_table(ColorTable::new(vec![
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ])),
+        ],
+        1,
+        1.0,
+        Calibration::Recorded,
+    );
+    let background = BrickData::new(vec![blank_brick(NoData::U8(0))]);
+    assert!(
+        PackedBrick::of(&background, &indexed, ChannelSet::ALL).empty(),
+        "an indexed channel packs a brick of its lowest index empty, even though that index sits above the channel minimum"
+    );
+    let mut indices = vec![0u8; (PADDED_SIDE as usize).pow(3)];
+    indices[7] = 1;
+    let marked = BrickData::new(vec![VoxelData::U8(indices)]);
+    assert!(
+        !PackedBrick::of(&marked, &indexed, ChannelSet::ALL).empty(),
+        "one voxel above the background label makes the brick content"
     );
 }

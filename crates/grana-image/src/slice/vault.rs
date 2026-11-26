@@ -135,7 +135,7 @@ impl Vault {
             &upper,
             extent.x(),
             extent.y(),
-            channel.semantics().averages(),
+            channel.semantics().reduction(),
             channel.fill(),
         );
         if let (Some(store), Some(stamp)) = (self.store.as_ref(), stamp) {

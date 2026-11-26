@@ -375,16 +375,12 @@ impl Resources {
                     dropped.push(*request);
                     continue;
                 }
-                let maximum = packed
-                    .packs()
-                    .map(|(_, block)| block.maximum())
-                    .fold(0.0, f32::max);
                 let current = held == time;
                 let publish = current
                     && tables[level]
                         .as_ref()
                         .is_some_and(|table| table.time() == Some(held));
-                if maximum <= 0.0 {
+                if packed.empty() {
                     forgotten.extend(atlas.assign_hollow(held, level, index));
                     if publish {
                         if let Some(table) = tables[level].as_mut() {

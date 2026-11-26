@@ -8,11 +8,17 @@ const SPLITS: [usize; 5] = [1, 2, 4, 8, 16];
 const SPAN_FLOOR: usize = 64;
 const DIMENSION: usize = 96;
 const HEADS: usize = 8;
-const TOKENS: usize = (SIDE / 4) * (SIDE / 4);
+const QUERIES: usize = 256;
 const DEEP_TOKENS: usize = FEATURE_SIDE * FEATURE_SIDE;
 const NECK_CHANNELS: usize = 256;
-const QUERIES: usize = 256;
-const STAGING: u64 = 6;
+const DEEP_CHANNELS: usize = 768;
+const LADDER: [usize; 4] = [256, 128, 64, 32];
+const OUTPUT_CHANNELS: usize = 5;
+const TAIL_COPIES: u64 = 4;
+const TAIL_SPANS: u64 = 2;
+const BLOCK_SPANS: u64 = 3;
+const RESERVED_OVER_LIVE: (u64, u64) = (7, 5);
+const PAGE_WASTE: (u64, u64) = (1, 2);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Plan {
@@ -53,21 +59,34 @@ impl Plan {
 }
 
 fn peak(weights: u64, depth: usize, splits: usize) -> u64 {
-    weights + encoder_peak(depth) + decode_peak(depth, splits)
+    let live = encoder() + frame(depth, splits) + page_waste(depth);
+    weights + live / RESERVED_OVER_LIVE.1 * RESERVED_OVER_LIVE.0
 }
 
-fn decode_peak(depth: usize, splits: usize) -> u64 {
-    let held = volume(64, 512, depth) + 2 * volume(32, 512, depth) + volume(32, SIDE, depth);
-    let span = volume(32, SIDE, depth) / spans(splits) as u64;
-    held + (STAGING * span).max(volume(5, SIDE, depth))
-}
-
-fn encoder_peak(depth: usize) -> u64 {
-    let input = plane(3, SIDE) + plane(1, SIDE);
+fn encoder() -> u64 {
+    let windowed = 4 * plane(DIMENSION, SIDE / 4);
     let scores = 2 * HEADS as u64 * QUERIES as u64 * DEEP_TOKENS as u64 * 4;
-    let blocks = 8 * TOKENS as u64 * DIMENSION as u64 * 4;
-    let features = volume(NECK_CHANNELS, FEATURE_SIDE, depth);
-    input + scores + blocks + features
+    let deep = 4 * plane(DEEP_CHANNELS, FEATURE_SIDE);
+    let neck = 2 * plane(NECK_CHANNELS, FEATURE_SIDE);
+    windowed + scores + deep + neck
+}
+
+fn frame(depth: usize, splits: usize) -> u64 {
+    let held = volume(LADDER[0], FEATURE_SIDE, depth)
+        + volume(LADDER[0], FEATURE_SIDE, depth)
+        + volume(LADDER[0], SIDE / 8, depth)
+        + volume(LADDER[1], SIDE / 4, depth)
+        + volume(LADDER[2], SIDE / 2, depth);
+    let branch = volume(LADDER[3], SIDE, depth);
+    let output = volume(OUTPUT_CHANNELS, SIDE, depth);
+    let span = branch / spans(splits) as u64;
+    let blocks = held + branch + BLOCK_SPANS * span;
+    let tail = held + branch + TAIL_COPIES * output + TAIL_SPANS * span;
+    blocks.max(tail)
+}
+
+fn page_waste(depth: usize) -> u64 {
+    volume(LADDER[3], SIDE, depth) / PAGE_WASTE.1 * PAGE_WASTE.0
 }
 
 fn spans(splits: usize) -> usize {

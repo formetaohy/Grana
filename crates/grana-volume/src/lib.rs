@@ -40,12 +40,13 @@ pub use intensity::Intensity;
 pub use level::Level;
 pub use no_data::NoData;
 pub use pack::{
-    PACK, PACK_LIMIT, Pack, PackedBrick, components, fill_maximum, pack_count, packed_bytes, texels,
+    PACK, PACK_LIMIT, Pack, PackedBrick, components, fill_is_background, pack_count, packed_bytes,
+    texels,
 };
 pub use pyramid::Pyramid;
 pub use region::Region;
 pub use resample::{Filter, nearest_index, resample};
-pub use semantics::VoxelSemantics;
+pub use semantics::{Reduction, VoxelSemantics};
 pub use series::VolumeSeries;
 pub use slice::SliceFrame;
 pub use spacing::Spacing;

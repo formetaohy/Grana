@@ -52,7 +52,7 @@ use crate::schema::SceneFrame;
 use crate::section::Sections;
 use crate::shadow::{self, Shadow, ShadowGroups, ShadowSpace};
 use crate::splat::SplatPasses;
-use crate::statistics::Statistics;
+use crate::statistics::{Statistics, Transfer};
 use crate::target::SceneTarget;
 use crate::temporal;
 use crate::volume::VolumePass;
@@ -226,6 +226,7 @@ pub struct Renderer {
     plans: u64,
     waits: u64,
     uploads: u64,
+    transfer: Transfer,
     claim: Claim,
     pipelines: Pipelines,
 }
@@ -324,6 +325,7 @@ impl Renderer {
             plans: 0,
             waits: 0,
             uploads: 0,
+            transfer: Transfer::default(),
             claim,
             pipelines: pipelines.clone(),
         }
@@ -659,7 +661,7 @@ impl Renderer {
             self.ceiling,
             size,
             self.demand,
-            self.targets.bytes(),
+            self.targets.held(size),
             self.splat_budget(),
         )?;
         self.frames = split.frames;
@@ -915,10 +917,6 @@ impl Renderer {
     }
 
     pub fn statistics(&self) -> Statistics {
-        let (copies, staged, payload) = self
-            .resources
-            .as_ref()
-            .map_or((0, 0, 0), |resources| resources.upload.counters());
         let evictions = self
             .resources
             .as_ref()
@@ -944,9 +942,9 @@ impl Renderer {
             waits: self.waits,
             uploads: self.uploads,
             evictions,
-            copies,
-            staged,
-            payload,
+            copies: self.transfer.copies,
+            staged: self.transfer.staged,
+            payload: self.transfer.payload,
             prefetched,
             prefetch_hits,
             frames: self.frames,

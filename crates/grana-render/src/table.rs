@@ -288,11 +288,16 @@ fn channel_data(
             let (start, inverse) = window(range, row.intensity);
             let opaque = thresholds[index];
             let mode = row.volume.mode();
+            let visible =
+                opaque.map_or(f32::INFINITY, |position| unit_at(start, inverse, position));
             let threshold = match mode {
+                VolumeMode::Isosurface if pyramid.channels()[index].color_table().is_some() => {
+                    visible
+                }
                 VolumeMode::Isosurface => unit_at(start, inverse, row.volume.isovalue()),
                 VolumeMode::Blend | VolumeMode::Maximum => match opaque {
                     Some(position) if position <= 0.0 => f32::NEG_INFINITY,
-                    Some(position) => unit_at(start, inverse, position),
+                    Some(_) => visible,
                     None => f32::INFINITY,
                 },
             };

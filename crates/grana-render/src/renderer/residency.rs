@@ -233,6 +233,13 @@ impl TargetCache {
         self.target.as_ref().map_or(0, FrameTarget::bytes)
     }
 
+    pub(super) fn held(&self, size: [u32; 2]) -> u64 {
+        self.target
+            .as_ref()
+            .filter(|target| target.size == size)
+            .map_or(0, FrameTarget::bytes)
+    }
+
     pub(super) fn take(
         &mut self,
         device: &Device,

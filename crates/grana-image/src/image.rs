@@ -17,7 +17,7 @@ use crate::{Series, Source};
 
 const RESOLVED_LIMIT: usize = 8;
 
-const RESOLVED_VERSION: u32 = 5;
+const RESOLVED_VERSION: u32 = 6;
 
 const FNV_BASE: u64 = 0xcbf2_9ce4_8422_2325;
 

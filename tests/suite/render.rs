@@ -3189,7 +3189,9 @@ fn carries_its_bricks_across_a_resize_that_reseats_the_atlas() {
     let slots = renderer.slots();
     let residency = renderer.budget();
     let uploads = renderer.statistics().uploads;
+    let staged = renderer.statistics().staged;
     assert!(uploads > 0, "the settled view streams its bricks");
+    assert!(staged > 0, "the settled view stages its bricks");
     renderer.restart();
     renderer
         .draw(
@@ -3215,17 +3217,49 @@ fn carries_its_bricks_across_a_resize_that_reseats_the_atlas() {
         uploads,
         "the resize streamed bricks it already held"
     );
+    assert!(
+        renderer.statistics().staged >= staged,
+        "the resize restarted the staging account at {} bytes from the {} it had streamed",
+        renderer.statistics().staged,
+        staged
+    );
     let roomy_residency = renderer.budget();
+    renderer
+        .draw(
+            gpu.device(),
+            gpu.queue(),
+            frame_sized(&narrow_view, narrow, &camera, &scene),
+        )
+        .expect("the first narrow frame draws");
+    assert_ne!(
+        renderer.budget(),
+        roomy_residency,
+        "the first frame back at the narrow view keeps the {roomy_residency} byte residency of the roomy view it replaced, so the atlas reseats once on that frame and once on the next"
+    );
+    let stepped = renderer.budget();
+    renderer
+        .draw(
+            gpu.device(),
+            gpu.queue(),
+            frame_sized(&narrow_view, narrow, &camera, &scene),
+        )
+        .expect("the second narrow frame draws");
+    assert_eq!(
+        renderer.budget(),
+        stepped,
+        "the frame after the resize reseats the atlas again: {stepped} bytes became {}",
+        renderer.budget()
+    );
     settle_with(
         &gpu,
         &mut renderer,
         || frame_sized(&narrow_view, narrow, &camera, &scene),
         &volume,
     );
-    assert_ne!(
+    assert_eq!(
         renderer.budget(),
-        roomy_residency,
-        "the narrow view reseats the atlas back with the same {roomy_residency} byte residency it held"
+        stepped,
+        "the narrow view settles at a residency it reseated after its first frame"
     );
     assert_eq!(
         renderer.slots(),

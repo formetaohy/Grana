@@ -59,7 +59,7 @@ fn optical_sample(
             let channel = pack * PACK + component;
             if (channel_peak(channel)) {
                 let value = values[component];
-                if (value > (*peaks)[channel]) {
+                if (value >= channel_threshold(channel) && value > (*peaks)[channel]) {
                     (*peaks)[channel] = value;
                     grown = true;
                 }

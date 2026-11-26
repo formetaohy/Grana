@@ -60,7 +60,7 @@ impl Bench {
                 continue;
             };
             let mut tight = wide;
-            let mut budget = wide.bytes() / 2;
+            let mut budget = wide.bytes() / 4 * 3;
             while budget > 0 {
                 if let Ok(held) = self.segmenter.plan(depth, budget) {
                     tight = held;
@@ -114,9 +114,22 @@ fn splitting_the_decode_keeps_every_label() {
     );
     let segmenter = Segmenter::open(&bench.weights, Settings::for_depth(depth))
         .expect("the weights stay resident");
+    let idle = segmenter
+        .graphics_memory()
+        .expect("the decoder reports the pages it holds");
     let mut progress = |_| {};
-    let whole = bench.run(&segmenter, depth, wide, &mut progress);
     let split = bench.run(&segmenter, depth, tight, &mut progress);
+    let split_footprint = segmenter
+        .graphics_memory()
+        .expect("the decoder reports the pages it holds")
+        .saturating_sub(idle);
+    assert!(
+        split_footprint <= tight.bytes(),
+        "the plan claims {:.1} GiB and the allocator reserved {:.1} GiB more",
+        tight.bytes() as f64 / (1u64 << 30) as f64,
+        split_footprint as f64 / (1u64 << 30) as f64
+    );
+    let whole = bench.run(&segmenter, depth, wide, &mut progress);
     assert_eq!(whole.width(), split.width());
     assert_eq!(whole.height(), split.height());
     assert_eq!(whole.depth(), split.depth());

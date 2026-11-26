@@ -53,21 +53,22 @@ pub fn packed_bytes(channels: usize, scope: ChannelSet) -> u64 {
         .sum()
 }
 
-pub fn fill_maximum(pyramid: &Pyramid, fill: NoData, scope: ChannelSet) -> f32 {
+pub fn fill_is_background(pyramid: &Pyramid, fill: NoData, scope: ChannelSet) -> bool {
     let channels = pyramid.channel_count();
     (0..pack_count(channels))
         .filter(|pack| covers(channels, scope, *pack))
         .flat_map(|pack| (0..components(channels, pack)).map(move |held| pack * PACK + held))
-        .map(|channel| {
+        .all(|channel| {
             let info = &pyramid.channels()[channel];
-            fill_unit(info.intensity(), info.no_data(), fill)
+            let background = fill_unit(info.intensity(), info.no_data(), info.fill());
+            fill_unit(info.intensity(), info.no_data(), fill) == background
         })
-        .fold(0.0f32, f32::max)
 }
 
 pub struct Pack {
     components: usize,
     maximum: f32,
+    empty: bool,
     cells: Vec<f32>,
     rows: Vec<u16>,
 }
@@ -79,6 +80,10 @@ impl Pack {
 
     pub fn maximum(&self) -> f32 {
         self.maximum
+    }
+
+    pub fn empty(&self) -> bool {
+        self.empty
     }
 
     pub fn cells(&self) -> &[f32] {
@@ -93,37 +98,51 @@ impl Pack {
         Self {
             components,
             maximum: 0.0,
+            empty: true,
             cells: vec![0.0; CELL_COUNT],
             rows: vec![0; PADDED * PADDED * PADDED * texels(components)],
         }
     }
 
     fn stage(&mut self, pyramid: &Pyramid, data: &BrickData, pack: usize) {
-        let sources = (0..self.components)
-            .map(|component| {
-                let info = &pyramid.channels()[pack * PACK + component];
+        let infos = (0..self.components)
+            .map(|component| &pyramid.channels()[pack * PACK + component])
+            .collect::<Vec<_>>();
+        let sources = infos
+            .iter()
+            .enumerate()
+            .map(|(component, info)| {
                 data.channels()[pack * PACK + component].units(info.intensity(), info.no_data())
             })
             .collect::<Vec<_>>();
+        let backgrounds = infos
+            .iter()
+            .map(|info| fill_unit(info.intensity(), info.no_data(), info.fill()))
+            .collect::<Vec<_>>();
         let stride = texels(self.components);
         let row = PADDED * stride;
-        let (maximum, cells) = self
+        let (maximum, empty, cells) = self
             .rows
             .par_chunks_mut(row * PADDED)
             .enumerate()
             .map(|(slice, chunk)| {
                 let mut cells = [0.0f32; CELL_COUNT];
                 let mut maximum = 0.0f32;
+                let mut empty = true;
                 let range = slice * PADDED * PADDED..(slice + 1) * PADDED * PADDED;
                 let plane = INNER
                     .contains(&slice)
                     .then(|| ((slice - APRON) / CELL) * CELL_AXIS * CELL_AXIS);
                 for (component, source) in sources.iter().enumerate() {
+                    let background = backgrounds[component];
                     let mut x = 0;
                     let mut y = 0;
                     source.visit(range.clone(), |fixed| {
                         if fixed > maximum {
                             maximum = fixed;
+                        }
+                        if fixed != background {
+                            empty = false;
                         }
                         if let Some(plane) = plane
                             && INNER.contains(&x)
@@ -143,19 +162,20 @@ impl Pack {
                         }
                     });
                 }
-                (maximum, cells)
+                (maximum, empty, cells)
             })
             .reduce(
-                || (0.0f32, [0.0f32; CELL_COUNT]),
+                || (0.0f32, true, [0.0f32; CELL_COUNT]),
                 |left, right| {
-                    let mut cells = left.1;
-                    for (cell, other) in cells.iter_mut().zip(right.1.iter()) {
+                    let mut cells = left.2;
+                    for (cell, other) in cells.iter_mut().zip(right.2.iter()) {
                         *cell = cell.max(*other);
                     }
-                    (left.0.max(right.0), cells)
+                    (left.0.max(right.0), left.1 && right.1, cells)
                 },
             );
         self.maximum = maximum;
+        self.empty = empty;
         self.cells.copy_from_slice(&cells);
     }
 }
@@ -198,6 +218,10 @@ impl PackedBrick {
             .iter()
             .enumerate()
             .filter_map(|(pack, held)| held.as_ref().map(|held| (pack, held)))
+    }
+
+    pub fn empty(&self) -> bool {
+        self.packs().all(|(_, block)| block.empty())
     }
 
     pub fn bytes(&self) -> u64 {
