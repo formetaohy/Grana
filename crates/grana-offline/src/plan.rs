@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use grana_display::{Camera, CameraState, OutputSize};
 use grana_volume::{Pyramid, Region};
 
-const WIDE_BYTES: u64 = 16;
 const WIDE_CEILING: u64 = 1 << 30;
 
 #[derive(Clone, Copy, Debug)]
@@ -127,7 +126,7 @@ pub(crate) fn validate(plan: &Plan) -> Result<(), String> {
     };
     if wide {
         let size = plan.size.to_array();
-        let bytes = u64::from(size[0]) * u64::from(size[1]) * WIDE_BYTES;
+        let bytes = grana_render::picture_bytes(size);
         if bytes > WIDE_CEILING {
             return Err(format!(
                 "a sixteen bit still at {} × {} needs more than {} GiB of texture memory; lower the export width",

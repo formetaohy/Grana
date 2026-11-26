@@ -4,8 +4,8 @@ use grana_chart::{
 };
 use grana_i18n::Language;
 use grana_measure::{
-    Distribution, Filter, Histogram, Lasso, MeasureView, Measured, Observation, Plot, Ripley,
-    Scatter, Table, Trend,
+    Distribution, Filter, Histogram, Lasso, MeasureView, Measured, NearestNeighbour, Observation,
+    Plot, Ripley, Scatter, Table, Trend,
 };
 use grana_scene::{Item, Measure, ObjectSetId, Selection};
 use grana_session::Command;
@@ -88,7 +88,7 @@ impl PlotView<'_> {
                 x: None,
                 y: range(self.filters, trend.column()),
             },
-            Plot::Ripley(_) => Gates::default(),
+            Plot::Ripley(_) | Plot::NearestNeighbour(_) => Gates::default(),
         }
     }
 
@@ -120,7 +120,7 @@ impl PlotView<'_> {
                     self.table.cached_value(row, trend.column())?.present()?,
                 )))
             }
-            Plot::Ripley(_) => None,
+            Plot::Ripley(_) | Plot::NearestNeighbour(_) => None,
         }
     }
 
@@ -169,15 +169,27 @@ pub fn view<'a>(
         }
         Plot::Trend(trend) if hovering => trend_readout(trend, frame, pointer),
         Plot::Ripley(ripley) if hovering => ripley_readout(ripley, frame, pointer),
+        Plot::NearestNeighbour(nearest) if hovering => nearest_readout(nearest, frame, pointer),
         Plot::Histogram(_)
         | Plot::Scatter(_)
         | Plot::Distribution(_)
         | Plot::Trend(_)
-        | Plot::Ripley(_) => Readout::None,
+        | Plot::Ripley(_)
+        | Plot::NearestNeighbour(_) => Readout::None,
     };
     let (title_y, title_x) = titles(plot, table, language);
+    let target = measure
+        .target()
+        .and_then(|id| state.scene.objects.get(id))
+        .map(|set| set.name().to_string());
     let heading = Heading::new("", title_y, title_x)
-        .with_summary(summary_text(plot, table, readout, language))
+        .with_summary(summary_text(
+            plot,
+            table,
+            readout,
+            language,
+            target.as_deref(),
+        ))
         .with_empty(empty_text(language, plot));
     let selection = state.scene.selection().map(|selection| {
         let item = match selection.item {
@@ -286,7 +298,7 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
             grana_i18n::measure::no_objects(language)
         }
         Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
-        Plot::Ripley(_) => grana_i18n::measure::no_spatial(language),
+        Plot::Ripley(_) | Plot::NearestNeighbour(_) => grana_i18n::measure::no_spatial(language),
     }
 }
 
@@ -328,10 +340,20 @@ fn titles(plot: &Plot, table: &Table, language: Language) -> (String, String) {
             grana_i18n::measure::y_ripley(language).to_string(),
             grana_i18n::measure::x_radius(language).to_string(),
         ),
+        Plot::NearestNeighbour(_) => (
+            grana_i18n::measure::y_nearest(language).to_string(),
+            grana_i18n::measure::x_radius(language).to_string(),
+        ),
     }
 }
 
-fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language) -> String {
+fn summary_text(
+    plot: &Plot,
+    table: &Table,
+    readout: Readout,
+    language: Language,
+    target: Option<&str>,
+) -> String {
     let total = table.rows() as u64;
     match (plot, readout) {
         (
@@ -486,7 +508,28 @@ fn summary_text(plot: &Plot, table: &Table, readout: Readout, language: Language
                 None => grana_i18n::measure::no_spatial(language).to_string(),
             }
         }
-        (Plot::Ripley(ripley), _) => ripley_caption(language, ripley),
+        (Plot::NearestNeighbour(nearest), Readout::Radius { radius, point }) => {
+            match point.and_then(|index| nearest.points().get(index)) {
+                Some(point) => {
+                    let value = format!("{:.3}", point.value());
+                    let low = format!("{:.3}", point.lower());
+                    let high = format!("{:.3}", point.upper());
+                    let expected = format!("{:.3}", point.expected());
+                    grana_i18n::measure::nearest_readout(
+                        language,
+                        &format!("{radius:.2}"),
+                        &value,
+                        &low,
+                        &high,
+                        &expected,
+                        point.frames(),
+                    )
+                }
+                None => grana_i18n::measure::no_spatial(language).to_string(),
+            }
+        }
+        (Plot::NearestNeighbour(nearest), _) => nearest_caption(language, nearest, target),
+        (Plot::Ripley(ripley), _) => ripley_caption(language, ripley, target),
         (Plot::Trend(trend), _) => {
             if trend.points().is_empty() {
                 grana_i18n::measure::no_frames_trend(language).to_string()
@@ -639,6 +682,27 @@ fn ripley_axis(ripley: &Ripley) -> Axis {
     Axis::new(0.0, ripley.radius(), 5)
 }
 
+fn nearest_readout(nearest: &NearestNeighbour, frame: Rect, pointer: Vec2) -> Readout {
+    let radius = ripley_axis_of(nearest.radius())
+        .value_at_x(frame, pointer.x)
+        .clamp(0.0, nearest.radius());
+    let point = nearest
+        .points()
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            (left.radius() - radius)
+                .abs()
+                .total_cmp(&(right.radius() - radius).abs())
+        })
+        .map(|(index, _)| index);
+    Readout::Radius { radius, point }
+}
+
+fn ripley_axis_of(radius: f32) -> Axis {
+    Axis::new(0.0, radius, 5)
+}
+
 fn ripley_readout(ripley: &Ripley, frame: Rect, pointer: Vec2) -> Readout {
     let radius = ripley_axis(ripley)
         .value_at_x(frame, pointer.x)
@@ -694,7 +758,7 @@ pub fn apply(
             distribution_apply(event, measure, table, distribution, workspace, commands)
         }
         Plot::Trend(trend) => trend_apply(event, measure, table, trend, workspace, commands),
-        Plot::Ripley(_) => {
+        Plot::Ripley(_) | Plot::NearestNeighbour(_) => {
             if workspace.drag.view.is_some() {
                 workspace.drag = PlotDrag::default();
             }
@@ -1151,7 +1215,7 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
         MeasureView::Scatter => column == axes[0] || column == axes[1],
         MeasureView::Distribution => column == axes[0],
         MeasureView::Trend => column == axes[0],
-        MeasureView::Ripley => false,
+        MeasureView::Ripley | MeasureView::NearestNeighbour => false,
     };
     let mut indices = measure
         .filters()
@@ -1169,10 +1233,9 @@ pub fn clear_gates(measure: &Measure, commands: &mut Vec<Command>) {
     }
 }
 
-pub(crate) fn ripley_caption(language: Language, ripley: &Ripley) -> String {
+pub(crate) fn ripley_caption(language: Language, ripley: &Ripley, target: Option<&str>) -> String {
     let census = ripley.census();
-    let mut summary =
-        grana_i18n::measure::ripley_summary(language, census.valid(), census.objects());
+    let mut summary = spatial_summary(language, census, target);
     if census.single() > 0 {
         summary = format!(
             "{summary} · {}",
@@ -1189,5 +1252,44 @@ pub(crate) fn ripley_caption(language: Language, ripley: &Ripley) -> String {
             )
         ),
         None => summary,
+    }
+}
+
+pub(crate) fn nearest_caption(
+    language: Language,
+    nearest: &NearestNeighbour,
+    target: Option<&str>,
+) -> String {
+    let census = nearest.census();
+    let summary = spatial_summary(language, census, target);
+    let outside = nearest
+        .points()
+        .iter()
+        .filter(|point| point.beyond())
+        .count();
+    if outside > 0 {
+        format!(
+            "{summary} · {outside} {}",
+            grana_i18n::measure::ripley_outside(language)
+        )
+    } else {
+        summary
+    }
+}
+
+fn spatial_summary(
+    language: Language,
+    census: grana_measure::Census,
+    target: Option<&str>,
+) -> String {
+    match target {
+        Some(name) if census.partners() > 0 => grana_i18n::measure::paired_summary(
+            language,
+            census.valid(),
+            census.objects(),
+            census.partners(),
+            name,
+        ),
+        _ => grana_i18n::measure::ripley_summary(language, census.valid(), census.objects()),
     }
 }

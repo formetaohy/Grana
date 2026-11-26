@@ -45,13 +45,16 @@ pub fn view<'a>(
     top += TOOLBAR_HEIGHT;
     let measured = state.measure.table().is_some();
     let mode = state.measure.view();
-    if measured && mode != MeasureView::Table && mode.columned() {
+    if measured && mode != MeasureView::Table {
         let bar = Rect::from_min_size(
             Vec2::new(rect.min.x, top + 6.0),
             Vec2::new(rect.width(), 30.0),
         );
-        elements.extend(plot_bar(ctx, state, bar));
-        top += 36.0;
+        let items = plot_bar(ctx, state, bar);
+        if !items.is_empty() {
+            elements.extend(items);
+            top += 36.0;
+        }
     }
     elements.extend(filters(ctx, state, rect, &mut top));
     top += 8.0;
@@ -403,7 +406,7 @@ fn plot_bar<'a>(
         .collect::<Vec<_>>();
     let lasso = state.measure.lasso().is_some();
     let gated = match view {
-        MeasureView::Ripley => false,
+        MeasureView::Ripley | MeasureView::NearestNeighbour => false,
         MeasureView::Trend => state
             .measure
             .filters()
@@ -436,7 +439,9 @@ fn plot_bar<'a>(
     let options_x = options.clone();
     let mut items = Vec::new();
     match view {
-        MeasureView::Ripley => {}
+        MeasureView::Ripley | MeasureView::NearestNeighbour => {
+            items.extend(target_combo(ctx, state));
+        }
         MeasureView::Distribution | MeasureView::Trend => {
             items.push(field_label(ctx, grana_i18n::measure::value(language)));
             items.push(combo(
@@ -520,12 +525,51 @@ fn plot_bar<'a>(
             .press(Message::ClearGates),
         );
     }
+    if items.is_empty() {
+        return Vec::new();
+    }
     vec![
         grana_ui::row()
             .gap(8.0)
             .align(Align::Center)
             .at(rect)
             .children(items),
+    ]
+}
+
+fn target_combo<'a>(
+    ctx: &mut BuildContext<'_, Message>,
+    state: &'a View<'a>,
+) -> Vec<Element<'a, Message>> {
+    let language = ctx.language();
+    let measured = state.measure.set();
+    let mut ids: Vec<Option<ObjectSetId>> = vec![None];
+    let mut names = vec![grana_i18n::common::none(language).to_string()];
+    for set in state.scene.objects.iter() {
+        if Some(set.id()) == measured {
+            continue;
+        }
+        ids.push(Some(set.id()));
+        names.push(set.name().to_string());
+    }
+    if ids.len() < 2 {
+        return Vec::new();
+    }
+    let current = state.measure.target();
+    let selected = ids.iter().position(|id| *id == current).unwrap_or(0);
+    vec![
+        field_label(ctx, grana_i18n::measure::target(language)),
+        combo(
+            ctx,
+            "measure.target",
+            148.0,
+            selected,
+            &names,
+            move |index| match ids.get(index) {
+                Some(id) if *id != current => Message::Command(Command::SetMeasureTarget(*id)),
+                _ => Message::Noop,
+            },
+        ),
     ]
 }
 
@@ -1049,6 +1093,7 @@ fn view_label(language: Language, view: MeasureView) -> &'static str {
         MeasureView::Distribution => grana_i18n::measure::distribution(language),
         MeasureView::Trend => grana_i18n::measure::trend(language),
         MeasureView::Ripley => grana_i18n::measure::ripley(language),
+        MeasureView::NearestNeighbour => grana_i18n::measure::nearest(language),
     }
 }
 

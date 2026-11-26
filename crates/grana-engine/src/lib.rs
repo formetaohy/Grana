@@ -1,3 +1,4 @@
+mod demand;
 mod engine;
 mod frame;
 mod geometry;
@@ -9,6 +10,7 @@ mod style;
 mod view;
 mod viewport;
 
+pub use demand::demand;
 pub use engine::{Engine, Picked};
 pub use frame::View;
 pub use grana_render::Overlay;

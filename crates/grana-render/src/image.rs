@@ -24,7 +24,7 @@ impl<'a> Pixels<'a> {
             size[0] > 0 && size[1] > 0,
             "a displayed picture covers at least one pixel"
         );
-        let row = size[0] as usize * PICTURE_BYTES as usize;
+        let row = row(size[0]) as usize;
         assert!(
             stride >= row && bytes.len() >= stride * size[1] as usize,
             "a displayed picture covers every pixel of its rows"
@@ -46,14 +46,25 @@ impl<'a> Pixels<'a> {
             "a displayed picture row lies inside the picture"
         );
         let start = line as usize * self.stride;
-        &self.bytes[start..start + self.size[0] as usize * PICTURE_BYTES as usize]
+        &self.bytes[start..start + row(self.size[0]) as usize]
     }
+}
+
+fn row(width: u32) -> u64 {
+    u64::from(width) * u64::from(PICTURE_BYTES)
 }
 
 pub fn stride(width: u32) -> u64 {
     assert!(width > 0, "a picture holds at least one column");
-    let row = u64::from(width) * u64::from(PICTURE_BYTES);
-    row.div_ceil(COPY_ALIGNMENT) * COPY_ALIGNMENT
+    row(width).div_ceil(COPY_ALIGNMENT) * COPY_ALIGNMENT
+}
+
+pub fn bytes(size: [u32; 2]) -> u64 {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a picture target covers at least one pixel"
+    );
+    row(size[0]) * u64::from(size[1])
 }
 
 pub fn target(device: &Device, size: [u32; 2]) -> Texture {

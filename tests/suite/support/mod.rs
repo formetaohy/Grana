@@ -110,7 +110,7 @@ pub fn gpu() -> Option<Gpu> {
 }
 
 pub fn budget(residency: u64, size: [u32; 2]) -> u64 {
-    residency + grana_render::target_bytes(size)
+    residency + grana_render::target_bytes(size, grana_render::Demand::full())
 }
 
 pub fn ledger() -> std::sync::Arc<grana_gpu::Ledger> {

@@ -83,6 +83,11 @@ labels! {
     ripley_title => "Ripley L" / "Ripley L";
     ripley_curve => "L(r) − r" / "L(r) − r";
     ripley_outside => "outside" / "越界";
+    nearest => "Nearest" / "最近邻";
+    nearest_title => "Nearest neighbour" / "最近邻分布";
+    nearest_curve => "G(r)" / "G(r)";
+    nearest_expected => "CSR" / "CSR";
+    target => "Target" / "对照集";
     no_spatial => "No spatial frames" / "无可分析的空间帧";
     box_plot => "Box" / "箱线图";
     violin_plot => "Violin" / "小提琴图";
@@ -118,6 +123,7 @@ labels! {
     x_frame => "X: Frame" / "X: 帧";
     x_radius => "X: r (µm)" / "X: r (µm)";
     y_ripley => "Y: L − r (µm)" / "Y: L − r (µm)";
+    y_nearest => "Y: G(r)" / "Y: G(r)";
     x_conditions => "X: Conditions" / "X: 条件";
     x_frames => "X: Frames" / "X: 帧";
     aggregate_mean => "Mean" / "均值";
@@ -210,6 +216,8 @@ messages! {
     trend_caption(unit: &str, count: u64, frames: u32) => "{count} {unit} · {frames}f" / "{count} {unit} · {frames} 帧";
     gated_trend_caption(unit: &str, gated: u64, total: u64, frames: u32) => "{gated}/{total} {unit} · {frames}f" / "{gated}/{total} {unit} · {frames} 帧";
     ripley_summary(frames: u32, objects: u64) => "{frames}f · {objects} objects" / "{frames} 帧 · {objects} 个对象";
+    paired_summary(frames: u32, objects: u64, partners: u64, target: &str) => "{frames}f · {objects} vs {partners} {target}" / "{frames} 帧 · {objects} 对 {partners} {target}";
+    nearest_readout(radius: &str, value: &str, low: &str, high: &str, expected: &str, frames: u64) => "r {radius} µm · G {value} · CI {low}–{high} · CSR {expected} · {frames}f" / "r {radius} µm · G {value} · CI {low}–{high} · CSR {expected} · {frames} 帧";
     ripley_single(single: u32) => "{single} single-object frames" / "{single} 帧仅一个对象";
     ripley_envelope(simulations: u32) => "CSR 95% · {simulations}" / "CSR 95% · {simulations}";
     ripley_test(p: &str, beyond: u32) => "p {p} · {beyond}" / "p {p} · {beyond}";

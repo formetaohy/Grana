@@ -676,6 +676,11 @@ impl Session {
                 (Some(_), None) => {}
                 (None, _) => self.measure.clear(),
             },
+            Command::SetMeasureTarget(target) => {
+                if let Some(scene) = self.scene.as_ref() {
+                    self.measure.set_target(target, scene);
+                }
+            }
             Command::TrainClassifier { set, features } => self.train_classifier(set, features),
             Command::ClearClassifier(set) => {
                 if let Some(scene) = self.scene.as_mut() {

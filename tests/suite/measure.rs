@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use grana_measure::{Aggregate, Group, Kind, Table};
+use grana_measure::{Aggregate, Group, Kind, Mask, MeasureView, Plot, Table, Window};
 use grana_object::{
     IntensityTable, SampleAccumulator, SampleStatistics, Spot, SpotSet, Track, TrackNode, TrackSet,
 };
-use grana_scene::{Dataset, Measure, ObjectFrame, ObjectKind, Scene};
+use grana_scene::{Dataset, Installed, Measure, ObjectFrame, ObjectKind, Scene};
 use grana_volume::{Extent, Region, Spacing};
 
 use crate::support::{id, measure_source, node, spheres, spot_set, track};
@@ -622,4 +622,192 @@ fn restricts_the_measured_rows_to_the_analysis_box() {
         "the analysis box admits the one object inside it"
     );
     assert_eq!(rows.total(), 1);
+}
+
+#[test]
+fn measures_cross_population_spatial_statistics() {
+    let source = Spot::new([0.45, 0.5, 0.5], 0.02, 0.5);
+    let target = Spot::new([0.55, 0.5, 0.5], 0.02, 0.5);
+    let source = Table::build(
+        measure_source(Kind::Spots, &[CHANNEL], [lone_spot(source)]),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the source table builds");
+    let target = Table::build(
+        measure_source(Kind::Spots, &[CHANNEL], [lone_spot(target)]),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the target table builds");
+    let window = Window::new([0.0; 3], [1.0; 3]).expect("the unit cube is a window");
+    let mask = Mask::all(1);
+    assert_eq!(
+        source.plot(MeasureView::Ripley, [0, 0], &mask, window, None),
+        None,
+        "one object holds no curve inside its own set"
+    );
+    let plot = source
+        .plot(MeasureView::Ripley, [0, 0], &mask, window, Some(&target))
+        .expect("a paired Ripley curve");
+    let Plot::Ripley(ripley) = plot else {
+        panic!("the paired view plots a Ripley curve");
+    };
+    assert_eq!(ripley.census().partners(), 1);
+    for point in ripley.points() {
+        let expected = if point.radius() >= 0.1 {
+            0.620_350_5 - point.radius()
+        } else {
+            -point.radius()
+        };
+        assert!(
+            (point.value() - expected).abs() < 1.0e-5,
+            "L(r) at {} reads {} instead of {expected}",
+            point.radius(),
+            point.value()
+        );
+    }
+    let plot = source
+        .plot(
+            MeasureView::NearestNeighbour,
+            [0, 0],
+            &mask,
+            window,
+            Some(&target),
+        )
+        .expect("a paired nearest curve");
+    let Plot::NearestNeighbour(nearest) = plot else {
+        panic!("the paired view plots a nearest curve");
+    };
+    assert_eq!(nearest.census().partners(), 1);
+    for point in nearest.points() {
+        let expected = if point.radius() >= 0.1 { 1.0 } else { 0.0 };
+        assert!(
+            (point.value() - expected).abs() < 1.0e-6,
+            "G(r) at {} reads {} instead of {expected}",
+            point.radius(),
+            point.value()
+        );
+    }
+    let both = Table::build(
+        measure_source(
+            Kind::Spots,
+            &[CHANNEL],
+            [spot_set(
+                0,
+                vec![
+                    Spot::new([0.45, 0.5, 0.5], 0.02, 0.5),
+                    Spot::new([0.55, 0.5, 0.5], 0.02, 0.5),
+                ],
+                IntensityTable::new(1, vec![None; 2]),
+            )],
+        ),
+        None,
+        1.0,
+        Group::Object,
+        Aggregate::MEAN,
+        None,
+    )
+    .expect("the single table builds");
+    let mask = Mask::all(2);
+    let Plot::Ripley(single) = both
+        .plot(MeasureView::Ripley, [0, 0], &mask, window, None)
+        .expect("a single-population Ripley curve")
+    else {
+        panic!("the single view plots a Ripley curve");
+    };
+    assert_eq!(single.census().partners(), 0);
+    for (single, paired) in single.points().iter().zip(ripley.points()) {
+        assert_eq!(
+            single.value(),
+            paired.value(),
+            "the estimator reads the same for one set of two objects"
+        );
+    }
+}
+
+#[test]
+fn pairs_a_second_object_set_for_spatial_statistics() {
+    let volume = spheres(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0), &[], 0);
+    let mut scene = Scene::new(Dataset::synthetic("pair", volume.pyramid()));
+    let first = scene.add_object(ObjectKind::Spots, 0);
+    let second = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(
+        first,
+        0,
+        ObjectFrame::from_spots(spot_set(
+            0,
+            vec![
+                Spot::new([0.45, 0.5, 0.5], 0.02, 0.5),
+                Spot::new([0.45, 0.6, 0.5], 0.02, 0.5),
+            ],
+            IntensityTable::new(1, vec![None; 2]),
+        )),
+    );
+    scene.install(
+        second,
+        0,
+        ObjectFrame::from_spots(lone_spot(Spot::new([0.55, 0.5, 0.5], 0.02, 0.5))),
+    );
+    let window = Window::new([0.0; 3], [1.0; 3]).expect("the unit cube is a window");
+    let mut measure = Measure::new();
+    measure.select(first, &scene);
+    let request = measure.request(&scene, false).expect("the table builds");
+    let key = request.key();
+    measure.install(
+        key,
+        Some(Arc::new(request.build().expect("the table holds"))),
+    );
+    measure.set_view(MeasureView::Ripley);
+    let rows = measure.rows_request().expect("the rows build").build();
+    measure.install_rows(rows);
+    let request = measure
+        .plot_request(Some(window))
+        .expect("the single curve builds");
+    let key = request.key();
+    let plot = request.build().expect("the single curve holds");
+    measure.install_plot(key, Some(plot));
+    let Some(Plot::Ripley(single)) = measure.plot() else {
+        panic!("the single curve installs");
+    };
+    assert_eq!(single.census().partners(), 0);
+    measure.set_target(Some(first), &scene);
+    assert_eq!(
+        measure.target(),
+        None,
+        "an object set never pairs with itself"
+    );
+    measure.set_target(Some(second), &scene);
+    let request = measure
+        .request(&scene, false)
+        .expect("the paired table builds");
+    let key = request.key();
+    assert_eq!(
+        measure.install(
+            key,
+            Some(Arc::new(request.build().expect("the paired table holds")))
+        ),
+        Installed::Target
+    );
+    let request = measure
+        .plot_request(Some(window))
+        .expect("the paired curve builds");
+    let key = request.key();
+    let plot = request.build().expect("the paired curve holds");
+    measure.install_plot(key, Some(plot));
+    let Some(Plot::Ripley(paired)) = measure.plot() else {
+        panic!("the paired curve installs");
+    };
+    assert_eq!(paired.census().partners(), 1);
+    assert_eq!(measure.state(&scene).target, Some(second.raw()));
+}
+
+fn lone_spot(spot: Spot) -> SpotSet {
+    spot_set(0, vec![spot], IntensityTable::new(1, vec![None]))
 }

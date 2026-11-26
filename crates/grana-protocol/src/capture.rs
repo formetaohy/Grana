@@ -202,7 +202,8 @@ impl Protocol {
                         visible: set.track_visible(),
                     }),
                     curation: CurationSpec::of(set.curation()),
-                    measure: (measure.set() == Some(set.id())).then(|| MeasureSpec::of(measure)),
+                    measure: (measure.set() == Some(set.id()))
+                        .then(|| MeasureSpec::of(measure, scene)),
                     meshes: Vec::new(),
                 })
             })
@@ -813,7 +814,7 @@ fn track_color(coloring: &Coloring<TrackColor>, scene: &Scene) -> Option<ColorSp
 }
 
 impl MeasureSpec {
-    pub fn of(measure: &Measure) -> Self {
+    pub fn of(measure: &Measure, scene: &Scene) -> Self {
         let group = measure.group();
         let aggregate = if group == Group::Object {
             Aggregate::MEAN
@@ -866,6 +867,11 @@ impl MeasureSpec {
             group: group.key().to_string(),
             aggregate: aggregate.key().to_string(),
             scope: Some(measure.scope().label().to_string()),
+            target: measure
+                .target()
+                .and_then(|id| scene.objects.get(id))
+                .filter(|target| !target.provenance().is_attached())
+                .map(|set| set.key().as_str().to_string()),
             visible: measure.visibility(),
             view: Some(measure.view().name().to_string()),
             axes,

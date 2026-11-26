@@ -4,15 +4,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use grana_engine::RenderedScene;
-use grana_gpu::{Headless, Pipelines};
-use grana_render::{EXPORT_CEILING, Renderer};
+use grana_gpu::{Consumer, Headless, Pipelines};
+use grana_render::{EXPORT_CEILING, FrameBudget, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
 use grana_volume::PackedBrick;
 use wgpu::{Device, Queue, TextureFormat};
 
 use crate::compose::Composer;
-use crate::export::{Export, Step};
+use crate::export::{Export, Footprint, Step};
 use crate::plan::{self, Destination};
 use crate::probe;
 use crate::task::{Bricks, Task};
@@ -124,8 +124,29 @@ impl Offline {
             Ok(needed) => needed,
             Err(detail) => return Outcome::Failed { detail },
         };
+        let footprint = match Footprint::of(&self.device, self.format, size) {
+            Ok(footprint) => footprint,
+            Err(detail) => return Outcome::Failed { detail },
+        };
+        let claim = match self.ledger.claim(Consumer::Export, footprint.bytes()) {
+            Some(claim) => claim,
+            None => {
+                return Outcome::Failed {
+                    detail: format!(
+                        "a {} × {} export needs {:.1} MiB of export textures and the device allowance holds {:.1} MiB; lower the export size",
+                        size[0],
+                        size[1],
+                        footprint.bytes() as f64 / (1u64 << 20) as f64,
+                        self.ledger.total() as f64 / (1u64 << 20) as f64
+                    ),
+                };
+            }
+        };
         let ceiling =
             EXPORT_CEILING.min(self.ledger.spare().saturating_add(self.renderer.claimed()));
+        let mut demand = grana_engine::demand(&scene);
+        demand.transparent |= plan.transparent;
+        let frame = FrameBudget { size, demand };
         let room = match self.renderer.capacity(
             &self.device,
             &pyramid,
@@ -134,7 +155,7 @@ impl Offline {
                 level: needed.detail.level,
                 bricks: usize::MAX / 4,
             },
-            size,
+            frame,
             ceiling,
         ) {
             Ok(room) => room,
@@ -164,7 +185,7 @@ impl Offline {
         }
         if let Err(detail) =
             self.renderer
-                .reserve(&self.device, &pyramid, self.budget, detail, size, ceiling)
+                .reserve(&self.device, &pyramid, self.budget, detail, frame, ceiling)
         {
             return Outcome::Failed { detail };
         }
@@ -179,7 +200,14 @@ impl Offline {
             };
         }
         self.renderer.begin_export();
-        let mut export = match Export::start(&self.device, self.format, plan, needed.levels) {
+        let mut export = match Export::start(
+            &self.device,
+            self.format,
+            plan,
+            needed.levels,
+            claim,
+            footprint,
+        ) {
             Ok(export) => export,
             Err(detail) => return Outcome::Failed { detail },
         };

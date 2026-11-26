@@ -51,11 +51,12 @@ impl Shot {
         }
     }
 
-    pub(super) fn demand(self) -> budget::FrameDemand {
-        budget::FrameDemand {
+    pub(super) fn demand(self) -> budget::Demand {
+        budget::Demand {
             surfaces: self.surfaces,
             volume: self.volume,
             transparent: self.transparent,
+            splats: self.splats,
         }
     }
 }

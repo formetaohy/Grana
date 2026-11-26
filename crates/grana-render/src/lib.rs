@@ -36,10 +36,12 @@ mod temporal;
 mod upload;
 mod volume;
 
-pub use budget::{splat_budget, target_bytes, texture_budget};
+pub use budget::{Demand, FrameBudget, splat_budget, target_bytes, texture_budget};
 pub use detail::{Detail, EXPORT_CEILING, Residency, Visible, residency, visible_bricks};
 pub use fragment::{Fragment, fit as fragment_fit};
-pub use image::{Pixels, stride as picture_stride, target as picture_target};
+pub use image::{
+    Pixels, bytes as picture_bytes, stride as picture_stride, target as picture_target,
+};
 pub use pick::PickId;
 pub use renderer::{Delivery, Frame, FrameInfo, Renderer, Requests, ViewInfo};
 pub use schema::{

@@ -21,6 +21,15 @@ pub struct Readback {
 }
 
 impl Readback {
+    pub fn bytes_of(size: u64, slots: usize) -> u64 {
+        assert!(
+            size > 0 && size.is_multiple_of(COPY_ALIGNMENT),
+            "a readback slot is a whole number of aligned bytes"
+        );
+        assert!(slots > 0, "a readback ring holds at least one slot");
+        size * slots as u64
+    }
+
     pub fn new(device: &Device, label: &'static str, size: u64, slots: usize) -> Self {
         assert!(
             size > 0 && size.is_multiple_of(COPY_ALIGNMENT),

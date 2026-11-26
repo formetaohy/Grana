@@ -186,6 +186,7 @@ fn plot(panel: Panel<'_>) -> Result<String, String> {
         [panel.column, panel.column],
         &gated,
         window(panel.table),
+        None,
     ) else {
         return Ok(String::new());
     };

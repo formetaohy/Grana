@@ -196,7 +196,7 @@ pub struct Renderer {
     ceiling: u64,
     frames: u64,
     mesh_budget: u64,
-    demand: budget::FrameDemand,
+    demand: budget::Demand,
     residence: Residence,
     prefetch: bool,
     transparent: bool,
@@ -294,7 +294,7 @@ impl Renderer {
             ceiling: budget,
             frames: budget,
             mesh_budget: 0,
-            demand: budget::FrameDemand::full(),
+            demand: budget::Demand::full(),
             residence: Residence::new(),
             prefetch: false,
             transparent: false,
@@ -337,7 +337,7 @@ impl Renderer {
     }
 
     pub fn splat_budget(&self) -> u64 {
-        budget::splat_budget(self.total)
+        budget::splat_reservation(self.total, self.demand)
     }
 
     pub fn frames(&self) -> u64 {
@@ -374,7 +374,7 @@ impl Renderer {
         pyramid: &Pyramid,
         total: u64,
         detail: crate::Detail,
-        size: [u32; 2],
+        frame: budget::FrameBudget,
         ceiling: u64,
     ) -> Result<usize, String> {
         assert!(total > 0, "a renderer needs a texture budget");
@@ -385,8 +385,8 @@ impl Renderer {
                 ceiling,
             },
             reserve::Footprint {
-                frames: budget::Frames::of(size, budget::FrameDemand::full()).bytes(),
-                splats: budget::splat_budget(total),
+                frames: budget::Frames::of(frame.size, frame.demand).bytes(),
+                splats: budget::splat_reservation(total, frame.demand),
                 support: self.support(),
             },
             device.limits().max_texture_dimension_3d,
@@ -400,7 +400,7 @@ impl Renderer {
         pyramid: &Pyramid,
         total: u64,
         detail: crate::Detail,
-        size: [u32; 2],
+        frame: budget::FrameBudget,
         ceiling: u64,
     ) -> Result<(), String> {
         assert!(total > 0, "a renderer needs a texture budget");
@@ -411,7 +411,8 @@ impl Renderer {
         self.deficit = 0;
         self.reclaim = false;
         self.degraded = None;
-        self.frames = budget::Frames::of(size, budget::FrameDemand::full()).bytes();
+        self.demand = frame.demand;
+        self.frames = budget::Frames::of(frame.size, frame.demand).bytes();
         self.install(
             device,
             pyramid,
@@ -630,19 +631,16 @@ impl Renderer {
         &mut self,
         device: &Device,
         size: [u32; 2],
-        demand: budget::FrameDemand,
+        demand: budget::Demand,
     ) -> Result<(), String> {
         if self.exporting {
             return Ok(());
         }
-        self.demand = demand;
-        let split = budget::split(
-            self.total,
-            self.ceiling,
-            budget::Frames::of(size, demand),
-            self.splat_budget(),
-            size,
-        )?;
+        self.demand = budget::Demand {
+            splats: self.demand.splats || demand.splats,
+            ..demand
+        };
+        let split = budget::split(self.total, self.ceiling, size, demand, self.splat_budget())?;
         self.frames = split.frames;
         self.settle()?;
         if split
@@ -761,9 +759,9 @@ impl Renderer {
         let split = budget::split(
             self.total,
             self.ceiling,
-            budget::Frames::of(size, self.demand),
-            self.splat_budget(),
             size,
+            self.demand,
+            self.splat_budget(),
         )?;
         self.frames = split.frames;
         self.install(

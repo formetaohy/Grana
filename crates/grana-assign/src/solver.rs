@@ -6,7 +6,7 @@ const CHECK: usize = 256;
 const EPSILON: f64 = 1.0e-12;
 
 #[derive(Clone, Copy)]
-pub(crate) struct Edge {
+pub struct Edge {
     pub column: usize,
     pub cost: f64,
 }
@@ -33,11 +33,7 @@ impl PartialOrd for Candidate {
     }
 }
 
-pub(crate) fn solve(
-    edges: &[Vec<Edge>],
-    columns: usize,
-    cancel: &AtomicBool,
-) -> Option<Vec<usize>> {
+pub fn solve(edges: &[Vec<Edge>], columns: usize, cancel: &AtomicBool) -> Option<Vec<usize>> {
     let rows = edges.len();
     assert!(rows <= columns, "every row finds a column of its own");
     let mut row_potential = vec![0.0f64; rows + 1];

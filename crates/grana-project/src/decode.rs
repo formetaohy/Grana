@@ -1936,6 +1936,10 @@ impl Decode for MeasureState {
         if set == Some(0) {
             return Err(FAULT_VALUE);
         }
+        let target = Option::<u64>::decode(reader)?;
+        if target == Some(0) || target.zip(set).is_some_and(|(target, set)| target == set) {
+            return Err(FAULT_VALUE);
+        }
         let group = group(reader.u8()?)?;
         let aggregate = aggregate(reader.u8()?)?;
         let scope = Scope::from_index(reader.u8()?).ok_or(FAULT_TAG)?;
@@ -1964,6 +1968,7 @@ impl Decode for MeasureState {
         };
         Ok(Self {
             set,
+            target,
             group,
             aggregate,
             scope,

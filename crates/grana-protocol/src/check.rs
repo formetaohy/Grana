@@ -354,6 +354,24 @@ impl Protocol {
                 "a protocol measures one object set".to_string(),
             ));
         }
+        for set in &self.sets {
+            let Some(measure) = &set.measure else {
+                continue;
+            };
+            let Some(target) = measure.target() else {
+                continue;
+            };
+            let paired = self
+                .sets
+                .iter()
+                .any(|candidate| candidate.key == target && candidate.key != set.key);
+            if !paired {
+                return Err(ProtocolError::Invalid(format!(
+                    "the statistics of {} pair with the object set {target}, which the protocol does not hold",
+                    set.name
+                )));
+            }
+        }
         if let Some(composition) = &self.composition {
             composition.checked()?;
             for key in &composition.sets {

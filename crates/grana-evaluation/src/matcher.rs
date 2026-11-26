@@ -1,4 +1,7 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
+
+use grana_assign::{Edge, solve};
 
 use crate::graph::Graph;
 use crate::truth::Truth;
@@ -26,19 +29,20 @@ impl Matching {
         }
         let mut computed_of_truth = vec![None; graph.len()];
         let mut truth_of_computed = vec![None; computed.len()];
+        let cancel = AtomicBool::new(false);
         for (time, markers) in &tracking {
             let Some(detections) = found.get(time) else {
                 continue;
             };
             let mut candidates = Vec::new();
-            for marker in markers {
+            for (row, marker) in markers.iter().enumerate() {
                 let reference = graph.vertices()[*marker];
                 let radii = truth.radii(*marker);
-                for detection in detections {
+                for (column, detection) in detections.iter().enumerate() {
                     let vertex = computed.vertices()[*detection];
                     let distance = distance(reference.position(), vertex.position(), radii);
                     if distance <= tolerance {
-                        candidates.push((distance, *marker, *detection));
+                        candidates.push((distance, row, column));
                     }
                 }
             }
@@ -48,12 +52,28 @@ impl Matching {
                     .then(left.1.cmp(&right.1))
                     .then(left.2.cmp(&right.2))
             });
-            for (_, marker, detection) in candidates {
-                if computed_of_truth[marker].is_some() || truth_of_computed[detection].is_some() {
-                    continue;
+            let bonus = f64::from(tolerance) * (markers.len() + 1) as f64;
+            let mut edges = vec![Vec::new(); markers.len()];
+            for (distance, row, column) in candidates {
+                edges[row].push(Edge {
+                    column,
+                    cost: f64::from(distance) - bonus,
+                });
+            }
+            for (row, held) in edges.iter_mut().enumerate() {
+                held.push(Edge {
+                    column: detections.len() + row,
+                    cost: 0.0,
+                });
+            }
+            let columns = detections.len() + markers.len();
+            let assignment =
+                solve(&edges, columns, &cancel).expect("an uncancelled marker matching solves");
+            for (row, column) in assignment.into_iter().enumerate() {
+                if column < detections.len() {
+                    computed_of_truth[markers[row]] = Some(detections[column]);
+                    truth_of_computed[detections[column]] = Some(markers[row]);
                 }
-                computed_of_truth[marker] = Some(detection);
-                truth_of_computed[detection] = Some(marker);
             }
         }
         Self {

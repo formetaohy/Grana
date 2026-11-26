@@ -118,6 +118,14 @@ impl View<'_> {
                 &self.decor,
                 empty,
             ),
+            Plot::NearestNeighbour(nearest) => series::paint(
+                painter,
+                rect,
+                &series::SeriesChart::of_nearest_neighbour(nearest, style.language),
+                &style,
+                &self.decor,
+                empty,
+            ),
         }
     }
 }

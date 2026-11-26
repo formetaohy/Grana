@@ -46,21 +46,41 @@ pub fn splat_budget(total: u64) -> u64 {
     (total / SPLAT_SHARE).max(1)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FrameDemand {
-    pub(crate) surfaces: bool,
-    pub(crate) volume: bool,
-    pub(crate) transparent: bool,
+pub(crate) fn splat_reservation(total: u64, demand: Demand) -> u64 {
+    if demand.splats {
+        splat_budget(total)
+    } else {
+        0
+    }
 }
 
-impl FrameDemand {
-    pub(crate) fn full() -> Self {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Demand {
+    pub surfaces: bool,
+    pub volume: bool,
+    pub transparent: bool,
+    pub splats: bool,
+}
+
+impl Demand {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn full() -> Self {
         Self {
             surfaces: true,
             volume: true,
             transparent: true,
+            splats: true,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameBudget {
+    pub size: [u32; 2],
+    pub demand: Demand,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +90,7 @@ pub(crate) struct Frames {
 }
 
 impl Frames {
-    pub(crate) fn of(size: [u32; 2], demand: FrameDemand) -> Self {
+    pub(crate) fn of(size: [u32; 2], demand: Demand) -> Self {
         assert!(
             size[0] > 0 && size[1] > 0,
             "a frame target covers a non empty view"
@@ -100,20 +120,20 @@ impl Frames {
     }
 }
 
-pub fn target_bytes(size: [u32; 2]) -> u64 {
-    Frames::of(size, FrameDemand::full()).bytes()
+pub fn target_bytes(size: [u32; 2], demand: Demand) -> u64 {
+    Frames::of(size, demand).bytes()
 }
 
 pub(crate) fn split(
     total: u64,
     ceiling: u64,
-    frames: Frames,
-    splats: u64,
     size: [u32; 2],
+    demand: Demand,
+    splats: u64,
 ) -> Result<Split, String> {
     assert!(total > 0, "a renderer needs a positive texture budget");
     assert!(ceiling > 0, "a renderer keeps a positive residency ceiling");
-    let single = frames.bytes();
+    let single = Frames::of(size, demand).bytes();
     if single.saturating_add(splats) >= total {
         return Err(format!(
             "a {} × {} view needs {:.1} MiB of frame targets and {:.1} MiB of splats, above the {:.1} MiB render budget; shorten the window or close running analyses",
@@ -140,7 +160,7 @@ pub(crate) struct Split {
     pub(crate) frames: u64,
 }
 
-pub(crate) fn fragment_allowance(grant: u64, size: [u32; 2], demand: FrameDemand) -> u64 {
+pub(crate) fn fragment_allowance(grant: u64, size: [u32; 2], demand: Demand) -> u64 {
     let lean = crate::fragment::layered(size, 1);
     grant
         .saturating_sub(Frames::of(size, demand).textures)

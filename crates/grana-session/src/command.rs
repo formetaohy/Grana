@@ -332,6 +332,7 @@ pub enum Command {
     SetShading(Shading),
     ResetRendering,
     SetMeasureSet(Option<ObjectSetId>),
+    SetMeasureTarget(Option<ObjectSetId>),
     TrainClassifier {
         set: ObjectSetId,
         features: Vec<Measurement>,
@@ -544,6 +545,7 @@ pub enum Action {
     MeasureAggregate,
     MeasureScope,
     MeasureSet,
+    MeasureTarget,
     MeasureColumns,
     MeasureView,
     MeasureAxes,
@@ -861,6 +863,7 @@ impl Command {
             Self::SetShading(_) => Nature::View(Some(Edit::new(Action::Shading))),
             Self::ResetRendering => Nature::View(Some(Edit::new(Action::ResetRendering))),
             Self::SetMeasureSet(_) => Nature::View(Some(Edit::new(Action::MeasureSet))),
+            Self::SetMeasureTarget(_) => Nature::View(Some(Edit::new(Action::MeasureTarget))),
             Self::SetMeasureGroup(_) => Nature::View(Some(Edit::new(Action::MeasureGroup))),
             Self::SetMeasureAggregate(_) => Nature::View(Some(Edit::new(Action::MeasureAggregate))),
             Self::SetMeasureScope(_) => Nature::View(Some(Edit::new(Action::MeasureScope))),

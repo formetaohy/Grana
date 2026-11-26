@@ -406,6 +406,63 @@ fn reserves_only_the_memory_an_export_uses() {
         }
         Outcome::Cancelled => panic!("the export was cancelled"),
     }
+    assert_eq!(
+        ledger.claimed(grana_gpu::Consumer::Export),
+        0,
+        "an export releases the textures it claimed"
+    );
+}
+
+#[test]
+fn refuses_an_export_whose_textures_exceed_the_device_allowance() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = export_volume();
+    let pyramid = volume.pyramid();
+    let scene = Scene::new(Dataset::synthetic("export", pyramid.clone()));
+    let size = OutputSize::of(2048, 2048);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
+    let directory = Temp::new("export-refused");
+    let path = directory.path().join("refused.png");
+    let plan = Plan {
+        destination: Destination::Image { path },
+        size,
+        transparent: false,
+        poses: vec![Pose {
+            time: 0,
+            camera: camera.state(),
+        }],
+        fps: 0,
+        region: Region::none(),
+    };
+    let ledger = Arc::new(grana_gpu::Ledger::new(128 << 20));
+    let mut context = Offline::new(
+        gpu.device().clone(),
+        gpu.queue().clone(),
+        TextureFormat::Rgba8Unorm,
+        &ledger,
+        64 << 20,
+        gpu.pipelines(),
+    );
+    match context.run(task(volume, plan), &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Failed { detail } => {
+            assert!(
+                detail.contains("2048 × 2048")
+                    && detail.contains("export textures")
+                    && detail.contains("MiB"),
+                "the refusal names the export size and the bytes it needs: {detail}"
+            );
+        }
+        Outcome::Complete { .. } => panic!("an export larger than the device allowance completed"),
+        Outcome::Cancelled => panic!("the export was cancelled"),
+    }
+    assert_eq!(
+        ledger.claimed(grana_gpu::Consumer::Export),
+        0,
+        "a refused export releases the textures it claimed"
+    );
 }
 
 #[test]

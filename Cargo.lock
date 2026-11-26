@@ -3497,6 +3497,7 @@ version = "0.2.3"
 dependencies = [
  "bytemuck",
  "glam",
+ "grana-assign",
  "grana-display",
  "grana-geometry",
  "grana-measure",
@@ -3561,6 +3562,10 @@ dependencies = [
  "grana-volume",
  "serde_json",
 ]
+
+[[package]]
+name = "grana-assign"
+version = "0.2.3"
 
 [[package]]
 name = "grana-brand"
@@ -3659,6 +3664,7 @@ dependencies = [
 name = "grana-evaluation"
 version = "0.2.3"
 dependencies = [
+ "grana-assign",
  "grana-object",
  "rand 0.9.5",
 ]

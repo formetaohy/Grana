@@ -1553,7 +1553,7 @@ impl Table {
         }
     }
 
-    pub(crate) fn gated_points(&self, gated: &Mask) -> Vec<Vec<[f32; 3]>> {
+    pub(crate) fn gated_points(&self, gated: &Mask) -> Vec<(u32, Vec<[f32; 3]>)> {
         let basis = self.basis().unwrap_or(self);
         let (Some(x), Some(y), Some(z)) = (
             basis.column(&length_key("x")),
@@ -1611,7 +1611,7 @@ impl Table {
             };
             slots.entry(time).or_default().push([x, y, z]);
         }
-        slots.into_values().collect()
+        slots.into_iter().collect()
     }
 
     pub fn matching(

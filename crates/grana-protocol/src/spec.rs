@@ -1407,6 +1407,8 @@ pub struct MeasureSpec {
     pub aggregate: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     #[serde(default = "truth", skip_serializing_if = "is_true")]
     pub visible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2979,6 +2981,10 @@ impl MeasureSpec {
         })
     }
 
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
     pub fn visible(&self) -> bool {
         self.visible
     }
@@ -3050,6 +3056,11 @@ impl MeasureSpec {
             && MeasureView::parse(view).is_none()
         {
             return invalid("names an unknown statistics view".to_string());
+        }
+        if let Some(target) = &self.target
+            && target.trim().is_empty()
+        {
+            return invalid("pairs with an unnamed object set".to_string());
         }
         if let Some([x, y]) = &self.axes
             && (x.trim().is_empty() || y.trim().is_empty())

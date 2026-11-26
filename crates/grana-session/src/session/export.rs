@@ -204,8 +204,8 @@ impl Session {
     }
 
     pub(super) fn export_measure(&mut self) {
-        if self.measure.view() == grana_measure::MeasureView::Ripley {
-            self.export_ripley();
+        if self.measure.view().spatial() {
+            self.export_spatial();
             return;
         }
         let Some(scene) = self.scene.as_ref() else {
@@ -283,49 +283,54 @@ impl Session {
         self.tasks.defer_csv(path, request.key(), name);
     }
 
-    fn export_ripley(&mut self) {
+    fn export_spatial(&mut self) {
         let Some(scene) = self.scene.as_ref() else {
             return;
         };
         let Some(set) = self.measure.set() else {
             self.message = Some(Message::info(
-                "choose an object set before exporting its Ripley curve",
+                "choose an object set before exporting its spatial statistics",
             ));
             return;
         };
         let Some(object) = scene.objects.get(set) else {
             return;
         };
-        let Some(grana_measure::Plot::Ripley(_)) = self.measure.plot() else {
+        if self.measure.plot().is_none() {
             self.message = Some(Message::info(
-                "the Ripley curve is still being computed before it is exported",
+                "the spatial statistics are still being computed before they are exported",
             ));
             return;
+        }
+        let stem = match self.measure.view() {
+            grana_measure::MeasureView::Ripley => "ripley",
+            _ => "nearest",
         };
         let file_name = format!(
-            "{}-{}-ripley.csv",
+            "{}-{}-{stem}.csv",
             crate::slug(scene.dataset.name()),
             crate::slug(object.key().as_str())
         );
         self.ask(
-            Inquiry::save("Export the Ripley curve", file_name).filter("CSV", &["csv"]),
+            Inquiry::save("Export the spatial statistics", file_name).filter("CSV", &["csv"]),
             |session, path| {
                 if let Some(path) = path {
-                    session.write_ripley(path);
+                    session.write_spatial(path);
                 }
             },
         );
     }
 
-    fn write_ripley(&mut self, path: PathBuf) {
-        let Some(grana_measure::Plot::Ripley(ripley)) = self.measure.plot() else {
-            return;
+    fn write_spatial(&mut self, path: PathBuf) {
+        let text = match self.measure.plot() {
+            Some(grana_measure::Plot::Ripley(ripley)) => ripley.table(),
+            Some(grana_measure::Plot::NearestNeighbour(nearest)) => nearest.table(),
+            _ => return,
         };
-        let text = ripley.table();
         self.message = match grana_file::write(&path, text.as_bytes()) {
             Ok(()) => None,
             Err(error) => Some(Message::error(format!(
-                "failed to export the Ripley curve to {}: {error}",
+                "failed to export the spatial statistics to {}: {error}",
                 path.display()
             ))),
         };
@@ -340,7 +345,11 @@ impl Session {
     }
 
     pub(super) fn finish_measure(&mut self, key: MeasureKey, table: Option<Table>) {
-        self.measure.install(key, table.map(std::sync::Arc::new));
+        if self.measure.install(key, table.map(std::sync::Arc::new))
+            != grana_scene::Installed::Table
+        {
+            return;
+        }
         let Some((path, deferred, name)) = self.tasks.take_csv() else {
             return;
         };

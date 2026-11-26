@@ -1054,12 +1054,26 @@ fn round_trips_a_project() {
     scene.annotations.add_point([0.1, 0.2, 0.3], Some(0));
     scene.set_volume_mode(0, grana_display::VolumeMode::Isosurface);
     scene.set_isovalue(0, 0.35);
+    let other = scene.add_object(ObjectKind::Spots, 0);
+    scene.install(
+        other,
+        0,
+        ObjectFrame::from_spots(spot_set(
+            0,
+            vec![Spot::new([2.0, 0.0, 0.0], 1.0, 0.5)],
+            IntensityTable::new(1, vec![None]),
+        )),
+    );
+    let mut measure = Measure::new();
+    measure.select(spots, &scene);
+    measure.set_target(Some(other), &scene);
+    measure.set_view(grana_measure::MeasureView::Ripley);
     let mut view = view_state();
     view.camera.yaw = 0.55;
     view.camera.distance = 12.0;
     let project = Project::capture(
         &scene,
-        &Measure::new(),
+        &measure,
         Source::Synthetic {
             name: "fixture".to_string(),
         },
@@ -1082,6 +1096,9 @@ fn round_trips_a_project() {
     )
     .expect("the project reads");
     assert_eq!(loaded, project);
+    assert_eq!(loaded.measure.set, Some(spots.raw()));
+    assert_eq!(loaded.measure.target, Some(other.raw()));
+    assert_eq!(loaded.measure.view, grana_measure::MeasureView::Ripley);
     assert_ne!(
         loaded.scene.sets[0].visibility,
         grana_scene::Visibility::All,

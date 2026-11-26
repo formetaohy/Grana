@@ -6,7 +6,7 @@ mod summary;
 mod trend;
 
 use crate::mask::Mask;
-use crate::spatial::{Ripley, Window};
+use crate::spatial::{NearestNeighbour, Ripley, Window};
 use crate::table::Table;
 
 pub use distribution::{DENSITY_POINTS, Distribution, DistributionGroup, DistributionSeries};
@@ -23,16 +23,18 @@ pub enum MeasureView {
     Distribution,
     Trend,
     Ripley,
+    NearestNeighbour,
 }
 
 impl MeasureView {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Table,
         Self::Histogram,
         Self::Scatter,
         Self::Distribution,
         Self::Trend,
         Self::Ripley,
+        Self::NearestNeighbour,
     ];
 
     pub fn index(self) -> u8 {
@@ -43,6 +45,7 @@ impl MeasureView {
             Self::Distribution => 3,
             Self::Trend => 4,
             Self::Ripley => 5,
+            Self::NearestNeighbour => 6,
         }
     }
 
@@ -58,6 +61,7 @@ impl MeasureView {
             Self::Distribution => "distribution",
             Self::Trend => "trend",
             Self::Ripley => "ripley",
+            Self::NearestNeighbour => "nearest-neighbour",
         }
     }
 
@@ -68,14 +72,17 @@ impl MeasureView {
     pub fn plot(self) -> Option<Self> {
         match self {
             Self::Table => None,
-            Self::Histogram | Self::Scatter | Self::Distribution | Self::Trend | Self::Ripley => {
-                Some(self)
-            }
+            Self::Histogram
+            | Self::Scatter
+            | Self::Distribution
+            | Self::Trend
+            | Self::Ripley
+            | Self::NearestNeighbour => Some(self),
         }
     }
 
-    pub fn columned(self) -> bool {
-        self != Self::Ripley
+    pub fn spatial(self) -> bool {
+        matches!(self, Self::Ripley | Self::NearestNeighbour)
     }
 }
 
@@ -110,6 +117,7 @@ pub enum Plot {
     Distribution(Distribution),
     Trend(Trend),
     Ripley(Ripley),
+    NearestNeighbour(NearestNeighbour),
 }
 
 impl Plot {
@@ -120,6 +128,7 @@ impl Plot {
             Self::Distribution(_) => MeasureView::Distribution,
             Self::Trend(_) => MeasureView::Trend,
             Self::Ripley(_) => MeasureView::Ripley,
+            Self::NearestNeighbour(_) => MeasureView::NearestNeighbour,
         }
     }
 }
@@ -131,6 +140,7 @@ impl Table {
         axes: [usize; 2],
         gated: &Mask,
         window: Window,
+        paired: Option<&Table>,
     ) -> Option<Plot> {
         let columns = self.columns().len();
         assert!(
@@ -150,10 +160,24 @@ impl Table {
                 Some(Plot::Distribution(self.distribution(axes[0], gated)))
             }
             MeasureView::Trend => Some(Plot::Trend(self.trend(axes[0], gated))),
-            MeasureView::Ripley => Some(Plot::Ripley(crate::spatial::ripley(
-                &self.gated_points(gated),
-                window,
-            )?)),
+            MeasureView::Ripley => {
+                let source = self.gated_points(gated);
+                let target = paired.map(|table| table.gated_points(&Mask::all(table.rows())));
+                Some(Plot::Ripley(crate::spatial::ripley(
+                    &source,
+                    target.as_deref(),
+                    window,
+                )?))
+            }
+            MeasureView::NearestNeighbour => {
+                let source = self.gated_points(gated);
+                let target = paired.map(|table| table.gated_points(&Mask::all(table.rows())));
+                Some(Plot::NearestNeighbour(crate::spatial::nearest_neighbour(
+                    &source,
+                    target.as_deref(),
+                    window,
+                )?))
+            }
         }
     }
 }

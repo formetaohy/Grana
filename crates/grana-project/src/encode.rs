@@ -1330,6 +1330,7 @@ impl Encode for SampleStatistics {
 impl Encode for MeasureState {
     fn encode(&self, writer: &mut Encoder<'_>) {
         self.set.encode(writer);
+        self.target.encode(writer);
         writer.u8(self.group.index());
         writer.u8(self.aggregate.index());
         writer.u8(self.scope.index());

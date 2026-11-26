@@ -65,6 +65,7 @@ pub(crate) fn action(language: Language, action: Action) -> &'static str {
         Action::MeasureAggregate => ("statistics aggregate", "统计聚合"),
         Action::MeasureScope => ("statistics range", "统计范围"),
         Action::MeasureSet => ("statistics object set", "统计对象集"),
+        Action::MeasureTarget => ("statistics target set", "统计对照集"),
         Action::MeasureColumns => ("statistics columns", "统计列"),
         Action::MeasureView => ("statistics view", "统计视图"),
         Action::MeasureAxes => ("statistics axes", "统计坐标轴"),

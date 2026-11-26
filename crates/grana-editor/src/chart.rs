@@ -107,7 +107,16 @@ fn plot_page(
             grana_i18n::measure::y_ripley(language).to_string(),
             grana_i18n::measure::x_radius(language).to_string(),
         ),
+        Plot::NearestNeighbour(_) => (
+            grana_i18n::measure::nearest_title(language).to_string(),
+            grana_i18n::measure::y_nearest(language).to_string(),
+            grana_i18n::measure::x_radius(language).to_string(),
+        ),
     };
+    let target = measure
+        .target()
+        .and_then(|id| view.scene.and_then(|scene| scene.objects.get(id)))
+        .map(|set| set.name().to_string());
     let gate = match &plot {
         Plot::Histogram(histogram) => Gates {
             x: range(measure.filters(), histogram.column()),
@@ -125,11 +134,11 @@ fn plot_page(
             x: None,
             y: range(measure.filters(), trend.column()),
         },
-        Plot::Ripley(_) => Gates::default(),
+        Plot::Ripley(_) | Plot::NearestNeighbour(_) => Gates::default(),
     };
     Some(Chart {
         heading: Heading::new(title, y, x)
-            .with_summary(caption(&plot, table, language))
+            .with_summary(caption(&plot, table, language, target.as_deref()))
             .with_empty(empty_text(language, &plot))
             .with_language(language),
         plot,
@@ -145,7 +154,7 @@ fn empty_text(language: Language, plot: &Plot) -> &'static str {
             grana_i18n::measure::no_objects(language)
         }
         Plot::Trend(_) => grana_i18n::measure::no_frames_trend(language),
-        Plot::Ripley(_) => grana_i18n::measure::no_spatial(language),
+        Plot::Ripley(_) | Plot::NearestNeighbour(_) => grana_i18n::measure::no_spatial(language),
     }
 }
 
@@ -165,7 +174,7 @@ fn range(filters: &[grana_measure::Filter], column: usize) -> Option<(f32, f32)>
         .map(|filter| (filter.minimum(), filter.maximum()))
 }
 
-fn caption(plot: &Plot, table: &Table, language: Language) -> String {
+fn caption(plot: &Plot, table: &Table, language: Language, target: Option<&str>) -> String {
     let total = table.rows() as u64;
     match plot {
         Plot::Histogram(histogram) => {
@@ -226,6 +235,7 @@ fn caption(plot: &Plot, table: &Table, language: Language) -> String {
                 (None, false) => grana_i18n::measure::values_over_frames(language, total, frames),
             }
         }
-        Plot::Ripley(ripley) => crate::plot::ripley_caption(language, ripley),
+        Plot::Ripley(ripley) => crate::plot::ripley_caption(language, ripley, target),
+        Plot::NearestNeighbour(nearest) => crate::plot::nearest_caption(language, nearest, target),
     }
 }

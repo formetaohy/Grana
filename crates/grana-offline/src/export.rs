@@ -2,14 +2,17 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use grana_display::Camera;
-use grana_gpu::Readback;
+use grana_gpu::{Claim, Readback};
 use grana_render::{Delivery, Renderer};
 use grana_scene::Scene;
 use grana_ui::Ui;
-use wgpu::{CommandEncoderDescriptor, Device, Queue, Texture, TextureView, TextureViewDescriptor};
+use wgpu::{
+    CommandEncoderDescriptor, Device, Queue, Texture, TextureFormat, TextureView,
+    TextureViewDescriptor,
+};
 
 use crate::capture;
-use crate::compose::Composer;
+use crate::compose::{self, Composer};
 use crate::figure::{self, Figure};
 use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
@@ -18,6 +21,51 @@ use grana_page::Format;
 const SAMPLES: u32 = 32;
 const ATTEMPTS: u32 = 4096;
 const READBACK_SLOTS: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Footprint {
+    bytes: u64,
+}
+
+impl Footprint {
+    pub(crate) fn of(
+        device: &Device,
+        format: TextureFormat,
+        size: [u32; 2],
+    ) -> Result<Self, String> {
+        if !matches!(
+            format,
+            TextureFormat::Rgba8Unorm
+                | TextureFormat::Rgba8UnormSrgb
+                | TextureFormat::Bgra8Unorm
+                | TextureFormat::Bgra8UnormSrgb
+        ) {
+            return Err("an export reads back an eight bit colour target".to_string());
+        }
+        let stride = grana_render::picture_stride(size[0]);
+        let slot = stride * u64::from(size[1]);
+        let buffers = device.limits().max_buffer_size;
+        if slot > buffers {
+            return Err(format!(
+                "a {} × {} export reads {} MiB back at a time and this device holds at most {} MiB per buffer; lower the export size",
+                size[0],
+                size[1],
+                slot >> 20,
+                buffers >> 20
+            ));
+        }
+        Ok(Self {
+            bytes: 2 * capture::bytes(format, size)
+                + grana_render::picture_bytes(size)
+                + Readback::bytes_of(slot, READBACK_SLOTS)
+                + compose::bytes(size),
+        })
+    }
+
+    pub(crate) fn bytes(self) -> u64 {
+        self.bytes
+    }
+}
 
 pub(crate) enum Step {
     Running,
@@ -44,14 +92,17 @@ pub(crate) struct Export {
     readback: Readback,
     staged: VecDeque<[u32; 2]>,
     stride: u64,
+    _claim: Claim,
 }
 
 impl Export {
     pub(crate) fn start(
         device: &Device,
-        format: wgpu::TextureFormat,
+        format: TextureFormat,
         plan: Plan,
         levels: Vec<usize>,
+        claim: Claim,
+        footprint: Footprint,
     ) -> Result<Self, String> {
         let Plan {
             destination,
@@ -67,15 +118,6 @@ impl Export {
             Destination::Lineage { .. } | Destination::Chart { .. }
         ) {
             return Err("a vector page is written without a renderer".to_string());
-        }
-        if !matches!(
-            format,
-            wgpu::TextureFormat::Rgba8Unorm
-                | wgpu::TextureFormat::Rgba8UnormSrgb
-                | wgpu::TextureFormat::Bgra8Unorm
-                | wgpu::TextureFormat::Bgra8UnormSrgb
-        ) {
-            return Err("an export reads back an eight bit colour target".to_string());
         }
         let movie = matches!(destination, Destination::Movie { .. });
         assert!(!movie || fps > 0, "a movie holds a positive frame rate");
@@ -113,16 +155,6 @@ impl Export {
         let picture_view = picture.create_view(&TextureViewDescriptor::default());
         let stride = grana_render::picture_stride(viewport.size[0]);
         let readback_bytes = stride * u64::from(viewport.size[1]);
-        let buffers = device.limits().max_buffer_size;
-        if readback_bytes > buffers {
-            return Err(format!(
-                "a {} × {} export reads {} MiB back at a time and this device holds at most {} MiB per buffer; lower the export size",
-                viewport.size[0],
-                viewport.size[1],
-                readback_bytes >> 20,
-                buffers >> 20
-            ));
-        }
         let readback = Readback::new(
             device,
             "grana.export.readback",
@@ -149,6 +181,20 @@ impl Export {
             },
         };
         let lens = detail_lens(&poses, viewport.size[1]);
+        let allocated = 2 * capture::bytes(format, viewport.size)
+            + grana_render::picture_bytes(viewport.size)
+            + readback.bytes()
+            + compose::bytes(viewport.size);
+        assert_eq!(
+            footprint.bytes(),
+            claim.bytes(),
+            "an export claims the footprint it measured"
+        );
+        assert_eq!(
+            allocated,
+            claim.bytes(),
+            "an export allocates exactly the texture bytes it claims"
+        );
         Ok(Self {
             sink: Some(sink),
             poses,
@@ -168,6 +214,7 @@ impl Export {
             readback,
             staged: VecDeque::new(),
             stride,
+            _claim: claim,
         })
     }
 

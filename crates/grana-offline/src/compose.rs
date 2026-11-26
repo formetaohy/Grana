@@ -163,6 +163,19 @@ impl Composer {
     }
 }
 
+pub(crate) fn bytes(size: [u32; 2]) -> u64 {
+    assert!(
+        size[0] > 0 && size[1] > 0,
+        "a composed picture covers at least one pixel"
+    );
+    let pixel = u64::from(
+        FORMAT
+            .block_copy_size(None)
+            .expect("a composed picture holds copyable texels"),
+    );
+    u64::from(size[0]) * u64::from(size[1]) * pixel
+}
+
 fn texture(binding: u32) -> BindGroupLayoutEntry {
     BindGroupLayoutEntry {
         binding,

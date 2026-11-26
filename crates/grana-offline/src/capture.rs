@@ -10,11 +10,12 @@ pub(crate) fn texture(
     format: TextureFormat,
     size: [u32; 2],
 ) -> Texture {
+    let extent = extent(size);
     device.create_texture(&TextureDescriptor {
         label: Some(label),
         size: Extent3d {
-            width: size[0].max(1),
-            height: size[1].max(1),
+            width: extent[0],
+            height: extent[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -26,6 +27,20 @@ pub(crate) fn texture(
             | TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     })
+}
+
+pub(crate) fn bytes(format: TextureFormat, size: [u32; 2]) -> u64 {
+    let extent = extent(size);
+    let pixel = u64::from(
+        format
+            .block_copy_size(None)
+            .expect("an export colour target holds copyable texels"),
+    );
+    u64::from(extent[0]) * u64::from(extent[1]) * pixel
+}
+
+fn extent(size: [u32; 2]) -> [u32; 2] {
+    [size[0].max(1), size[1].max(1)]
 }
 
 pub(crate) fn clear(encoder: &mut CommandEncoder, target: &TextureView) {

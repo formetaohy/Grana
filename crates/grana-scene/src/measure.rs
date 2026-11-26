@@ -19,6 +19,7 @@ const AXES: [&str; 3] = ["x", "y", "z"];
 #[derive(Debug, PartialEq)]
 pub struct MeasureState {
     pub set: Option<u64>,
+    pub target: Option<u64>,
     pub group: Group,
     pub aggregate: Aggregate,
     pub scope: Scope,
@@ -33,6 +34,10 @@ pub struct MeasureState {
 
 pub struct Measure {
     set: Option<ObjectSetId>,
+    target: Option<ObjectSetId>,
+    target_table: Option<Arc<Table>>,
+    target_key: Option<MeasureKey>,
+    target_pending: Option<MeasureKey>,
     group: Group,
     aggregate: Aggregate,
     scope: Scope,
@@ -74,6 +79,10 @@ impl Measure {
     pub fn new() -> Self {
         Self {
             set: None,
+            target: None,
+            target_table: None,
+            target_key: None,
+            target_pending: None,
             group: Group::Object,
             aggregate: Aggregate::MEAN,
             scope: Scope::All,
@@ -110,9 +119,34 @@ impl Measure {
         self.set
     }
 
+    pub fn target(&self) -> Option<ObjectSetId> {
+        self.target
+    }
+
+    pub fn set_target(&mut self, target: Option<ObjectSetId>, scene: &Scene) {
+        let target = target.filter(|id| Some(*id) != self.set && scene.objects.get(*id).is_some());
+        if self.target == target {
+            return;
+        }
+        self.clear_target();
+        self.target = target;
+        self.dirty = true;
+        self.refresh_plot();
+    }
+
+    fn clear_target(&mut self) {
+        self.target = None;
+        self.target_table = None;
+        self.target_key = None;
+        self.target_pending = None;
+    }
+
     pub fn select(&mut self, set: ObjectSetId, scene: &Scene) {
         if self.set == Some(set) {
             return;
+        }
+        if self.target == Some(set) {
+            self.clear_target();
         }
         self.set = Some(set);
         self.basis = None;
@@ -137,6 +171,7 @@ impl Measure {
         if self.set.take().is_none() {
             return;
         }
+        self.clear_target();
         self.basis = None;
         self.filters.clear();
         self.sort = None;
@@ -241,11 +276,15 @@ impl Measure {
         if !self.plot_wanted || self.plot_pending.is_some() || self.view.plot().is_none() {
             return None;
         }
-        if self.view == MeasureView::Ripley && window.is_none() {
+        if self.view.spatial() && window.is_none() {
             return None;
         }
         let table = Arc::clone(self.table.as_ref()?);
         let mask = self.fresh_rows()?.admitted();
+        let paired = match (self.view.spatial(), self.target) {
+            (true, Some(_)) => Some(Arc::clone(self.target_table.as_ref()?)),
+            _ => None,
+        };
         self.plot_stamp += 1;
         let key = PlotKey(self.plot_stamp);
         self.plot_wanted = false;
@@ -254,6 +293,7 @@ impl Measure {
             key,
             table,
             mask,
+            paired,
             view: self.view,
             axes: self.axes,
             window,
@@ -507,6 +547,7 @@ impl Measure {
 
     pub fn reset(&mut self) {
         self.set = None;
+        self.clear_target();
         self.table = None;
         self.basis = None;
         self.retained = None;
@@ -535,6 +576,7 @@ impl Measure {
             self.set = None;
             self.origin = None;
             self.pending = None;
+            self.clear_target();
             self.drop_table();
             self.dirty = true;
             return None;
@@ -569,12 +611,43 @@ impl Measure {
         if moved && self.scope == Scope::Current {
             self.refresh_plot();
         }
+        if !busy && self.settled(scene) {
+            return self.target_request(scene);
+        }
         None
     }
 
-    pub fn install(&mut self, key: MeasureKey, table: Option<Arc<Table>>) {
+    fn target_request(&mut self, scene: &Scene) -> Option<TableRequest> {
+        let target = self.target?;
+        if !self.view.spatial() {
+            return None;
+        }
+        if scene.objects.get(target).is_none() {
+            self.set_target(None, scene);
+            return None;
+        }
+        let key = MeasureKey::of(scene, target, Group::Object, Aggregate::MEAN)?;
+        if self.target_key == Some(key) {
+            return None;
+        }
+        let Some(request) = TableRequest::new(scene, target, Group::Object, Aggregate::MEAN) else {
+            self.set_target(None, scene);
+            return None;
+        };
+        self.target_pending = Some(key);
+        Some(request)
+    }
+
+    pub fn install(&mut self, key: MeasureKey, table: Option<Arc<Table>>) -> Installed {
+        if self.target_pending == Some(key) {
+            self.target_pending = None;
+            self.target_key = Some(key);
+            self.target_table = table;
+            self.refresh_plot();
+            return Installed::Target;
+        }
         if self.pending != Some(key) {
-            return;
+            return Installed::Ignored;
         }
         self.pending = None;
         self.origin = Some(key);
@@ -585,6 +658,7 @@ impl Measure {
         if let Some(state) = self.pending_state.take() {
             self.apply_state(state);
         }
+        Installed::Table
     }
 
     fn laid(&self, scene: &Scene, id: ObjectSetId, request: TableRequest) -> TableRequest {
@@ -694,6 +768,7 @@ impl Measure {
         };
         MeasureState {
             set,
+            target: self.target.map(ObjectSetId::raw),
             group: self.group,
             aggregate: self.aggregate,
             scope: self.scope,
@@ -740,6 +815,7 @@ impl Measure {
         self.visibility = state.visibility;
         self.view = state.view;
         self.drop_table();
+        self.clear_target();
         self.origin = None;
         self.pending = None;
         self.materialize_pending = None;
@@ -750,6 +826,10 @@ impl Measure {
             .and_then(ObjectSetId::from_raw)
             .filter(|id| scene.objects.get(*id).is_some());
         self.set = set;
+        self.target = state
+            .target
+            .and_then(ObjectSetId::from_raw)
+            .filter(|id| Some(*id) != set && scene.objects.get(*id).is_some());
         self.pending_state = set.map(|_| state);
     }
 
@@ -819,6 +899,7 @@ impl Measure {
     pub fn document_hash(&self) -> u64 {
         let mut hash = HASH_OFFSET;
         hash = mix(hash, self.set.map_or(0, ObjectSetId::raw));
+        hash = mix(hash, self.target.map_or(0, ObjectSetId::raw));
         hash = mix(hash, u64::from(self.group.index()));
         hash = mix(hash, u64::from(self.aggregate.index()));
         hash = mix(hash, u64::from(self.scope.index()));
@@ -1323,10 +1404,18 @@ fn mix_key(hash: u64, key: &str) -> u64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlotKey(u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Installed {
+    Ignored,
+    Table,
+    Target,
+}
+
 pub struct PlotRequest {
     key: PlotKey,
     table: Arc<Table>,
     mask: Arc<Mask>,
+    paired: Option<Arc<Table>>,
     view: MeasureView,
     axes: [usize; 2],
     window: Option<Window>,
@@ -1339,7 +1428,13 @@ impl PlotRequest {
 
     pub fn build(&self) -> Option<Plot> {
         let window = self.window?;
-        self.table.plot(self.view, self.axes, &self.mask, window)
+        self.table.plot(
+            self.view,
+            self.axes,
+            &self.mask,
+            window,
+            self.paired.as_deref(),
+        )
     }
 }
 

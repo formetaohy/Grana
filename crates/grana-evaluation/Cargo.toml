@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+grana-assign = { workspace = true }
 grana-object = { workspace = true }
 rand = { workspace = true }
 

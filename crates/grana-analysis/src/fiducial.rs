@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 
+use grana_assign::{self as assign, Edge};
 use grana_warp::Warp;
 
-use crate::assign::{self, Edge};
 use crate::drift::{self, Lattice, Sample};
 
 const BINS: usize = 64;

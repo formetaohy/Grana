@@ -66,6 +66,7 @@ zstd = "0.13"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 grana-animation = { version = "0.2.3", path = "crates/grana-animation" }
 grana-archive = { version = "0.2.3", path = "crates/grana-archive" }
+grana-assign = { version = "0.2.3", path = "crates/grana-assign" }
 grana-brand = { version = "0.2.3", path = "crates/grana-brand" }
 grana-calibration = { version = "0.2.3", path = "crates/grana-calibration" }
 grana-chart = { version = "0.2.3", path = "crates/grana-chart" }

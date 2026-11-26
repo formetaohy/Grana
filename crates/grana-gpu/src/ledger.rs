@@ -14,12 +14,14 @@ const UNKNOWN: u64 = 1 << 30;
 pub enum Consumer {
     Render,
     Inference,
+    Export,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Claims {
     render: u64,
     inference: u64,
+    export: u64,
 }
 
 impl Claims {
@@ -27,11 +29,14 @@ impl Claims {
         match consumer {
             Consumer::Render => self.render,
             Consumer::Inference => self.inference,
+            Consumer::Export => self.export,
         }
     }
 
     fn held(self) -> u64 {
-        self.render.saturating_add(self.inference)
+        self.render
+            .saturating_add(self.inference)
+            .saturating_add(self.export)
     }
 }
 
@@ -92,6 +97,7 @@ impl Ledger {
         match consumer {
             Consumer::Render => claims.render += bytes,
             Consumer::Inference => claims.inference += bytes,
+            Consumer::Export => claims.export += bytes,
         }
         Some(Claim {
             ledger: Arc::clone(self),
@@ -128,6 +134,9 @@ impl Claim {
             Consumer::Inference => {
                 claims.inference = claims.inference.saturating_sub(self.bytes) + bytes;
             }
+            Consumer::Export => {
+                claims.export = claims.export.saturating_sub(self.bytes) + bytes;
+            }
         }
         self.bytes = bytes;
         true
@@ -140,6 +149,7 @@ impl Drop for Claim {
         match self.consumer {
             Consumer::Render => claims.render = claims.render.saturating_sub(self.bytes),
             Consumer::Inference => claims.inference = claims.inference.saturating_sub(self.bytes),
+            Consumer::Export => claims.export = claims.export.saturating_sub(self.bytes),
         }
     }
 }

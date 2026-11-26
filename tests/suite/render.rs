@@ -2167,7 +2167,10 @@ fn claims_an_export_the_ceiling_cannot_hold_at_full_detail() {
             &pyramid,
             budget(BUDGET, [SIDE, SIDE]),
             detail,
-            [SIDE, SIDE],
+            grana_render::FrameBudget {
+                size: [SIDE, SIDE],
+                demand: grana_render::Demand::full(),
+            },
             ceiling,
         )
         .expect("an export claims the bricks its ceiling can hold rather than refusing outright");

@@ -19,6 +19,11 @@ impl Protocol {
         measure.set_aggregate(spec.aggregate(), scene);
         measure.set_roi(scene.region_scope());
         measure.settle(scene);
+        let target = spec
+            .target()
+            .and_then(|key| scene.objects.iter().find(|set| set.key().as_str() == key))
+            .map(|set| set.id());
+        measure.set_target(target, scene);
         let Some(table) = measure.table() else {
             return;
         };

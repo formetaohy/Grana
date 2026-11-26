@@ -1,6 +1,6 @@
 use glam::Vec2;
 use grana_i18n::Language;
-use grana_measure::{Ripley, Trend};
+use grana_measure::{NearestNeighbour, Ripley, Trend};
 use grana_profile::Profile;
 use grana_ui::{Align, Border, Color, Corners, Fill, Painter, Rect, TextStyle, Theme};
 
@@ -171,6 +171,49 @@ impl SeriesChart {
             y: Axis::new(ripley.low(), ripley.high(), 4),
             curves: vec![curve],
             bands,
+            notes: Vec::new(),
+            outside,
+        }
+    }
+
+    pub fn of_nearest_neighbour(nearest: &NearestNeighbour, language: Language) -> Self {
+        let curve = Curve::new(
+            grana_i18n::measure::nearest_curve(language),
+            nearest
+                .points()
+                .iter()
+                .map(|point| CurvePoint {
+                    x: point.radius(),
+                    value: point.value(),
+                    lower: point.lower(),
+                    upper: point.upper(),
+                })
+                .collect(),
+        );
+        let expected = Curve::new(
+            grana_i18n::measure::nearest_expected(language),
+            nearest
+                .points()
+                .iter()
+                .map(|point| CurvePoint {
+                    x: point.radius(),
+                    value: point.expected(),
+                    lower: point.expected(),
+                    upper: point.expected(),
+                })
+                .collect(),
+        );
+        let outside = nearest
+            .points()
+            .iter()
+            .filter(|point| point.beyond())
+            .map(|point| (point.radius(), point.value()))
+            .collect();
+        Self {
+            x: Axis::new(0.0, nearest.radius(), 5),
+            y: Axis::new(0.0, 1.0, 4),
+            curves: vec![curve, expected],
+            bands: Vec::new(),
             notes: Vec::new(),
             outside,
         }
