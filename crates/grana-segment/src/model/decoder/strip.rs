@@ -40,10 +40,7 @@ impl Strip {
         })
     }
 
-    pub(crate) fn gate(&self, mean: Tensor<5>, depth: usize) -> Gate {
-        if depth == 1 {
-            return Gate(None);
-        }
+    pub(crate) fn gate(&self, mean: Tensor<5>) -> Gate {
         let pooled = self.first.forward(mean, [0, 0, 0], [1, 1, 1]);
         let hidden = relu(self.norm.forward(pooled));
         Gate(Some(sigmoid(self.second.forward(
@@ -55,10 +52,6 @@ impl Strip {
 }
 
 impl Gate {
-    pub(crate) fn scale(&self) -> Option<&Tensor<5>> {
-        self.0.as_ref()
-    }
-
     pub(crate) fn apply(&self, input: Tensor<5>) -> Tensor<5> {
         let Some(gate) = self.0.as_ref() else {
             return input;
@@ -66,4 +59,8 @@ impl Gate {
         let [batch, channels, depth, height, width] = input.dims();
         input.clone() * (gate.clone() + 1.0).expand([batch, channels, depth, height, width])
     }
+}
+
+pub(crate) fn no_gate() -> Gate {
+    Gate(None)
 }

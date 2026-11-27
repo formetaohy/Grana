@@ -1,3 +1,6 @@
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,13 +22,11 @@ use crate::volume::Volume;
 const TILING_THRESHOLD: u32 = SIDE as u32;
 const TILE: u32 = 768;
 const HALO: u32 = 128;
-const SLICE_TILE: u32 = 4;
-const SLICE_HALO: u32 = 2;
-const CONTEXT: [u32; 3] = [HALO, HALO, SLICE_HALO];
+const SLAB: u32 = 8;
+const CONTEXT: [u32; 3] = [HALO, HALO, SLAB];
 const PREDICTION_BYTES_PER_VOXEL: u64 = (CHANNELS * size_of::<f32>()) as u64;
 const PREDICTION_BUDGET: u64 = 2 << 30;
 const CHANNELS: usize = 4;
-const MODEL_CHANNELS: usize = 5;
 const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const STANDARD_DEVIATION: [f32; 3] = [0.229, 0.224, 0.225];
 
@@ -57,9 +58,22 @@ impl Segmenter {
     pub fn plan(&self, depth: u32, spare: u64) -> Result<Plan> {
         Plan::of(
             self.model.weights(),
-            tile_depth(depth) as usize,
+            depth as usize,
             spare,
             self.model.peaks(),
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn forced_plan(&self, depth: u32, splits: usize) -> Plan {
+        Plan::forced(
+            splits,
+            Plan::estimate(
+                self.model.weights(),
+                depth as usize,
+                splits,
+                self.model.peaks(),
+            ),
         )
     }
 
@@ -104,7 +118,7 @@ impl Segmenter {
         }
         self.model
             .peaks()
-            .record(tile_depth(depth) as usize, plan.splits(), measured);
+            .record(depth as usize, plan.splits(), measured);
     }
 
     fn predict(
@@ -159,22 +173,24 @@ impl Segmenter {
         } else {
             vec![whole(height)]
         };
-        let mut done = 0usize;
-        for z in depth_blocks(depth) {
-            for y in &y_blocks {
-                for x in &x_blocks {
-                    self.infer(
-                        planes,
-                        [width, height, depth],
-                        [*x, *y, z],
-                        plan,
-                        &mut channels,
-                    )?;
-                }
+        let tiles = (x_blocks.len() * y_blocks.len()).max(1);
+        let emitted = Cell::new(0usize);
+        for y in &y_blocks {
+            for x in &x_blocks {
+                self.infer(
+                    planes,
+                    [width, height, depth],
+                    [*x, *y],
+                    plan,
+                    &mut channels,
+                    &mut || {
+                        emitted.set(emitted.get() + 1);
+                        progress((emitted.get() / tiles).min(depth as usize));
+                    },
+                )?;
             }
-            done += z.inner as usize;
-            progress(done);
         }
+        progress(depth as usize);
         Ok(Prediction {
             width: width as usize,
             height: height as usize,
@@ -187,15 +203,15 @@ impl Segmenter {
         &self,
         planes: &[Vec<f32>],
         shape: [u32; 3],
-        blocks: [Block; 3],
+        blocks: [Block; 2],
         plan: Plan,
         channels: &mut [Vec<f32>; CHANNELS],
+        slice_done: &mut dyn FnMut(),
     ) -> Result<()> {
-        let [x, y, z] = blocks;
+        let [x, y] = blocks;
         let [width, height, depth] = shape;
         let tile_width = x.extent + 2 * x.halo;
         let tile_height = y.extent + 2 * y.halo;
-        let tile_depth = z.extent + 2 * z.halo;
         let tile_area = tile_width as usize * tile_height as usize;
         let (resized_height, resized_width) =
             resized_shape(tile_height as usize, tile_width as usize);
@@ -206,13 +222,13 @@ impl Segmenter {
             TensorData::new(STANDARD_DEVIATION.to_vec(), vec![1, 3, 1, 1]),
             &device,
         );
-        let mut features = Vec::with_capacity(tile_depth as usize);
-        for local_z in 0..tile_depth {
-            let source_z = reflect(
-                z.start as isize + local_z as isize - z.halo as isize,
-                depth as usize,
-            );
-            let plane = &planes[source_z];
+
+        let cache = RefCell::new(FeatureCache {
+            encoded: VecDeque::new(),
+            frontier: 0,
+        });
+        let encode = |slice: usize| -> Result<Tensor<4>> {
+            let plane = &planes[slice];
             let mut values = Vec::with_capacity(tile_area);
             for local_y in 0..tile_height {
                 let source_y = reflect(
@@ -253,23 +269,49 @@ impl Segmenter {
                 ],
                 burn::tensor::ops::PadMode::Constant(0.0),
             );
-            features.push(self.model.encode(padded, plan.queries())?);
-        }
-        let features = Tensor::cat(features, 0);
+            self.model.encode(padded, plan.queries())
+        };
 
-        let halo = z.halo as usize;
-        let inner = z.inner as usize;
-        self.model
-            .decode(features, plan.splits(), &mut |index, slice| {
-                if index < halo || index >= halo + inner {
-                    return Ok(());
-                }
-                let local_z = index - halo;
+        let features = |range: Range<usize>| -> Result<Tensor<5>> {
+            let mut cache = cache.borrow_mut();
+            while cache.frontier < range.end {
+                let feature = encode(cache.frontier)?;
+                cache.encoded.push_back(feature);
+                cache.frontier += 1;
+            }
+            cache.evict(range.start);
+            cache.window(range)
+        };
+
+        let copy = Copy {
+            width: width as usize,
+            height: height as usize,
+            tile_width: tile_width as usize,
+            tile_height: tile_height as usize,
+            tile_area,
+            x_start: x.start as usize,
+            y_start: y.start as usize,
+            x_inner: x.inner as usize,
+            y_inner: y.inner as usize,
+            x_halo: x.halo as usize,
+            y_halo: y.halo as usize,
+            resized_height,
+            resized_width,
+        };
+        self.model.decode(
+            &features,
+            depth as usize,
+            plan.splits(),
+            &mut |start: usize, slices: Tensor<5>| {
+                let count = slices.dims()[2];
+                let flattened = slices
+                    .reshape([1, CHANNELS, count, SIDE, SIDE])
+                    .permute([0, 2, 1, 3, 4])
+                    .reshape([count, CHANNELS, SIDE, SIDE])
+                    .narrow(2, 0, resized_height)
+                    .narrow(3, 0, resized_width);
                 let resized = interpolate(
-                    slice
-                        .reshape([1, MODEL_CHANNELS, SIDE, SIDE])
-                        .narrow(2, 0, resized_height)
-                        .narrow(3, 0, resized_width),
+                    flattened,
                     InterpolateOptions::new(InterpolateMode::Bilinear)
                         .with_align_corners(false)
                         .with_output_size([tile_height as usize, tile_width as usize]),
@@ -277,21 +319,87 @@ impl Segmenter {
                 let values = resized.into_data().try_to_vec::<f32>().map_err(|error| {
                     Error::inference(format!("the model output cannot be read: {error}"))
                 })?;
-                for channel in 0..CHANNELS {
-                    let source = &values[channel * tile_area..(channel + 1) * tile_area];
-                    for local_y in 0..y.inner as usize {
-                        let source_row =
-                            (local_y + y.halo as usize) * tile_width as usize + x.halo as usize;
-                        let target_y = y.start as usize + local_y;
-                        let target_z = z.start as usize + local_z;
-                        let target = x.start as usize
-                            + width as usize * (target_y + height as usize * target_z);
-                        channels[channel][target..target + x.inner as usize]
-                            .copy_from_slice(&source[source_row..source_row + x.inner as usize]);
-                    }
+                let plane = CHANNELS * tile_height as usize * tile_width as usize;
+                for index in 0..count {
+                    copy.planes(
+                        channels,
+                        start + index,
+                        &values[index * plane..(index + 1) * plane],
+                    );
+                    slice_done();
                 }
                 Ok(())
-            })
+            },
+        )
+    }
+}
+
+struct FeatureCache {
+    encoded: VecDeque<Tensor<4>>,
+    frontier: usize,
+}
+
+impl FeatureCache {
+    fn evict(&mut self, keep_from: usize) {
+        while self.frontier - self.encoded.len() < keep_from && !self.encoded.is_empty() {
+            self.encoded.pop_front();
+        }
+    }
+
+    fn window(&self, range: Range<usize>) -> Result<Tensor<5>> {
+        let start = self.frontier - self.encoded.len();
+        let mut pieces = Vec::with_capacity(range.end - range.start);
+        for slice in range {
+            let index = slice.checked_sub(start).ok_or_else(|| {
+                Error::inference("the feature window lost a slice it still needs")
+            })?;
+            let feature = self.encoded.get(index).ok_or_else(|| {
+                Error::inference("the feature window lost a slice it still needs")
+            })?;
+            let [batch, feature_channels, feature_height, feature_width] = feature.dims();
+            pieces.push(feature.clone().reshape([
+                batch,
+                feature_channels,
+                1,
+                feature_height,
+                feature_width,
+            ]));
+        }
+        Ok(Tensor::cat(pieces, 2))
+    }
+}
+
+struct Copy {
+    width: usize,
+    height: usize,
+    tile_width: usize,
+    tile_height: usize,
+    tile_area: usize,
+    x_start: usize,
+    y_start: usize,
+    x_inner: usize,
+    y_inner: usize,
+    x_halo: usize,
+    y_halo: usize,
+    resized_height: usize,
+    resized_width: usize,
+}
+
+impl Copy {
+    fn planes(&self, channels: &mut [Vec<f32>; CHANNELS], index: usize, values: &[f32]) {
+        let _ = self.tile_height;
+        let _ = self.resized_height;
+        let _ = self.resized_width;
+        for channel in 0..CHANNELS {
+            let source = &values[channel * self.tile_area..(channel + 1) * self.tile_area];
+            for local_y in 0..self.y_inner {
+                let source_row = (local_y + self.y_halo) * self.tile_width + self.x_halo;
+                let target_y = self.y_start + local_y;
+                let target = self.x_start + self.width * (target_y + self.height * index);
+                channels[channel][target..target + self.x_inner]
+                    .copy_from_slice(&source[source_row..source_row + self.x_inner]);
+            }
+        }
     }
 }
 
@@ -310,21 +418,6 @@ fn whole(length: u32) -> Block {
         extent: length,
         halo: 0,
     }
-}
-
-fn tile_depth(depth: u32) -> u32 {
-    if depth <= SLICE_TILE {
-        depth
-    } else {
-        SLICE_TILE + 2 * SLICE_HALO
-    }
-}
-
-fn depth_blocks(depth: u32) -> Vec<Block> {
-    if depth <= SLICE_TILE {
-        return vec![whole(depth)];
-    }
-    blocking(depth, SLICE_TILE, SLICE_HALO)
 }
 
 fn blocking(length: u32, tile: u32, halo: u32) -> Vec<Block> {

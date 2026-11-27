@@ -53,21 +53,21 @@ impl Head {
     ) -> Tensor<5> {
         let left = self
             .first_left
-            .forward(left_stats.normalise(left), [1, 1, 1], [1, 1, 1]);
+            .forward(left_stats.normalise(left), [0, 1, 1], [1, 1, 1]);
         let right = self
             .first_right
-            .forward(right_stats.normalise(right), [1, 1, 1], [1, 1, 1]);
+            .forward(right_stats.normalise(right), [0, 1, 1], [1, 1, 1]);
         relu(left + right)
     }
 
     pub(crate) fn refine(&self, combined: Tensor<5>, stats: &Statistics) -> Tensor<5> {
         relu(
             self.second
-                .forward(stats.normalise(combined), [1, 1, 1], [1, 1, 1]),
+                .forward(stats.normalise(combined), [0, 1, 1], [1, 1, 1]),
         )
     }
 
-    pub(crate) fn gate(&self, mean: Tensor<5>, depth: usize) -> Gate {
-        self.strip.gate(mean, depth)
+    pub(crate) fn gate(&self, mean: Tensor<5>) -> Gate {
+        self.strip.gate(mean)
     }
 }

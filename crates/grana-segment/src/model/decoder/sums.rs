@@ -3,10 +3,12 @@ const NORMALIZATION_EPSILON: f32 = 1.0e-5;
 pub(crate) struct ColumnSums {
     sum: Tensor<5>,
     square: Tensor<5>,
+    samples: usize,
 }
 pub(crate) struct DepthSums {
     sum: Tensor<5>,
     square: Tensor<5>,
+    depth: usize,
 }
 pub(crate) struct Statistics {
     mean: Tensor<5>,
@@ -19,9 +21,12 @@ impl ColumnSums {
         Self {
             sum: Tensor::zeros(shape, &tensor.device()),
             square: Tensor::zeros(shape, &tensor.device()),
+            samples: 0,
         }
     }
     pub(crate) fn add(&mut self, chunk: &Tensor<5>) {
+        let [_, _, depth, height, width] = chunk.dims();
+        self.samples += depth * height * width;
         self.sum = self.sum.clone() + chunk.clone().sum_dims(&[2, 3]);
         self.square = self.square.clone() + chunk.clone().mul(chunk.clone()).sum_dims(&[2, 3]);
     }
@@ -29,9 +34,11 @@ impl ColumnSums {
         Self {
             sum: Tensor::cat(vec![self.sum, other.sum], 4),
             square: Tensor::cat(vec![self.square, other.square], 4),
+            samples: self.samples + other.samples,
         }
     }
-    pub(crate) fn statistics(self, samples: usize) -> Statistics {
+    pub(crate) fn statistics(self) -> Statistics {
+        let samples = self.samples;
         Statistics::of(self.sum.sum_dims(&[4]), self.square.sum_dims(&[4]), samples)
     }
 }
@@ -42,32 +49,24 @@ impl DepthSums {
         Self {
             sum: Tensor::zeros(shape, &tensor.device()),
             square: Tensor::zeros(shape, &tensor.device()),
+            depth: 0,
         }
     }
     pub(crate) fn add(&mut self, chunk: &Tensor<5>) {
+        self.depth += chunk.dims()[2];
         self.sum = self.sum.clone() + chunk.clone().sum_dims(&[2]);
         self.square = self.square.clone() + chunk.clone().mul(chunk.clone()).sum_dims(&[2]);
     }
-    pub(crate) fn mean(&self, depth: usize) -> Tensor<5> {
-        self.sum.clone().div_scalar(depth as f32)
+    pub(crate) fn depth(&self) -> usize {
+        self.depth
     }
-    pub(crate) fn columns(&self, scale: Option<&Tensor<5>>) -> ColumnSums {
-        let Some(scale) = scale else {
-            return ColumnSums {
-                sum: self.sum.clone().sum_dims(&[3]),
-                square: self.square.clone().sum_dims(&[3]),
-            };
-        };
-        let factor = scale.clone() + 1.0;
-        ColumnSums {
-            sum: (self.sum.clone() * factor.clone()).sum_dims(&[3]),
-            square: (self.square.clone() * factor.clone().mul(factor)).sum_dims(&[3]),
-        }
+    pub(crate) fn mean(&self) -> Tensor<5> {
+        self.sum.clone().div_scalar(self.depth.max(1) as f32)
     }
 }
 impl Statistics {
     fn of(sum: Tensor<5>, square: Tensor<5>, samples: usize) -> Self {
-        let samples = samples as f32;
+        let samples = samples.max(1) as f32;
         let mean = sum.div_scalar(samples);
         let variance = square.div_scalar(samples) - mean.clone().mul(mean.clone());
         let deviation = variance

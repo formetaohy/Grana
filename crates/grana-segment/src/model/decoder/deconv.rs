@@ -9,12 +9,8 @@ use crate::Result;
 use crate::model::checkpoint::{ChannelNorm, Checkpoint, Conv3d};
 use crate::model::decoder::parts::{Parts, split};
 use crate::model::decoder::span::{Source, Span, Stripe, parent, raised};
-use crate::model::decoder::strip::{Gate, Strip};
-use crate::model::decoder::sums::{ColumnSums, DepthSums};
-
-pub(crate) struct Measured {
-    columns: ColumnSums,
-}
+use crate::model::decoder::strip::{Gate, Strip, no_gate};
+use crate::model::decoder::sums::DepthSums;
 
 pub(crate) struct DeconvBlock {
     upsample: Conv3d,
@@ -51,54 +47,19 @@ impl DeconvBlock {
         })
     }
 
-    pub(crate) fn forward(&self, source: Source<'_>, stripe: Stripe, depth: usize) -> Tensor<5> {
-        joined(self.split(source, stripe, depth).into_tensors())
-    }
-
-    pub(crate) fn split(&self, source: Source<'_>, stripe: Stripe, depth: usize) -> Parts {
+    pub(crate) fn split(&self, source: Source<'_>, stripe: Stripe) -> Parts {
         let tensors = stripe
             .spans()
             .into_iter()
-            .map(|span| self.span(source, span, stripe.side(), depth));
+            .map(|span| self.span(source, span, stripe.side()));
         split(stripe, tensors)
     }
 
-    fn span(&self, source: Source<'_>, span: Span, side: usize, depth: usize) -> Tensor<5> {
+    pub(crate) fn span(&self, source: Source<'_>, span: Span, side: usize) -> Tensor<5> {
         let activation = self.activation(source, span.context(0), side);
         let mut sums = DepthSums::of(&activation);
         sums.add(&activation);
-        gate_of(&self.strip, &sums, depth).apply(activation)
-    }
-
-    pub(crate) fn measure(&self, source: Source<'_>, stripe: Stripe, depth: usize) -> Measured {
-        let mut columns: Option<ColumnSums> = None;
-        for span in stripe.spans() {
-            let activation = self.activation(source, span.context(0), stripe.side());
-            let mut sums = DepthSums::of(&activation);
-            sums.add(&activation);
-            let gate = gate_of(&self.strip, &sums, depth);
-            let span_columns = sums.columns(gate.scale());
-            columns = Some(match columns {
-                None => span_columns,
-                Some(columns) => columns.join(span_columns),
-            });
-        }
-        Measured {
-            columns: columns.expect("a stripe holds one span"),
-        }
-    }
-
-    pub(crate) fn project(
-        &self,
-        source: Source<'_>,
-        target: Range<usize>,
-        side: usize,
-        depth: usize,
-    ) -> Tensor<5> {
-        let activation = self.activation(source, target, side);
-        let mut sums = DepthSums::of(&activation);
-        sums.add(&activation);
-        gate_of(&self.strip, &sums, depth).apply(activation)
+        gate_of(&self.strip, &sums).apply(activation)
     }
 
     fn activation(&self, source: Source<'_>, target: Range<usize>, side: usize) -> Tensor<5> {
@@ -111,12 +72,6 @@ impl DeconvBlock {
                 .forward(self.conv.forward(widened, [0, 1, 1], [1, 1, 1])),
         );
         activated.narrow(4, raised(&target, &parents), target.len())
-    }
-}
-
-impl Measured {
-    pub(crate) fn columns(self) -> ColumnSums {
-        self.columns
     }
 }
 
@@ -148,8 +103,11 @@ impl Sampler {
     }
 }
 
-pub(crate) fn gate_of(strip: &Strip, sums: &DepthSums, depth: usize) -> Gate {
-    strip.gate(sums.mean(depth), depth)
+pub(crate) fn gate_of(strip: &Strip, sums: &DepthSums) -> Gate {
+    if sums.depth() <= 1 {
+        return no_gate();
+    }
+    strip.gate(sums.mean())
 }
 
 pub(crate) fn upsample2x(input: Tensor<5>) -> Tensor<5> {

@@ -14,13 +14,15 @@ const QUERIES: usize = 256;
 const DEEP_TOKENS: usize = FEATURE_SIDE * FEATURE_SIDE;
 const NECK_CHANNELS: usize = 256;
 const DEEP_CHANNELS: usize = 768;
-const LADDER: [usize; 4] = [256, 128, 64, 32];
-const OUTPUT_CHANNELS: usize = 5;
-const TAIL_COPIES: u64 = 4;
-const TAIL_SPANS: u64 = 2;
-const BLOCK_SPANS: u64 = 3;
+const OUTPUT_CHANNELS: usize = 4;
+use crate::model::decoder::{RETENTION, SHIFTS, SLAB};
+
+const LEVEL_CHANNELS: [usize; 7] = [256, 256, 128, 128, 64, 64, 32];
+const LEVEL_SIDES: [usize; 7] = [64, 128, 256, 128, 256, 512, 512];
 const RESERVED_OVER_LIVE: (u64, u64) = (7, 5);
-const PAGE_WASTE: (u64, u64) = (1, 2);
+const PAGE_WASTE: (u64, u64) = (3, 2);
+const CONV_COPIES: u64 = 4;
+const DEPTH_KEY_CAP: usize = 16;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Plan {
@@ -33,7 +35,7 @@ impl Plan {
         self.peak
     }
 
-    pub(crate) fn splits(self) -> usize {
+    pub fn splits(self) -> usize {
         self.splits
     }
 
@@ -53,10 +55,19 @@ impl Plan {
             }
         }
         Err(Error::input(format!(
-            "the segmentation model needs {:.1} GiB of graphics memory for a {depth} slice block, above the {:.1} GiB the renderer leaves free",
+            "the segmentation model needs {:.1} GiB of graphics memory for a {depth} slice volume, above the {:.1} GiB the renderer leaves free",
             least as f64 / (1u64 << 30) as f64,
             spare as f64 / (1u64 << 30) as f64,
         )))
+    }
+
+    #[doc(hidden)]
+    pub fn forced(splits: usize, peak: u64) -> Self {
+        Self { splits, peak }
+    }
+
+    pub(crate) fn estimate(weights: u64, depth: usize, splits: usize, peaks: &Peaks) -> u64 {
+        weights + growth(depth, splits, peaks)
     }
 }
 
@@ -84,6 +95,7 @@ impl Peaks {
 
     pub(crate) fn record(&self, depth: usize, splits: usize, bytes: u64) {
         let mut held = self.held.lock().unwrap_or_else(|error| error.into_inner());
+        let depth = depth.min(DEPTH_KEY_CAP);
         match held
             .iter_mut()
             .find(|peak| peak.depth == depth && peak.splits == splits)
@@ -99,11 +111,11 @@ impl Peaks {
 }
 
 fn growth(depth: usize, splits: usize, peaks: &Peaks) -> u64 {
-    let live = encoder() + frame(depth, splits) + page_waste(depth);
-    peaks.lookup(depth, splits).map_or_else(
-        || live / RESERVED_OVER_LIVE.1 * RESERVED_OVER_LIVE.0,
-        |measured| measured.max(live),
-    )
+    let live = encoder() + streaming(depth, splits);
+    match peaks.lookup(depth.min(DEPTH_KEY_CAP), splits) {
+        Some(measured) => measured / PAGE_WASTE.1 * PAGE_WASTE.0,
+        None => live / RESERVED_OVER_LIVE.1 * RESERVED_OVER_LIVE.0,
+    }
 }
 
 fn encoder() -> u64 {
@@ -114,32 +126,35 @@ fn encoder() -> u64 {
     windowed + scores + deep + neck
 }
 
-fn frame(depth: usize, splits: usize) -> u64 {
-    let held = volume(LADDER[0], FEATURE_SIDE, depth)
-        + volume(LADDER[0], FEATURE_SIDE, depth)
-        + volume(LADDER[0], SIDE / 8, depth)
-        + volume(LADDER[1], SIDE / 4, depth)
-        + volume(LADDER[2], SIDE / 2, depth);
-    let branch = volume(LADDER[3], SIDE, depth);
-    let output = volume(OUTPUT_CHANNELS, SIDE, depth);
-    let span = branch / spans(splits) as u64;
-    let blocks = held + branch + BLOCK_SPANS * span;
-    let tail = held + branch + TAIL_COPIES * output + TAIL_SPANS * span;
-    blocks.max(tail)
+fn streaming(depth: usize, splits: usize) -> u64 {
+    let mut resident = 0;
+    let mut transient = 0;
+    for level in 0..7 {
+        let produced = production(depth, SHIFTS[level]);
+        let slices = produced + RETENTION[level];
+        let spans = spans(LEVEL_SIDES[level], splits) as u64;
+        resident += plane(LEVEL_CHANNELS[level], LEVEL_SIDES[level]) * slices as u64 / spans;
+        let window = (produced + 4) as u64;
+        let working = plane(LEVEL_CHANNELS[level], LEVEL_SIDES[level]) * window / spans;
+        transient = transient.max(CONV_COPIES * working);
+    }
+    let head_spans = spans(SIDE, splits) as u64;
+    let head_window = (SLAB + 4) as u64;
+    let head = 2 * CONV_COPIES * plane(2 * 32, SIDE) * head_window / head_spans;
+    transient = transient.max(head);
+    let features = plane(NECK_CHANNELS, FEATURE_SIDE) * (SLAB as u64 + 8);
+    let emit = 2 * plane(OUTPUT_CHANNELS, SIDE) * SLAB as u64 / head_spans;
+    resident + transient + features + emit
 }
 
-fn page_waste(depth: usize) -> u64 {
-    volume(LADDER[3], SIDE, depth) / PAGE_WASTE.1 * PAGE_WASTE.0
+fn production(depth: usize, shift: usize) -> usize {
+    (SLAB + shift).min(depth)
 }
 
-fn spans(splits: usize) -> usize {
-    splits.clamp(1, SIDE / SPAN_FLOOR)
+fn spans(side: usize, splits: usize) -> usize {
+    splits.min(side / SPAN_FLOOR).max(1)
 }
 
 fn plane(channels: usize, side: usize) -> u64 {
     channels as u64 * side as u64 * side as u64 * 4
-}
-
-fn volume(channels: usize, side: usize, depth: usize) -> u64 {
-    plane(channels, side) * depth as u64
 }

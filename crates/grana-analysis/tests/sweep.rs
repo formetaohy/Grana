@@ -19,7 +19,7 @@ fn link(phantom: &Phantom) -> TrackSet {
         .expect("the tracker solves the phantom")
 }
 
-fn sweep(label: &str, uniform: bool) {
+fn sweep_with(label: &str, uniform: bool, oracle: bool) {
     let divisions = [0.06, 0.1, 0.2, 0.3, 0.4];
     let misses = [0.03, 0.1, 0.2, 0.3];
     let mut means = [0.0f64; 4];
@@ -31,8 +31,8 @@ fn sweep(label: &str, uniform: bool) {
                 .with_cells(10)
                 .with_step(0.2)
                 .with_division(division)
-                .with_miss(miss)
-                .with_false_alarm(0.2);
+                .with_miss(if oracle { 0.0 } else { miss })
+                .with_false_alarm(if oracle { 0.0 } else { 0.2 });
             if uniform {
                 spec = spec.uniform();
             }
@@ -70,6 +70,13 @@ fn sweep(label: &str, uniform: bool) {
 #[test]
 #[ignore = "a measurement harness run explicitly with --ignored"]
 fn sweeps_division_and_dropout_configurations() {
-    sweep("HETEROGENEOUS", false);
-    sweep("UNIFORM", true);
+    sweep_with("HETEROGENEOUS", false, false);
+    sweep_with("UNIFORM", true, false);
+}
+
+#[test]
+#[ignore = "a measurement harness run explicitly with --ignored"]
+fn sweeps_oracle_detection_attribution() {
+    sweep_with("HETEROGENEOUS ORACLE", false, true);
+    sweep_with("UNIFORM ORACLE", true, true);
 }

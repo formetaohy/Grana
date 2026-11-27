@@ -1,5 +1,5 @@
 mod checkpoint;
-mod decoder;
+pub(crate) mod decoder;
 mod encoder;
 
 use std::path::Path;
@@ -49,14 +49,11 @@ impl Model {
 
     pub(crate) fn decode(
         &self,
-        features: Tensor<4>,
+        features: &dyn Fn(std::ops::Range<usize>) -> Result<Tensor<5>>,
+        depth: usize,
         splits: usize,
         emit: &mut dyn FnMut(usize, Tensor<5>) -> Result<()>,
     ) -> Result<()> {
-        let [slices, channels, height, width] = features.dims();
-        let features = features
-            .permute([1, 0, 2, 3])
-            .reshape([1, channels, slices, height, width]);
-        self.decoder.forward(features, splits, emit)
+        self.decoder.decode(features, depth, splits, emit)
     }
 }

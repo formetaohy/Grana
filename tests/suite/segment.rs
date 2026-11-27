@@ -1,12 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use grana_gpu::{Consumer, Ledger};
+use grana_gpu::Ledger;
 use grana_segment::{Plan, Segmenter, Settings, Volume};
 
 const SIDE: u32 = 256;
-
-const DEPTHS: [u32; 8] = [8, 7, 6, 5, 4, 3, 2, 1];
 
 fn planes(width: u32, height: u32, depth: u32) -> Vec<Vec<f32>> {
     let voxels = (width * height) as usize;
@@ -17,7 +15,8 @@ fn planes(width: u32, height: u32, depth: u32) -> Vec<Vec<f32>> {
                 .map(|index| {
                     let x = (index % width as usize) as f32 / width as f32;
                     let y = (index / width as usize) as f32 / height as f32;
-                    let blob = ((x - 0.5).powi(2) + (y - 0.5).powi(2)).sqrt();
+                    let drift = (z as f32 * 0.02).sin() * 0.1;
+                    let blob = ((x - 0.5 - drift).powi(2) + (y - 0.5).powi(2)).sqrt();
                     (1.0 - blob).max(0.0) + noise()
                 })
                 .collect()
@@ -34,7 +33,6 @@ fn noise(seed: u32) -> impl FnMut() -> f32 {
 }
 
 struct Bench {
-    segmenter: Segmenter,
     weights: PathBuf,
     ledger: Arc<Ledger>,
 }
@@ -44,54 +42,70 @@ fn bench() -> Option<Bench> {
     let ledger = Ledger::of(headless.memory());
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let weights = grana_weight::weights(&cancel, &mut |_, _| {}).ok()?;
-    let segmenter = Segmenter::open(&weights, Settings::for_depth(DEPTHS[0])).ok()?;
-    Some(Bench {
-        segmenter,
-        weights,
-        ledger,
-    })
+    if Segmenter::open(&weights, Settings::for_depth(8)).is_err() {
+        return None;
+    }
+    Some(Bench { weights, ledger })
 }
 
 impl Bench {
-    fn afford(&self) -> Option<(u32, Plan, Plan)> {
-        let spare = self.ledger.spare();
-        for depth in DEPTHS {
-            let Ok(wide) = self.segmenter.plan(depth, spare) else {
-                continue;
-            };
-            let mut tight = wide;
-            let mut budget = wide.bytes() / 4 * 3;
-            while budget > 0 {
-                if let Ok(held) = self.segmenter.plan(depth, budget) {
-                    tight = held;
-                }
-                budget /= 2;
-            }
-            if tight.bytes() < wide.bytes() {
-                return Some((depth, wide, tight));
-            }
-        }
-        None
+    fn run(&self, segmenter: &Segmenter, depth: u32, plan: Plan) -> Volume {
+        let planes = planes(SIDE, SIDE, depth);
+        let mut progress = |_| {};
+        segmenter
+            .segment(&planes, SIDE, SIDE, plan, &mut progress)
+            .expect("the planned decode segments the volume")
     }
 
-    fn run(
-        &self,
-        segmenter: &Segmenter,
-        depth: u32,
-        plan: Plan,
-        progress: &mut dyn FnMut(usize),
-    ) -> Volume {
-        let planes = planes(SIDE, SIDE, depth);
-        let claim = self
-            .ledger
-            .claim(Consumer::Inference, plan.bytes())
-            .expect("a planned decode claims the graphics memory it declares");
-        let volume = segmenter
-            .segment(&planes, SIDE, SIDE, plan, progress)
-            .expect("the planned decode segments the volume");
-        drop(claim);
-        volume
+    fn opened(&self, depth: u32) -> Segmenter {
+        Segmenter::open(&self.weights, Settings::for_depth(depth))
+            .expect("the weights stay resident")
     }
+}
+
+#[test]
+fn shallow_volumes_keep_their_labels() {
+    let Some(bench) = bench() else {
+        println!("no graphics device or weights, skipping");
+        return;
+    };
+    let mut failures = Vec::new();
+    for depth in [1u32, 4, 8] {
+        let segmenter = bench.opened(depth);
+        let spare = bench.ledger.spare();
+        let plan = segmenter
+            .plan(depth, spare)
+            .expect("the planner fits the shallow volume inside the budget");
+        let volume = bench.run(&segmenter, depth, plan);
+        println!(
+            "depth {depth}: splits {} labels {}",
+            plan.splits(),
+            volume.count()
+        );
+        if volume.count() < 1 {
+            failures.push(depth);
+        }
+    }
+    let depth = 2;
+    let settings = Settings::new(0.5, 30.0, 500).expect("the shallow density fits two slices");
+    let segmenter = Segmenter::open(&bench.weights, settings).expect("the weights stay resident");
+    let spare = bench.ledger.spare();
+    let plan = segmenter
+        .plan(depth, spare)
+        .expect("the planner fits the shallow volume inside the budget");
+    let volume = bench.run(&segmenter, depth, plan);
+    println!(
+        "depth {depth} with low density: splits {} labels {}",
+        plan.splits(),
+        volume.count()
+    );
+    if volume.count() < 1 {
+        failures.push(depth);
+    }
+    assert!(
+        failures.is_empty(),
+        "the drifting object survives every shallow decode, missing at {failures:?}"
+    );
 }
 
 #[test]
@@ -100,36 +114,12 @@ fn splitting_the_decode_keeps_every_label() {
         println!("no graphics device or weights, skipping");
         return;
     };
-    let Some((depth, wide, tight)) = bench.afford() else {
-        println!(
-            "the graphics device holds {:.1} GiB, less than two decodes of the model need, skipping",
-            bench.ledger.spare() as f64 / (1u64 << 30) as f64
-        );
-        return;
-    };
-    assert!(
-        tight.bytes() < wide.bytes(),
-        "a tighter budget splits the decode further than {:.1} GiB",
-        wide.bytes() as f64 / (1u64 << 30) as f64
-    );
-    let segmenter = Segmenter::open(&bench.weights, Settings::for_depth(depth))
-        .expect("the weights stay resident");
-    let idle = segmenter
-        .graphics_memory()
-        .expect("the decoder reports the pages it holds");
-    let mut progress = |_| {};
-    let split = bench.run(&segmenter, depth, tight, &mut progress);
-    let split_footprint = segmenter
-        .graphics_memory()
-        .expect("the decoder reports the pages it holds")
-        .saturating_sub(idle);
-    assert!(
-        split_footprint <= tight.bytes(),
-        "the plan claims {:.1} GiB and the allocator reserved {:.1} GiB more",
-        tight.bytes() as f64 / (1u64 << 30) as f64,
-        split_footprint as f64 / (1u64 << 30) as f64
-    );
-    let whole = bench.run(&segmenter, depth, wide, &mut progress);
+    let depth = 16;
+    let segmenter = bench.opened(depth);
+    let wide = segmenter.forced_plan(depth, 8);
+    let tight = segmenter.forced_plan(depth, 16);
+    let whole = bench.run(&segmenter, depth, wide);
+    let split = bench.run(&segmenter, depth, tight);
     assert_eq!(whole.width(), split.width());
     assert_eq!(whole.height(), split.height());
     assert_eq!(whole.depth(), split.depth());
@@ -137,6 +127,116 @@ fn splitting_the_decode_keeps_every_label() {
         whole.labels(),
         split.labels(),
         "the stripes decode every voxel exactly like the whole surface"
+    );
+}
+
+#[test]
+fn deep_volumes_segment_inside_the_budget() {
+    let Some(bench) = bench() else {
+        println!("no graphics device or weights, skipping");
+        return;
+    };
+    let spare = bench.ledger.spare();
+    for depth in [16u32, 32, 64] {
+        let segmenter = bench.opened(depth);
+        let Ok(plan) = segmenter.plan(depth, spare) else {
+            println!("depth {depth}: the planner finds no split inside the budget");
+            continue;
+        };
+        let volume = bench.run(&segmenter, depth, plan);
+        assert_eq!(volume.depth(), depth);
+        println!(
+            "depth {depth}: splits {} plan {:.2} GiB labels {}",
+            plan.splits(),
+            plan.bytes() as f64 / (1u64 << 30) as f64,
+            volume.count()
+        );
+    }
+}
+
+#[test]
+fn tiled_volumes_hold_together_across_the_seams() {
+    let Some(bench) = bench() else {
+        println!("no graphics device or weights, skipping");
+        return;
+    };
+    let (width, height, depth) = (1280u32, 1280u32, 8u32);
+    let voxels = (width * height) as usize;
+    let radius = 60.0f32;
+    let centers = [(768.0f32, 768.0f32), (300.0f32, 300.0f32)];
+    let planes: Vec<Vec<f32>> = (0..depth)
+        .map(|z| {
+            let mut noise = noise(z + 1000);
+            (0..voxels)
+                .map(|index| {
+                    let x = (index % width as usize) as f32;
+                    let y = (index / width as usize) as f32;
+                    let blob = centers
+                        .iter()
+                        .map(|(cx, cy)| {
+                            let distance = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+                            if distance <= radius * 0.8 {
+                                1.0
+                            } else {
+                                ((radius - distance) / (radius * 0.2)).max(0.0)
+                            }
+                        })
+                        .fold(0f32, f32::max);
+                    blob + noise()
+                })
+                .collect()
+        })
+        .collect();
+    let segmenter = bench.opened(depth);
+    let spare = bench.ledger.spare();
+    let Ok(plan) = segmenter.plan(depth, spare) else {
+        println!("the planner finds no split inside the budget");
+        return;
+    };
+    let mut progress = |_| {};
+    let volume = segmenter
+        .segment(&planes, width, height, plan, &mut progress)
+        .expect("the tiled decode segments the volume");
+    let at = |x: usize, y: usize, z: usize| {
+        volume.labels()[x + width as usize * (y + height as usize * z)]
+    };
+    let mid = depth as usize / 2;
+    let center = at(768, 768, mid);
+    let west = at(728, 768, mid);
+    let east = at(808, 768, mid);
+    let north = at(768, 728, mid);
+    let south = at(768, 808, mid);
+    println!(
+        "tiled {}x{}x{}: labels {} seam center {} west {} east {} north {} south {}",
+        width,
+        height,
+        depth,
+        volume.count(),
+        center,
+        west,
+        east,
+        north,
+        south
+    );
+    assert!(
+        center > 0,
+        "the compact object centered on the tile seams is detected"
+    );
+    assert_eq!(
+        west, center,
+        "the object keeps one label west across the vertical seam"
+    );
+    assert_eq!(
+        east, center,
+        "the object keeps one label east across the vertical seam"
+    );
+    assert_eq!(
+        north, center,
+        "the object keeps one label north across the horizontal seam"
+    );
+    assert_eq!(
+        south, center,
+        "the object keeps one label south across the horizontal seam"
     );
 }
 

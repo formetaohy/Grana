@@ -64,10 +64,6 @@ impl Stripe {
         Self { side, count }
     }
 
-    pub(crate) fn whole(side: usize) -> Self {
-        Self::new(side, 1)
-    }
-
     pub(crate) fn side(self) -> usize {
         self.side
     }
@@ -77,10 +73,6 @@ impl Stripe {
         (0..self.count)
             .map(|index| Span::new(index * extent, extent, self.side))
             .collect()
-    }
-
-    pub(crate) fn whole_width(self) -> bool {
-        self.count == 1
     }
 }
 
