@@ -71,6 +71,7 @@ pub(crate) struct Residence {
     passes: Option<Passes>,
     grids: Vec<BrickGrid>,
     view: ViewInfo,
+    kept: Option<usize>,
 }
 
 #[derive(Default)]
@@ -308,6 +309,7 @@ impl Residence {
             passes: None,
             grids: Vec::new(),
             view: ViewInfo::default(),
+            kept: None,
         }
     }
 
@@ -356,6 +358,7 @@ impl Residence {
         self.restaged = false;
         self.passes = None;
         self.view = ViewInfo::default();
+        self.kept = None;
     }
 
     pub(crate) fn invalidate(&mut self) {
@@ -500,7 +503,9 @@ impl Residence {
             camera,
             height: view.height as f32,
             first: arena.first(),
+            kept: self.kept,
         });
+        self.kept = Some(target);
         let quantum = Resolution::of(pyramid, target, camera, size[1]);
         let planned = levels(Input {
             pyramid,

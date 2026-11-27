@@ -402,7 +402,10 @@ pub(crate) struct TargetView<'a> {
     pub(crate) camera: &'a Camera,
     pub(crate) height: f32,
     pub(crate) first: usize,
+    pub(crate) kept: Option<usize>,
 }
+
+const LEVEL_HYSTERESIS: f32 = 1.5;
 
 pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
     let TargetView {
@@ -410,6 +413,7 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
         camera,
         height,
         first,
+        kept,
     } = view;
     let levels = pyramid.level_count();
     let pixel_world = match camera.projection() {
@@ -420,8 +424,23 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
         CameraProjection::Orthographic => 2.0 * camera.half_height() / height.max(1.0),
     };
     let footprint = pixel_world / crate::material::samples_per_voxel(pyramid);
+    let wanted = finest_for(pyramid, first, footprint);
+    match kept {
+        Some(kept)
+            if kept >= first
+                && kept < levels
+                && kept != wanted
+                && holds(pyramid, kept, footprint) =>
+        {
+            kept
+        }
+        _ => wanted,
+    }
+}
+
+fn finest_for(pyramid: &Pyramid, first: usize, footprint: f32) -> usize {
     let mut target = first;
-    for index in first..levels {
+    for index in first..pyramid.level_count() {
         if minimum_spacing(pyramid, index) <= footprint {
             target = index;
         } else {
@@ -429,6 +448,16 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
         }
     }
     target
+}
+
+fn holds(pyramid: &Pyramid, level: usize, footprint: f32) -> bool {
+    let spacing = minimum_spacing(pyramid, level);
+    let finer = spacing / LEVEL_HYSTERESIS;
+    let coarser = match level + 1 < pyramid.level_count() {
+        true => minimum_spacing(pyramid, level + 1) * LEVEL_HYSTERESIS,
+        false => f32::INFINITY,
+    };
+    footprint >= finer && footprint < coarser
 }
 
 fn nearest_distance(level: grana_volume::Level, eye: Vec3) -> f32 {
@@ -477,7 +506,57 @@ mod tests {
             camera: &camera,
             height,
             first: 0,
+            kept: None,
         })
+    }
+
+    fn target_kept(pyramid: &Pyramid, height: f32, kept: usize) -> usize {
+        let mut camera = Camera::new(35.0);
+        camera.fit(Vec3::from(pyramid.level(0).world_extent()), 1.0);
+        volume_target(TargetView {
+            pyramid,
+            camera: &camera,
+            height,
+            first: 0,
+            kept: Some(kept),
+        })
+    }
+
+    #[test]
+    fn a_level_holds_until_the_footprint_leaves_its_band() {
+        let sampled = pyramid(false);
+        let mut heights = Vec::new();
+        let mut height = 40.0f32;
+        while height < 4000.0 {
+            heights.push((height, target(&sampled, height)));
+            height *= 1.02;
+        }
+        let mut crossed = 0;
+        for pair in heights.windows(2) {
+            let [(_, settled), (next_height, wanted)] = pair else {
+                continue;
+            };
+            if settled == wanted {
+                continue;
+            }
+            assert_eq!(
+                target_kept(&sampled, *next_height, *settled),
+                *settled,
+                "a two percent footprint step never flips the level it settled on"
+            );
+            crossed += 1;
+        }
+        assert!(
+            crossed > 0,
+            "the sweep crosses a level boundary the hysteresis has to hold"
+        );
+        let coarse = target(&sampled, 40.0);
+        assert!(coarse > 0, "a small viewport picks a coarser level");
+        assert_eq!(
+            target_kept(&sampled, 40.0, 0),
+            coarse,
+            "a footprint far outside the finest band releases it"
+        );
     }
 
     #[test]

@@ -39,11 +39,10 @@ impl App {
                 .annotation_tool
                 .filter(|_| workspace.seed.is_none() && workspace.mask.is_none());
             let paint = workspace.mask.is_some();
-            let slice = camera.slice().is_some();
             let blocked = surface.ui.pointer_over_chrome()
                 || surface.ui.pointer_over_widget()
                 || surface.ui.pointer_captured();
-            let hovered = (!blocked && !slice && tool.is_none() && workspace.seed.is_none())
+            let hovered = (!blocked && tool.is_none() && workspace.seed.is_none())
                 .then(|| annotation_hit(surface, session, camera, stage, annotation_placement))
                 .flatten();
             let pressed = surface.ui.input().button(UiButton::Primary).pressed;
@@ -95,9 +94,7 @@ impl App {
             self.workspace.annotation_drag = Some((index, part));
             self.apply(vec![Command::SelectAnnotation(Some(index))]);
         }
-        if let Some(tool) = interaction.tool
-            && self.camera.slice().is_none()
-        {
+        if let Some(tool) = interaction.tool {
             self.use_tool(tool);
         }
         if let Some(grab) = interaction.grab {
@@ -105,16 +102,13 @@ impl App {
         } else {
             self.workspace.annotation_drag = None;
         }
-        if let Some(drag) = interaction.paint
-            && self.camera.slice().is_none()
-        {
+        if let Some(drag) = interaction.paint {
             self.paint_mask(drag);
         }
         if let Some(point) = interaction.pick {
-            match (self.workspace.seed, self.camera.slice().is_some()) {
-                (Some(set), false) => self.place_seed(set, point, interaction.modifiers.alt),
-                (Some(_), true) => {}
-                (None, _) => {
+            match self.workspace.seed {
+                Some(set) => self.place_seed(set, point, interaction.modifiers.alt),
+                None => {
                     let toggle = interaction.modifiers.shift || interaction.modifiers.control;
                     self.pick(point, toggle);
                 }
@@ -335,26 +329,37 @@ impl App {
         {
             return;
         }
-        let Some((origin, direction)) = self.volume_ray(point) else {
-            return;
+        let position = match self.camera.slice() {
+            Some(_) => match self.annotation_point(point) {
+                Some(position) => position,
+                None => return,
+            },
+            None => {
+                let Some((origin, direction)) = self.volume_ray(point) else {
+                    return;
+                };
+                let Some(scene) = self.session.scene() else {
+                    return;
+                };
+                let channel = scene.objects.get(set).map_or(0, |object| object.channel());
+                match scene.surface_ray(set, origin, direction) {
+                    Ok(Some(hit)) => hit.to_array(),
+                    Ok(None) => match self.session.seed_peak(channel, origin, direction) {
+                        Some(peak) => peak,
+                        None => match self.annotation_point(point) {
+                            Some(position) => position,
+                            None => return,
+                        },
+                    },
+                    Err(detail) => {
+                        self.output = Some(detail);
+                        return;
+                    }
+                }
+            }
         };
         let Some(scene) = self.session.scene() else {
             return;
-        };
-        let channel = scene.objects.get(set).map_or(0, |object| object.channel());
-        let position = match scene.surface_ray(set, origin, direction) {
-            Ok(Some(hit)) => hit.to_array(),
-            Ok(None) => match self.session.seed_peak(channel, origin, direction) {
-                Some(peak) => peak,
-                None => match self.annotation_point(point) {
-                    Some(position) => position,
-                    None => return,
-                },
-            },
-            Err(detail) => {
-                self.output = Some(detail);
-                return;
-            }
         };
         let voxel = scene.dataset.voxel_size().min_element();
         let radius = 3.0 * voxel;
@@ -394,16 +399,25 @@ impl App {
     pub(super) fn annotation_point(&self, point: Vec2) -> Option<[f32; 3]> {
         let scene = self.session.scene()?;
         let (origin, direction) = self.volume_ray(point)?;
-        if let Ok(Some(hit)) = scene.surface_hit(origin, direction) {
-            return Some(hit.to_array());
-        }
         let half = 0.5 * scene.dataset.world_size();
-        let clip = scene.clip;
-        let (normal, offset) = if clip.enabled() {
-            (clip.normal(), clip.offset())
-        } else {
-            let normal = self.camera.forward();
-            (normal, normal.dot(self.camera.pivot()))
+        let plane = self
+            .camera
+            .slice()
+            .map(|slice| slice.plane(self.camera.pivot()));
+        let (normal, offset) = match plane {
+            Some(plane) => (plane.normal(), plane.offset()),
+            None => {
+                if let Ok(Some(hit)) = scene.surface_hit(origin, direction) {
+                    return Some(hit.to_array());
+                }
+                let clip = scene.clip;
+                if clip.enabled() {
+                    (clip.normal(), clip.offset())
+                } else {
+                    let normal = self.camera.forward();
+                    (normal, normal.dot(self.camera.pivot()))
+                }
+            }
         };
         let component = direction.dot(normal);
         if component.abs() <= 1.0e-6 {
