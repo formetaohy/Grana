@@ -55,11 +55,11 @@ pub(super) fn segmenter(
     params: &SegmentParams,
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(Event),
-) -> Result<Option<(Segmenter, Settings)>, String> {
+) -> Result<Option<Segmenter>, String> {
     let settings = Settings::new(
         params.foreground_threshold(),
         params.density_threshold(),
-        params.minimum_size(),
+        params.minimum_volume(),
     )
     .map_err(|error| error.to_string())?;
     let path = match grana_weight::weights(cancel, &mut |done, total| {
@@ -74,7 +74,7 @@ pub(super) fn segmenter(
         Err(error) => return Err(error.to_string()),
     };
     let segmenter = Segmenter::open(&path, settings).map_err(|error| error.to_string())?;
-    Ok(Some((segmenter, settings)))
+    Ok(Some(segmenter))
 }
 
 pub fn segment(
@@ -88,7 +88,7 @@ pub fn segment(
         .region
         .voxel_range(info)
         .ok_or_else(|| "the segmentation region overlaps no voxel".to_string())?;
-    let Some((segmenter, _)) = segmenter(&request.params, cancel, sink)? else {
+    let Some(segmenter) = segmenter(&request.params, cancel, sink)? else {
         return Ok(());
     };
     let graphics = grana_gpu::Headless::shared()?;
@@ -247,7 +247,14 @@ impl Slicer<'_> {
         }
         let mut volume = self
             .segmenter
-            .segment(&planes, width, height, plan, progress)
+            .segment(
+                &planes,
+                width,
+                height,
+                cell_measure(core[2].end - core[2].start, self.info),
+                plan,
+                progress,
+            )
             .map_err(|error| format!("the segmentation model failed: {error}"))?;
         volume.filter(|[x, y, z]| {
             let position = [
@@ -312,6 +319,15 @@ impl Slicer<'_> {
             drifts: &self.request.drifts,
             ids: &self.request.ids,
         })
+    }
+}
+
+fn cell_measure(depth: u32, level: Level) -> f64 {
+    let voxel = level.voxel_volume();
+    if depth > 1 {
+        voxel
+    } else {
+        voxel / f64::from(level.spacing().z())
     }
 }
 

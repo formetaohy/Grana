@@ -176,6 +176,7 @@ pub fn parameter(language: Language, english: &str) -> String {
         "foreground" => "前景",
         "density" => "密度",
         "minimum size" => "最小尺寸",
+        "minimum volume" => "最小体积",
         _ => english,
     };
     chinese.to_string()

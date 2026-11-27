@@ -53,7 +53,14 @@ impl Bench {
         let planes = planes(SIDE, SIDE, depth);
         let mut progress = |_| {};
         segmenter
-            .segment(&planes, SIDE, SIDE, plan, &mut progress)
+            .segment(
+                &planes,
+                SIDE,
+                SIDE,
+                cell_measure(depth),
+                plan,
+                &mut progress,
+            )
             .expect("the planned decode segments the volume")
     }
 
@@ -61,6 +68,10 @@ impl Bench {
         Segmenter::open(&self.weights, Settings::for_depth(depth))
             .expect("the weights stay resident")
     }
+}
+
+fn cell_measure(depth: u32) -> f64 {
+    if depth > 1 { 0.1 } else { 0.5 }
 }
 
 #[test]
@@ -87,7 +98,7 @@ fn shallow_volumes_keep_their_labels() {
         }
     }
     let depth = 2;
-    let settings = Settings::new(0.5, 30.0, 500).expect("the shallow density fits two slices");
+    let settings = Settings::new(0.5, 30.0, 0.3).expect("the shallow density fits two slices");
     let segmenter = Segmenter::open(&bench.weights, settings).expect("the weights stay resident");
     let spare = bench.ledger.spare();
     let plan = segmenter
@@ -195,7 +206,14 @@ fn tiled_volumes_hold_together_across_the_seams() {
     };
     let mut progress = |_| {};
     let volume = segmenter
-        .segment(&planes, width, height, plan, &mut progress)
+        .segment(
+            &planes,
+            width,
+            height,
+            cell_measure(depth),
+            plan,
+            &mut progress,
+        )
         .expect("the tiled decode segments the volume");
     let at = |x: usize, y: usize, z: usize| {
         volume.labels()[x + width as usize * (y + height as usize * z)]
@@ -282,10 +300,49 @@ fn keeps_the_components_that_hold_the_seeds() {
 fn defaults_follow_the_volume_dimensionality() {
     let flat = Settings::for_depth(1);
     assert_eq!(flat.density_threshold(), 30.0);
-    assert_eq!(flat.minimum_size(), 50);
+    assert_eq!(flat.minimum_volume(), 0.0011);
     let volume = Settings::for_depth(8);
     assert_eq!(volume.density_threshold(), 80.0);
-    assert_eq!(volume.minimum_size(), 500);
-    assert!(Settings::new(1.5, 30.0, 50).is_err());
-    assert!(Settings::new(0.5, 30.0, 10_001).is_err());
+    assert_eq!(volume.minimum_volume(), 0.01);
+    assert!(Settings::new(1.5, 30.0, 0.0011).is_err());
+    assert!(Settings::new(0.5, 30.0, 1_001.0).is_err());
+}
+
+#[test]
+fn the_minimum_volume_holds_for_every_sampling() {
+    for step in [0.4f64, 0.29, 0.2, 0.15, 0.1] {
+        let floor = Settings::for_depth(3).minimum_voxel_count(step.powi(3));
+        let mut sampled = Volume::new(8, 8, 8, big_and_small());
+        sampled.retain_above(floor);
+        let [cell, speckle] = counts(&sampled);
+        assert_eq!(
+            cell, 176,
+            "the {step} µm sampling keeps every cell above the physical floor"
+        );
+        if floor > 8 {
+            assert_eq!(
+                speckle, 0,
+                "the {step} µm sampling drops the speckle that holds less than the floor"
+            );
+        }
+    }
+}
+
+fn big_and_small() -> Vec<u32> {
+    let mut labels = vec![0u32; 8 * 8 * 8];
+    for cell in labels.iter_mut().take(176) {
+        *cell = 1;
+    }
+    for cell in labels.iter_mut().skip(400).take(8) {
+        *cell = 2;
+    }
+    labels
+}
+
+fn counts(volume: &Volume) -> [usize; 2] {
+    let labels = volume.labels();
+    [
+        labels.iter().filter(|label| **label == 1).count(),
+        labels.iter().filter(|label| **label == 2).count(),
+    ]
 }

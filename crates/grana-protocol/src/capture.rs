@@ -641,7 +641,7 @@ fn segments(
         channel: channel.to_string(),
         foreground: params.foreground_threshold(),
         density: params.density_threshold(),
-        minimum_size: params.minimum_size(),
+        min_volume: params.minimum_volume(),
         seeds: seed.points,
         seed_source: seed.source,
     })

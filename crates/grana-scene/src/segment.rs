@@ -4,13 +4,13 @@ const FOREGROUND_MINIMUM: f32 = 0.0;
 const FOREGROUND_MAXIMUM: f32 = 1.0;
 const DENSITY_MINIMUM: f32 = 0.0;
 const DENSITY_MAXIMUM: f32 = 10_000.0;
-const SIZE_MINIMUM: f32 = 1.0;
-const SIZE_MAXIMUM: f32 = 10_000.0;
+const VOLUME_MINIMUM: f32 = 0.001;
+const VOLUME_MAXIMUM: f32 = 1_000.0;
 const FOREGROUND_DEFAULT: f32 = 0.5;
 const DENSITY_2D_DEFAULT: f32 = 30.0;
 const DENSITY_3D_DEFAULT: f32 = 80.0;
-const SIZE_2D_DEFAULT: u32 = 50;
-const SIZE_3D_DEFAULT: u32 = 500;
+const VOLUME_2D_DEFAULT: f32 = 0.0011;
+const VOLUME_3D_DEFAULT: f32 = 0.01;
 
 pub const SEGMENT_FIELDS: [ParamField; 3] = [
     ParamField {
@@ -28,10 +28,10 @@ pub const SEGMENT_FIELDS: [ParamField; 3] = [
         logarithmic: false,
     },
     ParamField {
-        label: "minimum size",
-        suffix: " vox",
-        minimum: ParamScale::Absolute(SIZE_MINIMUM),
-        maximum: ParamScale::Absolute(SIZE_MAXIMUM),
+        label: "minimum volume",
+        suffix: " µm³",
+        minimum: ParamScale::Absolute(VOLUME_MINIMUM),
+        maximum: ParamScale::Absolute(VOLUME_MAXIMUM),
         logarithmic: true,
     },
 ];
@@ -40,7 +40,7 @@ pub const SEGMENT_FIELDS: [ParamField; 3] = [
 pub struct SegmentParams {
     foreground_threshold: f32,
     density_threshold: f32,
-    minimum_size: u32,
+    minimum_volume: f32,
 }
 
 impl SegmentParams {
@@ -51,13 +51,13 @@ impl SegmentParams {
             Self {
                 foreground_threshold: FOREGROUND_DEFAULT,
                 density_threshold: DENSITY_3D_DEFAULT,
-                minimum_size: SIZE_3D_DEFAULT,
+                minimum_volume: VOLUME_3D_DEFAULT,
             }
         } else {
             Self {
                 foreground_threshold: FOREGROUND_DEFAULT,
                 density_threshold: DENSITY_2D_DEFAULT,
-                minimum_size: SIZE_2D_DEFAULT,
+                minimum_volume: VOLUME_2D_DEFAULT,
             }
         }
     }
@@ -65,12 +65,12 @@ impl SegmentParams {
     pub fn with_settings(
         foreground_threshold: f32,
         density_threshold: f32,
-        minimum_size: u32,
+        minimum_volume: f32,
     ) -> Self {
         let mut params = Self::new(1);
         params.set_foreground_threshold(foreground_threshold);
         params.set_density_threshold(density_threshold);
-        params.set_minimum_size(minimum_size);
+        params.set_minimum_volume(minimum_volume);
         params
     }
 
@@ -82,15 +82,15 @@ impl SegmentParams {
         self.density_threshold
     }
 
-    pub fn minimum_size(&self) -> u32 {
-        self.minimum_size
+    pub fn minimum_volume(&self) -> f32 {
+        self.minimum_volume
     }
 
     pub fn field(&self, index: usize) -> f32 {
         match index {
             0 => self.foreground_threshold,
             1 => self.density_threshold,
-            2 => self.minimum_size as f32,
+            2 => self.minimum_volume,
             _ => panic!("a segmentation carries three parameters"),
         }
     }
@@ -99,7 +99,7 @@ impl SegmentParams {
         match index {
             0 => self.set_foreground_threshold(value),
             1 => self.set_density_threshold(value),
-            2 => self.set_minimum_size(value.round() as u32),
+            2 => self.set_minimum_volume(value),
             _ => panic!("a segmentation carries three parameters"),
         }
     }
@@ -120,11 +120,11 @@ impl SegmentParams {
         self.density_threshold = threshold;
     }
 
-    pub fn set_minimum_size(&mut self, size: u32) {
+    pub fn set_minimum_volume(&mut self, volume: f32) {
         assert!(
-            size <= SIZE_MAXIMUM as u32,
-            "a segmented object holds a bounded number of voxels"
+            volume.is_finite() && (VOLUME_MINIMUM..=VOLUME_MAXIMUM).contains(&volume),
+            "a segmented object covers a positive physical volume"
         );
-        self.minimum_size = size;
+        self.minimum_volume = volume;
     }
 }

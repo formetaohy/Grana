@@ -1000,19 +1000,15 @@ fn decode_provenance(reader: &mut Reader<'_>, depth: usize) -> Result<Provenance
         6 => {
             let foreground = reader.f32()?;
             let density = reader.f32()?;
-            let minimum = reader.count(1)?;
+            let minimum = reader.f32()?;
             if !(foreground.is_finite() && (0.0..=1.0).contains(&foreground))
                 || !(density.is_finite() && (0.0..=10_000.0).contains(&density))
-                || minimum > 10_000
+                || !(minimum.is_finite() && (0.0..=1_000.0).contains(&minimum))
             {
                 return Err(FAULT_VALUE);
             }
             Ok(Provenance::Segmented {
-                params: grana_scene::SegmentParams::with_settings(
-                    foreground,
-                    density,
-                    minimum as u32,
-                ),
+                params: grana_scene::SegmentParams::with_settings(foreground, density, minimum),
             })
         }
         _ => Err(FAULT_TAG),

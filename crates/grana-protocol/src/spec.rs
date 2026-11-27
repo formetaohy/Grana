@@ -1335,7 +1335,7 @@ pub enum SourceSpec {
         channel: String,
         foreground: f32,
         density: f32,
-        minimum_size: u32,
+        min_volume: f32,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         seeds: Vec<Vec<[f32; 3]>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3296,12 +3296,12 @@ impl SourceSpec {
             Self::Segments {
                 foreground,
                 density,
-                minimum_size,
+                min_volume,
                 ..
             } => Some(SegmentParams::with_settings(
                 *foreground,
                 *density,
-                *minimum_size,
+                *min_volume,
             )),
             _ => None,
         }
@@ -3450,7 +3450,7 @@ impl SourceSpec {
                 channel,
                 foreground,
                 density,
-                minimum_size,
+                min_volume,
                 seeds,
                 seed_source,
             } => {
@@ -3461,8 +3461,8 @@ impl SourceSpec {
                 if !(density.is_finite() && (0.0..=10_000.0).contains(density)) {
                     return invalid("needs a bounded density threshold".to_string());
                 }
-                if *minimum_size > 10_000 {
-                    return invalid("needs a bounded minimum size".to_string());
+                if !(min_volume.is_finite() && (0.0..=1_000.0).contains(min_volume)) {
+                    return invalid("needs a bounded minimum volume".to_string());
                 }
                 if seeds
                     .iter()

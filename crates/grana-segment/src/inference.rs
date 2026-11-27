@@ -89,6 +89,7 @@ impl Segmenter {
         planes: &[Vec<f32>],
         width: u32,
         height: u32,
+        cell_measure: f64,
         plan: Plan,
         progress: &mut dyn FnMut(usize),
     ) -> Result<Volume> {
@@ -98,8 +99,15 @@ impl Segmenter {
         }
         self.model.device().memory_cleanup();
         let prediction = prediction?;
-        let labels = postprocess::labels(&prediction, self.settings);
-        Ok(Volume::new(width, height, planes.len() as u32, labels))
+        let labels = postprocess::labels(
+            &prediction,
+            self.settings.foreground_threshold(),
+            self.settings.density_threshold(),
+        );
+        drop(prediction);
+        let mut volume = Volume::new(width, height, planes.len() as u32, labels);
+        volume.retain_above(self.settings.minimum_voxel_count(cell_measure));
+        Ok(volume)
     }
 
     fn account(&self, depth: u32, plan: Plan) {

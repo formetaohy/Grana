@@ -64,6 +64,24 @@ impl Volume {
         self.renumber();
     }
 
+    pub fn retain_above(&mut self, cells: usize) {
+        if cells == 0 {
+            return;
+        }
+        let mut counts = vec![0usize; self.count as usize + 1];
+        for label in &self.labels {
+            if *label > 0 {
+                counts[*label as usize] += 1;
+            }
+        }
+        for label in &mut self.labels {
+            if *label > 0 && counts[*label as usize] < cells {
+                *label = 0;
+            }
+        }
+        self.renumber();
+    }
+
     pub fn cropped(&self, origin: [u32; 3], extent: [u32; 3]) -> Self {
         let zero = extent.iter().all(|value| *value > 0);
         let inside = (0..3)

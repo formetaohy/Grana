@@ -707,7 +707,7 @@ impl Encode for Provenance {
                 writer.u8(6);
                 writer.f32(params.foreground_threshold());
                 writer.f32(params.density_threshold());
-                writer.count(params.minimum_size() as usize);
+                writer.f32(params.minimum_volume());
             }
             Self::Filtered { source, criteria } => {
                 writer.u8(1);

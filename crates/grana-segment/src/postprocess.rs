@@ -2,8 +2,6 @@ use std::collections::VecDeque;
 
 use rayon::prelude::*;
 
-use crate::Settings;
-
 const INTEGRATION_STEPS: usize = 50;
 const STEP_SIZE: f32 = 1.0;
 const CONVERGENCE: f32 = 0.005;
@@ -25,13 +23,17 @@ impl Prediction {
     }
 }
 
-pub(crate) fn labels(prediction: &Prediction, settings: Settings) -> Vec<u32> {
+pub(crate) fn labels(
+    prediction: &Prediction,
+    foreground_threshold: f32,
+    density_threshold: f32,
+) -> Vec<u32> {
     let shape = prediction.shape();
     let area = shape[0] * shape[1] * shape[2];
     let foreground = &prediction.channels[0];
     let mut mask = vec![0u8; area];
     for (index, value) in foreground.iter().enumerate() {
-        if *value > settings.foreground_threshold() {
+        if *value > foreground_threshold {
             mask[index] = 1;
         }
     }
@@ -54,15 +56,11 @@ pub(crate) fn labels(prediction: &Prediction, settings: Settings) -> Vec<u32> {
             *value = 0.0;
         }
     }
-    let markers = components(&density, settings.density_threshold(), shape);
+    let markers = components(&density, density_threshold, shape);
     drop(density);
     let heightmap = heightmap(foreground, flow);
     let mut segmentation = watershed(&heightmap, &markers, &mask, shape);
     drop(markers);
-    if settings.minimum_size() > 0 {
-        remove_small(&mut segmentation, settings.minimum_size());
-        segmentation = watershed(&heightmap, &segmentation, &mask, shape);
-    }
     renumber(&mut segmentation);
     segmentation
 }
@@ -443,20 +441,6 @@ fn neighbours(x: usize, y: usize, z: usize, shape: [usize; 3]) -> [Option<usize>
         (z > 0).then(|| index - stride_z),
         (z + 1 < shape[2]).then(|| index + stride_z),
     ]
-}
-
-fn remove_small(labels: &mut [u32], minimum: u32) {
-    let mut counts = vec![0u32; labels.iter().copied().max().unwrap_or(0) as usize + 1];
-    for label in labels.iter() {
-        if *label > 0 {
-            counts[*label as usize] += 1;
-        }
-    }
-    for label in labels.iter_mut() {
-        if *label > 0 && counts[*label as usize] < minimum {
-            *label = 0;
-        }
-    }
 }
 
 fn renumber(labels: &mut [u32]) {
