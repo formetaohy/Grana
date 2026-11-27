@@ -58,11 +58,7 @@ impl ConvBlock {
         let mut raised_parts = Vec::with_capacity(spans.len());
         for &span in &spans {
             let window = source(span.context(1));
-            let raised = relu(self.first.forward(
-                first_stats.normalise(window),
-                [0, 1, 1],
-                [1, 1, 1],
-            ));
+            let raised = relu(self.first.forward(first_stats.normalise(window), [0, 1, 1]));
             accumulate(&mut raised_sums, &span.crop(raised.clone(), 1));
             raised_parts.push((span, raised));
         }
@@ -72,7 +68,7 @@ impl ConvBlock {
         for (span, raised) in raised_parts {
             let widened = self
                 .second
-                .forward(second_stats.normalise(raised), [0, 1, 1], [1, 1, 1]);
+                .forward(second_stats.normalise(raised), [0, 1, 1]);
             let activation = relu(span.crop(widened, 1));
             let mut sums = DepthSums::of(&activation);
             sums.add(&activation);

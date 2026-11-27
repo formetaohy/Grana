@@ -6,7 +6,6 @@ use crate::model::checkpoint::{ChannelNorm, Checkpoint, Conv3d};
 
 pub(crate) struct Strip {
     first: Conv3d,
-    norm: ChannelNorm,
     second: Conv3d,
 }
 
@@ -21,15 +20,16 @@ impl Strip {
         device: &Device,
     ) -> Result<Self> {
         let hidden = channels / 4;
+        let first = Conv3d::load(
+            checkpoint,
+            &format!("{prefix}.conv1.weight"),
+            &format!("{prefix}.conv1.bias"),
+            [hidden, channels, 1, 1, 1],
+            device,
+        )?;
+        let norm = ChannelNorm::load(checkpoint, &format!("{prefix}.bn1"), device)?;
         Ok(Self {
-            first: Conv3d::load(
-                checkpoint,
-                &format!("{prefix}.conv1.weight"),
-                &format!("{prefix}.conv1.bias"),
-                [hidden, channels, 1, 1, 1],
-                device,
-            )?,
-            norm: ChannelNorm::load(checkpoint, &format!("{prefix}.bn1"), device)?,
+            first: first.normalized(&norm),
             second: Conv3d::load(
                 checkpoint,
                 &format!("{prefix}.conv2.weight"),
@@ -41,13 +41,8 @@ impl Strip {
     }
 
     pub(crate) fn gate(&self, mean: Tensor<5>) -> Gate {
-        let pooled = self.first.forward(mean, [0, 0, 0], [1, 1, 1]);
-        let hidden = relu(self.norm.forward(pooled));
-        Gate(Some(sigmoid(self.second.forward(
-            hidden,
-            [0, 0, 0],
-            [1, 1, 1],
-        ))))
+        let pooled = self.first.forward(mean, [0, 0, 0]);
+        Gate(Some(sigmoid(self.second.forward(relu(pooled), [0, 0, 0]))))
     }
 }
 

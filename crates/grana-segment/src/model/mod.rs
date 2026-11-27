@@ -1,4 +1,5 @@
 mod checkpoint;
+mod conv;
 pub(crate) mod decoder;
 mod encoder;
 

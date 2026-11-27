@@ -321,7 +321,8 @@ impl Segmenter {
                 }
                 Ok(())
             },
-        )
+        )?;
+        Ok(())
     }
 }
 

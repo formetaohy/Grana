@@ -11,6 +11,8 @@ pub(crate) struct Checkpoint {
     reader: PytorchReader,
 }
 
+const NORMALIZATION_EPSILON: f32 = 1.0e-5;
+
 impl Checkpoint {
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let reader = PytorchReader::new(path).map_err(|error| {
@@ -170,17 +172,6 @@ impl ChannelNorm {
             variance: checkpoint.vector(&format!("{prefix}.running_var"), length, device)?,
         })
     }
-
-    pub(crate) fn forward<const D: usize>(&self, input: Tensor<D>) -> Tensor<D> {
-        burn::tensor::module::batch_norm(
-            input,
-            self.weight.clone(),
-            self.bias.clone(),
-            self.mean.clone(),
-            self.variance.clone(),
-            1.0e-5,
-        )
-    }
 }
 
 pub(crate) struct Conv2d {
@@ -217,9 +208,11 @@ impl Conv2d {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Conv3d {
-    pub(crate) weight: Tensor<5>,
-    pub(crate) bias: Tensor<1>,
+    weight: Tensor<5>,
+    bias: Tensor<1>,
+    kernel: [usize; 3],
 }
 
 impl Conv3d {
@@ -230,23 +223,64 @@ impl Conv3d {
         shape: [usize; 5],
         device: &Device,
     ) -> Result<Self> {
+        checkpoint.expect(weight, &shape)?;
+        let values = crate::model::conv::channels_last_values(&checkpoint.values(weight)?, shape);
+        let [output, input, depth, height, width] = shape;
         Ok(Self {
-            weight: checkpoint.tensor(weight, &shape, device)?,
-            bias: checkpoint.vector(bias, shape[0], device)?,
+            weight: Tensor::<5>::from_data(
+                TensorData::new(values, vec![output, depth, height, width, input]),
+                device,
+            ),
+            bias: checkpoint.vector(bias, output, device)?,
+            kernel: [depth, height, width],
         })
     }
 
-    pub(crate) fn forward(
-        &self,
-        input: Tensor<5>,
-        padding: [usize; 3],
-        stride: [usize; 3],
-    ) -> Tensor<5> {
-        burn::tensor::module::conv3d(
+    pub(crate) fn narrow_outputs(self, start: usize, length: usize) -> Self {
+        Self {
+            weight: self.weight.narrow(0, start, length),
+            bias: self.bias.narrow(0, start, length),
+            kernel: self.kernel,
+        }
+    }
+
+    pub(crate) fn narrow_inputs(self, start: usize, length: usize) -> Self {
+        Self {
+            weight: self.weight.narrow(4, start, length),
+            bias: self.bias,
+            kernel: self.kernel,
+        }
+    }
+
+    pub(crate) fn silenced(self) -> Self {
+        Self {
+            weight: self.weight,
+            bias: self.bias * 0.0,
+            kernel: self.kernel,
+        }
+    }
+
+    pub(crate) fn device(&self) -> Device {
+        self.weight.device()
+    }
+
+    pub(crate) fn normalized(self, norm: &ChannelNorm) -> Self {
+        let count = self.bias.dims()[0];
+        let scale = norm.weight.clone() / (norm.variance.clone() + NORMALIZATION_EPSILON).sqrt();
+        Self {
+            weight: self.weight * scale.clone().reshape([count, 1, 1, 1, 1]),
+            bias: (self.bias - norm.mean.clone()) * scale + norm.bias.clone(),
+            kernel: self.kernel,
+        }
+    }
+
+    pub(crate) fn forward(&self, input: Tensor<5>, padding: [usize; 3]) -> Tensor<5> {
+        crate::model::conv::convolve(
             input,
             self.weight.clone(),
-            Some(self.bias.clone()),
-            burn::tensor::ops::ConvOptions::new(stride, padding, [1, 1, 1], 1),
+            self.bias.clone(),
+            self.kernel,
+            padding,
         )
     }
 }

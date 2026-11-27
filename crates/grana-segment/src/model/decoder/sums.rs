@@ -7,7 +7,6 @@ pub(crate) struct ColumnSums {
 }
 pub(crate) struct DepthSums {
     sum: Tensor<5>,
-    square: Tensor<5>,
     depth: usize,
 }
 pub(crate) struct Statistics {
@@ -48,14 +47,12 @@ impl DepthSums {
         let shape = [1, channels, 1, height, width];
         Self {
             sum: Tensor::zeros(shape, &tensor.device()),
-            square: Tensor::zeros(shape, &tensor.device()),
             depth: 0,
         }
     }
     pub(crate) fn add(&mut self, chunk: &Tensor<5>) {
         self.depth += chunk.dims()[2];
         self.sum = self.sum.clone() + chunk.clone().sum_dims(&[2]);
-        self.square = self.square.clone() + chunk.clone().mul(chunk.clone()).sum_dims(&[2]);
     }
     pub(crate) fn depth(&self) -> usize {
         self.depth

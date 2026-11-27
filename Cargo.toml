@@ -36,7 +36,9 @@ quick-xml = "0.41"
 slotmap = "1"
 zarrs = { version = "0.23", default-features = false, features = ["filesystem", "blosc", "zstd", "gzip", "sharding", "crc32c"] }
 openh264 = "0.9"
-burn = { version = "0.22.1", default-features = false, features = ["std", "wgpu", "cubecl", "pytorch", "fusion"] }
+burn = { version = "0.22.1", default-features = false, features = ["std", "wgpu", "vulkan", "cubecl", "pytorch"] }
+burn-cubecl = { version = "0.22.1", default-features = false }
+cubek = { version = "0.3.1", features = ["convolution", "matmul"] }
 hdf5-pure = "0.47"
 memmap2 = "0.9"
 openreadout-core = "0.4"

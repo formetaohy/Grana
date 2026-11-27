@@ -317,10 +317,7 @@ impl Decoder {
             samplers,
             output: DeconvBlock::load(checkpoint, "deconv_out", FEATURES[3], FEATURES[3], device)?,
             head: Head::load(checkpoint, FEATURES[3], device)?,
-            readout: Conv3d {
-                weight: readout.weight.narrow(0, 0, OUTPUT_CHANNELS),
-                bias: readout.bias.narrow(0, 0, OUTPUT_CHANNELS),
-            },
+            readout: readout.narrow_outputs(0, OUTPUT_CHANNELS),
         })
     }
 
@@ -331,7 +328,7 @@ impl Decoder {
         splits: usize,
         emit: &mut dyn FnMut(usize, Tensor<5>) -> Result<()>,
     ) -> Result<()> {
-        let device = self.readout.weight.device();
+        let device = self.readout.device();
         prime_pool(&device, max_tensor_bytes(depth, splits));
         let mut stream = Stream::open(splits, &device);
         let mut start = 0;
@@ -545,9 +542,7 @@ impl Decoder {
             } else {
                 self.head.gate(depth_sums.mean())
             };
-            let logits = self
-                .readout
-                .forward(gate.apply(refined), [0, 0, 0], [1, 1, 1]);
+            let logits = self.readout.forward(gate.apply(refined), [0, 0, 0]);
             activated.push(activate(logits));
         }
         let activated = joined(activated);

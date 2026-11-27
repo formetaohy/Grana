@@ -15,7 +15,6 @@ use crate::model::decoder::sums::DepthSums;
 pub(crate) struct DeconvBlock {
     upsample: Conv3d,
     conv: Conv3d,
-    norm: ChannelNorm,
     strip: Strip,
 }
 
@@ -27,6 +26,14 @@ impl DeconvBlock {
         output: usize,
         device: &Device,
     ) -> Result<Self> {
+        let conv = Conv3d::load(
+            checkpoint,
+            &format!("{prefix}.block.1.weight"),
+            &format!("{prefix}.block.1.bias"),
+            [output, output, 1, 3, 3],
+            device,
+        )?;
+        let norm = ChannelNorm::load(checkpoint, &format!("{prefix}.block.2"), device)?;
         Ok(Self {
             upsample: Conv3d::load(
                 checkpoint,
@@ -35,14 +42,7 @@ impl DeconvBlock {
                 [output, input, 1, 1, 1],
                 device,
             )?,
-            conv: Conv3d::load(
-                checkpoint,
-                &format!("{prefix}.block.1.weight"),
-                &format!("{prefix}.block.1.bias"),
-                [output, output, 1, 3, 3],
-                device,
-            )?,
-            norm: ChannelNorm::load(checkpoint, &format!("{prefix}.block.2"), device)?,
+            conv: conv.normalized(&norm),
             strip: Strip::load(checkpoint, &format!("{prefix}.block.4"), output, device)?,
         })
     }
@@ -65,12 +65,10 @@ impl DeconvBlock {
     fn activation(&self, source: Source<'_>, target: Range<usize>, side: usize) -> Tensor<5> {
         let parents = parent(&target, side / 2);
         let input = source(parents.clone());
-        let lifted = self.upsample.forward(input, [0, 0, 0], [1, 1, 1]);
+        let lifted = self.upsample.forward(input, [0, 0, 0]);
         let widened = upsample2x(lifted);
-        let activated = relu(
-            self.norm
-                .forward(self.conv.forward(widened, [0, 1, 1], [1, 1, 1])),
-        );
+        let convolved = self.conv.forward(widened, [0, 1, 1]);
+        let activated = relu(convolved);
         activated.narrow(4, raised(&target, &parents), target.len())
     }
 }
@@ -99,7 +97,7 @@ impl Sampler {
     }
 
     pub(crate) fn forward(&self, input: Tensor<5>) -> Tensor<5> {
-        upsample2x(self.conv.forward(input, [0, 0, 0], [1, 1, 1]))
+        upsample2x(self.conv.forward(input, [0, 0, 0]))
     }
 }
 

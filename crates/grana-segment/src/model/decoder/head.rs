@@ -22,14 +22,8 @@ impl Head {
             [channels, channels * 2, 3, 3, 3],
             device,
         )?;
-        let first_right = Conv3d {
-            weight: first.weight.clone().narrow(1, channels, channels),
-            bias: first.bias.clone() * 0.0,
-        };
-        let first_left = Conv3d {
-            weight: first.weight.narrow(1, 0, channels),
-            bias: first.bias,
-        };
+        let first_right = first.clone().narrow_inputs(channels, channels).silenced();
+        let first_left = first.narrow_inputs(0, channels);
         Ok(Self {
             first_left,
             first_right,
@@ -53,18 +47,15 @@ impl Head {
     ) -> Tensor<5> {
         let left = self
             .first_left
-            .forward(left_stats.normalise(left), [0, 1, 1], [1, 1, 1]);
+            .forward(left_stats.normalise(left), [0, 1, 1]);
         let right = self
             .first_right
-            .forward(right_stats.normalise(right), [0, 1, 1], [1, 1, 1]);
+            .forward(right_stats.normalise(right), [0, 1, 1]);
         relu(left + right)
     }
 
     pub(crate) fn refine(&self, combined: Tensor<5>, stats: &Statistics) -> Tensor<5> {
-        relu(
-            self.second
-                .forward(stats.normalise(combined), [0, 1, 1], [1, 1, 1]),
-        )
+        relu(self.second.forward(stats.normalise(combined), [0, 1, 1]))
     }
 
     pub(crate) fn gate(&self, mean: Tensor<5>) -> Gate {
