@@ -364,7 +364,7 @@ fn request(
         required_features: features,
         required_limits: adapter.limits(),
         experimental_features: ExperimentalFeatures::disabled(),
-        memory_hints: MemoryHints::Performance,
+        memory_hints: MemoryHints::MemoryUsage,
         trace: Trace::Off,
     }))
     .map_err(|error| format!("failed to create a graphics device: {error}"))?;

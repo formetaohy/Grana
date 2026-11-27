@@ -6,6 +6,7 @@ mod span;
 mod strip;
 mod sums;
 
+use std::collections::VecDeque;
 use std::ops::Range;
 
 use burn::prelude::*;
@@ -22,11 +23,12 @@ use crate::model::decoder::sums::{ColumnSums, DepthSums};
 
 pub(crate) const SLAB: usize = 4;
 
+const SPAN_FLOOR: usize = 32;
+
 const EMBEDDING: usize = 256;
 const FEATURES: [usize; 4] = [256, 128, 64, 32];
 const OUTPUT_CHANNELS: usize = 4;
 const READOUT_CHANNELS: usize = 5;
-const SPAN_FLOOR: usize = 64;
 
 const BASE: usize = 0;
 const Z9: usize = 1;
@@ -36,8 +38,7 @@ const X1: usize = 4;
 const Z3: usize = 5;
 const X2: usize = 6;
 const LEVELS: usize = 7;
-pub(crate) const SHIFTS: [usize; LEVELS] = [8, 8, 6, 6, 4, 4, 2];
-pub(crate) const RETENTION: [usize; LEVELS] = [4, 4, 4, 4, 4, 6, 4];
+const SHIFTS: [usize; LEVELS] = [8, 8, 6, 6, 4, 4, 2];
 
 struct Pass {
     volume: usize,
@@ -59,19 +60,21 @@ pub(crate) struct Decoder {
 #[derive(Clone)]
 struct Level {
     spans: Vec<Span>,
-    chunks: [Chunk; 2],
+    chunks: VecDeque<Chunk>,
     shape: [usize; 3],
     device: Device,
+    end: usize,
 }
 
 impl Level {
     fn open(side: usize, splits: usize, channels: usize, device: &Device) -> Self {
         let spans = stripe(side, splits).spans();
         Self {
-            chunks: [Chunk::empty(), Chunk::empty()],
+            chunks: VecDeque::new(),
             spans,
             shape: [channels, side, side],
             device: device.clone(),
+            end: 0,
         }
     }
 
@@ -84,11 +87,12 @@ impl Level {
         if cover.is_empty() {
             return;
         }
-        self.chunks[0] = std::mem::replace(&mut self.chunks[1], Chunk::of(parts, cover));
+        self.end = self.end.max(cover.end);
+        self.chunks.push_back(Chunk::of(parts, cover));
     }
 
     fn end(&self) -> usize {
-        self.chunks[1].cover.end.max(self.chunks[0].cover.end)
+        self.end
     }
 
     fn side(&self) -> usize {
@@ -99,7 +103,7 @@ impl Level {
             .unwrap_or(0)
     }
 
-    fn gather(&self, z: Range<isize>, x: Range<usize>) -> Tensor<5> {
+    fn gather(&self, z: Range<isize>, x: Range<usize>, volume: usize) -> Tensor<5> {
         let depth = (z.end - z.start).max(0) as usize;
         let mut pieces = Vec::new();
         for (position, span) in self.spans.iter().enumerate() {
@@ -116,38 +120,90 @@ impl Level {
                     covers.push(chunk.cover.clone());
                 }
             }
-            pieces.push(zwindow(
-                &chunk_parts,
-                &covers,
-                self.shape,
-                end - start,
-                z.clone(),
-                depth,
-                &self.device,
-            ));
+            pieces.push(self.zwindow(&chunk_parts, &covers, end - start, z.clone(), depth, volume));
         }
         assert!(!pieces.is_empty(), "a gathered window overlaps a span");
         joined(pieces)
     }
 
-    fn trim(&mut self, keep: usize) {
-        let latest = self.chunks[1].cover.clone();
-        if latest.is_empty() {
-            return;
+    fn zwindow(
+        &self,
+        chunks: &[Tensor<5>],
+        covers: &[Range<usize>],
+        xwidth: usize,
+        z: Range<isize>,
+        depth: usize,
+        volume: usize,
+    ) -> Tensor<5> {
+        let [channels, height, _] = self.shape;
+        let zeros = |len: usize| -> Option<Tensor<5>> {
+            if len == 0 {
+                return None;
+            }
+            Some(
+                Tensor::<5>::zeros([1, channels, 1, height, xwidth], &self.device)
+                    .expand([1, channels, len, height, xwidth]),
+            )
+        };
+        let mut pieces: Vec<Tensor<5>> = Vec::new();
+        let mut zpos = z.start;
+        for (chunk, cover) in chunks.iter().zip(covers) {
+            if cover.is_empty() {
+                continue;
+            }
+            let lo = (cover.start as isize).max(zpos).max(z.start);
+            let hi = (cover.end as isize).min(z.end);
+            if hi <= lo {
+                continue;
+            }
+            if lo > zpos {
+                assert!(
+                    lo <= 0,
+                    "a gathered window never reads missing interior slices: cover {cover:?} against {z:?} (zpos={zpos}, lo={lo})"
+                );
+                if let Some(padding) = zeros((lo - zpos) as usize) {
+                    pieces.push(padding);
+                }
+            }
+            let offset = (lo - cover.start as isize) as usize;
+            pieces.push(chunk.clone().narrow(2, offset, (hi - lo) as usize));
+            zpos = hi;
         }
-        let keep = keep.min(latest.len());
-        let floor = latest.end - keep;
-        let front = self.chunks[0].cover.clone();
-        if front.end <= floor {
-            self.chunks[0] = Chunk::empty();
-        } else if front.start < floor {
-            let len = front.end - floor;
-            let drop = front.len() - len;
-            self.chunks[0] = self.chunks[0].compact_tail(drop, len);
+        let used = pieces.iter().map(|piece| piece.dims()[2]).sum::<usize>();
+        if used < depth {
+            assert!(
+                zpos >= volume as isize,
+                "a gathered window never pads missing trailing interior slices: zpos={zpos} volume={volume} z={z:?}"
+            );
+            if let Some(padding) = zeros(depth - used) {
+                pieces.push(padding);
+            }
         }
-        if latest.len() > keep {
-            let drop = latest.len() - keep;
-            self.chunks[1] = self.chunks[1].compact_tail(drop, keep);
+        assert_eq!(
+            pieces.iter().map(|piece| piece.dims()[2]).sum::<usize>(),
+            depth,
+            "a gathered window covers its requested depth"
+        );
+        if pieces.len() == 1 {
+            return pieces.into_iter().next().expect("one window piece");
+        }
+        Tensor::cat(pieces, 2)
+    }
+
+    fn trim_before(&mut self, floor: usize) {
+        while let Some(front) = self.chunks.front() {
+            if front.cover.end <= floor {
+                self.chunks.pop_front();
+            } else {
+                break;
+            }
+        }
+        if let Some(front) = self.chunks.front_mut()
+            && front.cover.start < floor
+        {
+            let len = front.cover.end - floor;
+            let drop = front.cover.len() - len;
+            *front = front.compact_tail(drop, len);
         }
     }
 }
@@ -161,13 +217,6 @@ struct Chunk {
 impl Chunk {
     fn of(parts: Vec<Tensor<5>>, cover: Range<usize>) -> Self {
         Self { parts, cover }
-    }
-
-    fn empty() -> Self {
-        Self {
-            parts: Vec::new(),
-            cover: 0..0,
-        }
     }
 
     fn compact_tail(&self, drop: usize, keep: usize) -> Self {
@@ -184,66 +233,6 @@ impl Chunk {
 
 fn compact(tensor: Tensor<5>) -> Tensor<5> {
     tensor + 0.0
-}
-
-fn zwindow(
-    chunks: &[Tensor<5>],
-    covers: &[Range<usize>],
-    shape: [usize; 3],
-    xwidth: usize,
-    z: Range<isize>,
-    depth: usize,
-    device: &Device,
-) -> Tensor<5> {
-    let [channels, height, _] = shape;
-    let zeros = |len: usize| -> Option<Tensor<5>> {
-        if len == 0 {
-            return None;
-        }
-        Some(
-            Tensor::<5>::zeros([1, channels, 1, height, xwidth], device)
-                .expand([1, channels, len, height, xwidth]),
-        )
-    };
-    let mut pieces: Vec<Tensor<5>> = Vec::new();
-    let mut zpos = z.start;
-    for (chunk, cover) in chunks.iter().zip(covers) {
-        if cover.is_empty() {
-            continue;
-        }
-        let lo = (cover.start as isize).max(zpos).max(z.start);
-        let hi = (cover.end as isize).min(z.end);
-        if hi <= lo {
-            continue;
-        }
-        if lo > zpos {
-            assert!(
-                zpos <= z.start,
-                "a gathered window never reads interior holes: cover {cover:?} against {z:?}"
-            );
-            if let Some(padding) = zeros((lo - zpos) as usize) {
-                pieces.push(padding);
-            }
-        }
-        let offset = (lo - cover.start as isize) as usize;
-        pieces.push(chunk.clone().narrow(2, offset, (hi - lo) as usize));
-        zpos = hi;
-    }
-    let used = pieces.iter().map(|piece| piece.dims()[2]).sum::<usize>();
-    if used < depth
-        && let Some(padding) = zeros(depth - used)
-    {
-        pieces.push(padding);
-    }
-    assert_eq!(
-        pieces.iter().map(|piece| piece.dims()[2]).sum::<usize>(),
-        depth,
-        "a gathered window covers its requested depth"
-    );
-    if pieces.len() == 1 {
-        return pieces.into_iter().next().expect("one window piece");
-    }
-    Tensor::cat(pieces, 2)
 }
 
 struct Stream {
@@ -265,10 +254,8 @@ impl Stream {
         Self { levels }
     }
 
-    fn advance(&mut self) {
-        for (index, level) in self.levels.iter_mut().enumerate() {
-            level.trim(RETENTION[index]);
-        }
+    fn trim_level(&mut self, level: usize, floor: usize) {
+        self.levels[level].trim_before(floor);
     }
 }
 
@@ -344,7 +331,9 @@ impl Decoder {
         splits: usize,
         emit: &mut dyn FnMut(usize, Tensor<5>) -> Result<()>,
     ) -> Result<()> {
-        let mut stream = Stream::open(splits, &self.readout.weight.device());
+        let device = self.readout.weight.device();
+        prime_pool(&device, max_tensor_bytes(depth, splits));
+        let mut stream = Stream::open(splits, &device);
         let mut start = 0;
         while start < depth {
             let end = depth.min(start + SLAB);
@@ -355,7 +344,6 @@ impl Decoder {
                 splits,
             };
             self.pass(features, &pass, &mut stream, emit)?;
-            stream.advance();
             start = end;
         }
         Ok(())
@@ -400,11 +388,53 @@ impl Decoder {
 
         self.produce_deconv(stream, pass, Z6, Z9, 1, side * 4);
         self.produce_block(stream, pass, X0, [BASE, Z9], 0, side * 2);
-        self.produce_block(stream, pass, X1, [X0, Z6], 1, side * 4);
-        self.produce_deconv(stream, pass, Z3, Z6, 2, side * 8);
-        self.produce_block(stream, pass, X2, [X1, Z3], 2, side * 8);
+        let floor_base = if stream.levels[X0].end() < pass.volume {
+            stream.levels[X0].end().saturating_sub(2)
+        } else {
+            pass.volume
+        };
+        let floor_z9 = floor_base.min(if stream.levels[Z6].end() < pass.volume {
+            stream.levels[Z6].end()
+        } else {
+            pass.volume
+        });
+        stream.trim_level(BASE, floor_base);
+        stream.trim_level(Z9, floor_z9);
 
-        self.emit_pass(stream, pass, emit)
+        self.produce_block(stream, pass, X1, [X0, Z6], 1, side * 4);
+        let floor_x0 = if stream.levels[X1].end() < pass.volume {
+            stream.levels[X1].end().saturating_sub(2)
+        } else {
+            pass.volume
+        };
+        stream.trim_level(X0, floor_x0);
+
+        self.produce_deconv(stream, pass, Z3, Z6, 2, side * 8);
+        let floor_z6 = floor_x0.min(if stream.levels[Z3].end() < pass.volume {
+            stream.levels[Z3].end()
+        } else {
+            pass.volume
+        });
+        stream.trim_level(Z6, floor_z6);
+
+        self.produce_block(stream, pass, X2, [X1, Z3], 2, side * 8);
+        let floor_x1 = if stream.levels[X2].end() < pass.volume {
+            stream.levels[X2].end().saturating_sub(2)
+        } else {
+            pass.volume
+        };
+        stream.trim_level(X1, floor_x1);
+
+        self.emit_pass(stream, pass, emit)?;
+        let floor_emit = if pass.b < pass.volume {
+            pass.b.saturating_sub(2)
+        } else {
+            pass.volume
+        };
+        let floor_z3 = floor_emit.min(floor_x1);
+        stream.trim_level(Z3, floor_z3);
+        stream.trim_level(X2, floor_emit);
+        Ok(())
     }
 
     fn produce_deconv(
@@ -421,8 +451,9 @@ impl Decoder {
             return;
         }
         let z = target.start as isize..target.end as isize;
+        let volume = pass.volume;
         let upstream = stream.levels[upstream].clone();
-        let source = move |x: Range<usize>| upstream.gather(z.clone(), x);
+        let source = move |x: Range<usize>| upstream.gather(z.clone(), x, volume);
         let parts = self.deconv[index]
             .split(&source, stripe(side, pass.splits))
             .into_tensors();
@@ -443,13 +474,15 @@ impl Decoder {
             return;
         }
         let z = target.start as isize - 2..target.end as isize + 2;
+        let volume = pass.volume;
         let sampled = stream.levels[inputs[0]].clone();
         let decoded = stream.levels[inputs[1]].clone();
         let sampler = &self.samplers[index];
         let channels = FEATURES[index + 1];
         let source = move |x: Range<usize>| {
-            let raised_input = sample_gathered(sampler, &sampled, z.clone(), x.clone());
-            let decoder_input = center_channels(decoded.gather(z.clone(), x.clone()), channels);
+            let raised_input = sample_gathered(sampler, &sampled, z.clone(), x.clone(), volume);
+            let decoder_input =
+                center_channels(decoded.gather(z.clone(), x.clone(), volume), channels);
             Tensor::cat(vec![raised_input, decoder_input], 1)
         };
         let parts = self.blocks[index]
@@ -472,9 +505,10 @@ impl Decoder {
 
         let x2 = stream.levels[X2].clone();
         let z3 = stream.levels[Z3].clone();
+        let volume = pass.volume;
         let zw = z.clone();
-        let xout_of = move |x: Range<usize>| x2.gather(zw.clone(), x);
-        let z0_of = move |x: Range<usize>| z3.gather(z.clone(), x);
+        let xout_of = move |x: Range<usize>| x2.gather(zw.clone(), x, volume);
+        let z0_of = move |x: Range<usize>| z3.gather(z.clone(), x, volume);
 
         let mut left_stats: Option<ColumnSums> = None;
         let mut right_stats: Option<ColumnSums> = None;
@@ -532,9 +566,10 @@ fn sample_gathered(
     level: &Level,
     z: Range<isize>,
     x: Range<usize>,
+    volume: usize,
 ) -> Tensor<5> {
     let parents = parent(&x, level.side());
-    let gathered = level.gather(z, parents.clone());
+    let gathered = level.gather(z, parents.clone(), volume);
     let sampled = sampler.forward(gathered);
     sampled.narrow(4, raised(&x, &parents), x.end - x.start)
 }
@@ -583,6 +618,60 @@ fn narrow_source(input: &Tensor<5>) -> impl Fn(Range<usize>) -> Tensor<5> + '_ {
             .clone()
             .narrow(4, range.start, range.end - range.start)
     }
+}
+
+fn prime_pool(device: &Device, bytes: u64) {
+    let elements = bytes.div_ceil(size_of::<f32>() as u64) as usize;
+    if elements == 0 {
+        return;
+    }
+    let _ = Tensor::<1>::zeros([elements], device)
+        .narrow(0, 0, 1)
+        .into_data();
+}
+
+pub(crate) fn max_tensor_bytes(depth: usize, splits: usize) -> u64 {
+    let bytes = |channels: usize, slices: usize, height: usize, width: usize| -> u64 {
+        channels as u64 * slices as u64 * height as u64 * width as u64 * size_of::<f32>() as u64
+    };
+    let span_width = |side: usize, halo: usize| -> usize {
+        let count = splits.min(side / SPAN_FLOOR).max(1);
+        let extent = side / count;
+        if count == 1 {
+            extent
+        } else if count == 2 {
+            extent + halo
+        } else {
+            extent + 2 * halo
+        }
+    };
+    let deconv_width = |side: usize, widened: bool| -> usize {
+        let count = splits.min(side / SPAN_FLOOR).max(1);
+        let extent = side / count;
+        let target_start = if count > 1 { extent } else { 0 };
+        let target_end = (target_start + extent).min(side);
+        let target = if widened {
+            target_start.saturating_sub(1)..(target_end + 1).min(side)
+        } else {
+            target_start..target_end
+        };
+        let parents = parent(&target, side / 2);
+        (parents.end - parents.start) * 2
+    };
+    let produced = |shift: usize| -> usize { (SLAB + shift).min(depth) };
+    let encoder = 36u64 << 20;
+    let base = bytes(256, produced(SHIFTS[BASE]) + 4, 64, span_width(64, 1));
+    let z9 = bytes(256, produced(SHIFTS[Z9]), 128, deconv_width(128, false));
+    let z6 = bytes(128, produced(SHIFTS[Z6]), 256, deconv_width(256, false));
+    let x0 = bytes(256, produced(SHIFTS[X0]) + 4, 128, span_width(128, 1));
+    let x1 = bytes(128, produced(SHIFTS[X1]) + 4, 256, span_width(256, 1));
+    let z3 = bytes(64, produced(SHIFTS[Z3]), 512, deconv_width(512, false));
+    let x2 = bytes(64, produced(SHIFTS[X2]) + 4, 512, span_width(512, 1));
+    let emit = bytes(32, depth.min(SLAB) + 4, 1024, deconv_width(1024, true));
+    [encoder, base, z9, z6, x0, x1, z3, x2, emit]
+        .into_iter()
+        .max()
+        .unwrap_or(encoder)
 }
 
 fn stripe(side: usize, splits: usize) -> Stripe {

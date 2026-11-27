@@ -20,11 +20,20 @@ pub(crate) struct Model {
 impl Model {
     pub(crate) fn open(path: &Path) -> Result<Self> {
         let device = crate::device::open()?;
-        let checkpoint = checkpoint::Checkpoint::open(path)?;
-        let weights = checkpoint.bytes();
+        let path = path.to_path_buf();
+        let (encoder, decoder, weights) = device.memory_persistent_allocations(
+            (path, device.clone()),
+            |(path, device)| -> Result<_> {
+                let checkpoint = checkpoint::Checkpoint::open(&path)?;
+                let weights = checkpoint.bytes();
+                let encoder = encoder::Encoder::load(&checkpoint, &device)?;
+                let decoder = decoder::Decoder::load(&checkpoint, &device)?;
+                Ok((encoder, decoder, weights))
+            },
+        )?;
         Ok(Self {
-            encoder: encoder::Encoder::load(&checkpoint, &device)?,
-            decoder: decoder::Decoder::load(&checkpoint, &device)?,
+            encoder,
+            decoder,
             device,
             weights,
             peaks: Peaks::default(),

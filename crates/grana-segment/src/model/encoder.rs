@@ -19,6 +19,9 @@ const GLOBAL_BLOCKS: [usize; 3] = [5, 7, 9];
 const WINDOW_SIDE: usize = 8;
 const POSITION_SIDE: usize = 7;
 const NECK_CHANNELS: usize = 256;
+const ATTENTION_TOKENS: usize = 4096;
+const PERCEPTRON_TOKENS: usize = 8192;
+const SHORTCUT_ROWS: usize = 64;
 
 struct Attention {
     query_key_value: Linear,
@@ -57,6 +60,22 @@ impl Attention {
     }
 
     fn forward(&self, input: Tensor<4>, queries: usize) -> Tensor<4> {
+        let [batch, height, width, _] = input.dims();
+        let step = (ATTENTION_TOKENS / (height * width)).max(1);
+        if batch <= step {
+            return self.forward_chunk(input, queries);
+        }
+        let mut parts = Vec::with_capacity(batch.div_ceil(step));
+        let mut start = 0;
+        while start < batch {
+            let length = step.min(batch - start);
+            parts.push(self.forward_chunk(input.clone().narrow(0, start, length), queries));
+            start += length;
+        }
+        Tensor::cat(parts, 0)
+    }
+
+    fn forward_chunk(&self, input: Tensor<4>, queries: usize) -> Tensor<4> {
         let [batch, height, width, dimension] = input.dims();
         let tokens = height * width;
         let heads = self.heads;
@@ -158,14 +177,26 @@ impl Perceptron {
 
     fn forward(&self, input: Tensor<4>) -> Tensor<4> {
         let [batch, height, width, dimension] = input.dims();
-        let tokens = height * width;
-        let hidden = gelu(
-            self.first
-                .forward(input.reshape([batch, tokens, dimension])),
-        );
-        self.second
-            .forward(hidden)
-            .reshape([batch, height, width, dimension])
+        let total = batch * height * width;
+        let flat = input.reshape([1, total, dimension]);
+        let output = if total <= PERCEPTRON_TOKENS {
+            self.forward_chunk(flat)
+        } else {
+            let mut parts = Vec::with_capacity(total.div_ceil(PERCEPTRON_TOKENS));
+            let mut start = 0;
+            while start < total {
+                let length = PERCEPTRON_TOKENS.min(total - start);
+                parts.push(self.forward_chunk(flat.clone().narrow(1, start, length)));
+                start += length;
+            }
+            Tensor::cat(parts, 1)
+        };
+        output.reshape([batch, height, width, dimension])
+    }
+
+    fn forward_chunk(&self, input: Tensor<3>) -> Tensor<3> {
+        let hidden = gelu(self.first.forward(input));
+        self.second.forward(hidden)
     }
 }
 
@@ -241,27 +272,30 @@ impl Block {
         let [batch, height, width, _] = input.dims();
         let normed = self.norm_one.forward(input.clone());
         let shortcut = if self.dim != self.dim_out {
-            let projected = self
+            let projection = self
                 .projection
                 .as_ref()
-                .expect("a widening block holds a projection")
-                .forward(normed.clone().reshape([batch, height * width, self.dim]))
-                .reshape([batch, height, width, self.dim_out]);
+                .expect("a widening block holds a projection");
             if self.pool {
-                let pooled =
-                    projected
-                        .permute([0, 3, 1, 2])
-                        .reshape([batch, self.dim_out, height, width]);
-                let pooled = burn::tensor::module::max_pool2d(pooled, MaxPoolOptions::new([2, 2]));
-                let [_, _, pooled_height, pooled_width] = pooled.dims();
-                pooled.permute([0, 2, 3, 1]).reshape([
-                    batch,
-                    pooled_height,
-                    pooled_width,
-                    self.dim_out,
-                ])
+                let mut rows = Vec::with_capacity(height.div_ceil(SHORTCUT_ROWS));
+                let mut start = 0;
+                while start < height {
+                    let length = SHORTCUT_ROWS.min(height - start);
+                    let strip = normed.clone().narrow(1, start, length);
+                    let projected = projection
+                        .forward(strip.reshape([batch, length * width, self.dim]))
+                        .reshape([batch, length, width, self.dim_out])
+                        .permute([0, 3, 1, 2]);
+                    let pooled =
+                        burn::tensor::module::max_pool2d(projected, MaxPoolOptions::new([2, 2]));
+                    rows.push(pooled.permute([0, 2, 3, 1]));
+                    start += length;
+                }
+                Tensor::cat(rows, 1)
             } else {
-                projected
+                projection
+                    .forward(normed.clone().reshape([batch, height * width, self.dim]))
+                    .reshape([batch, height, width, self.dim_out])
             }
         } else {
             input

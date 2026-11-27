@@ -92,30 +92,21 @@ impl Segmenter {
         plan: Plan,
         progress: &mut dyn FnMut(usize),
     ) -> Result<Volume> {
-        let baseline = self
-            .model
-            .device()
-            .memory_pool_report()
-            .map(|pools| pools.iter().map(|pool| pool.pages_peak).collect::<Vec<_>>());
-        let prediction = self.predict(planes, width, height, plan, progress)?;
-        if let Some(baseline) = baseline {
-            self.account(planes.len() as u32, plan, &baseline);
+        let prediction = self.predict(planes, width, height, plan, progress);
+        if prediction.is_ok() {
+            self.account(planes.len() as u32, plan);
         }
+        self.model.device().memory_cleanup();
+        let prediction = prediction?;
         let labels = postprocess::labels(&prediction, self.settings);
         Ok(Volume::new(width, height, planes.len() as u32, labels))
     }
 
-    fn account(&self, depth: u32, plan: Plan, baseline: &[u64]) {
-        let Some(pools) = self.model.device().memory_pool_report() else {
+    fn account(&self, depth: u32, plan: Plan) {
+        let Some(usage) = self.model.device().memory_pool_usage() else {
             return;
         };
-        let mut measured = 0u64;
-        for (position, pool) in pools.iter().enumerate() {
-            let before = baseline.get(position).copied().unwrap_or(0);
-            measured += pool
-                .page_size
-                .saturating_mul(pool.pages_peak.saturating_sub(before));
-        }
+        let measured = usage.bytes_reserved.saturating_sub(self.model.weights());
         self.model
             .peaks()
             .record(depth as usize, plan.splits(), measured);

@@ -1,7 +1,3 @@
 [profile.default]
 fail-fast = false
 slow-timeout = { period = "60s", terminate-after = 20 }
-
-[[profile.default.overrides]]
-filter = "test(splitting_the_decode_keeps_every_label) | test(deep_volumes_segment_inside_the_budget) | test(tiled_volumes_hold_together_across_the_seams) | test(shallow_volumes_keep_their_labels)"
-threads-required = 64

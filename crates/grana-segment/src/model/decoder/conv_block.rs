@@ -5,7 +5,7 @@ use crate::Result;
 use crate::model::checkpoint::{Checkpoint, Conv3d};
 use crate::model::decoder::deconv::gate_of;
 use crate::model::decoder::parts::{Parts, split};
-use crate::model::decoder::span::{Source, Span, Stripe};
+use crate::model::decoder::span::{Source, Stripe};
 use crate::model::decoder::strip::Strip;
 use crate::model::decoder::sums::{ColumnSums, DepthSums};
 
@@ -49,17 +49,15 @@ impl ConvBlock {
     fn gated(&self, source: Source<'_>, stripe: Stripe) -> Vec<Tensor<5>> {
         let spans = stripe.spans();
         let mut inputs: Option<ColumnSums> = None;
-        let mut fetched: Vec<(Span, Tensor<5>)> = Vec::new();
-        for span in spans {
-            let window = source(span.context(1));
-            accumulate(&mut inputs, &span.crop(window.clone(), 1));
-            fetched.push((span, window));
+        for &span in &spans {
+            accumulate(&mut inputs, &source(span.context(0)));
         }
         let first_stats = inputs.expect("a stripe holds one span").statistics();
 
         let mut raised_sums: Option<ColumnSums> = None;
-        let mut raised_parts = Vec::new();
-        for (span, window) in fetched {
+        let mut raised_parts = Vec::with_capacity(spans.len());
+        for &span in &spans {
+            let window = source(span.context(1));
             let raised = relu(self.first.forward(
                 first_stats.normalise(window),
                 [0, 1, 1],
@@ -70,7 +68,7 @@ impl ConvBlock {
         }
         let second_stats = raised_sums.expect("a stripe holds one span").statistics();
 
-        let mut parts = Vec::new();
+        let mut parts = Vec::with_capacity(raised_parts.len());
         for (span, raised) in raised_parts {
             let widened = self
                 .second
