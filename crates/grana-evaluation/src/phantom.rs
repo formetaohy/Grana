@@ -218,23 +218,13 @@ impl Phantom {
             for cell in &live {
                 let truth = radii(spec, cell.scale);
                 markers.push(Marker::new(cell.label, time, cell.position, truth));
-                if rng.random::<f32>() >= spec.miss {
-                    found.push(measure(
-                        &mut rng,
-                        spec,
-                        ObjectId::new(cell.label),
-                        cell.position,
-                        truth,
-                    ));
-                }
-            }
-            if rng.random::<f32>() < spec.false_alarm {
-                let id = ObjectId::new(next);
-                next += 1;
-                let scale = scale_of(&mut rng, spec);
-                let truth = radii(spec, scale);
-                let position = spawn(&mut rng, spec.extent, truth);
-                found.push(measure(&mut rng, spec, id, position, truth));
+                found.push(measure(
+                    &mut rng,
+                    spec,
+                    ObjectId::new(cell.label),
+                    cell.position,
+                    truth,
+                ));
             }
             frames.push(markers);
             detections.push(found);
@@ -261,6 +251,7 @@ impl Phantom {
             }
             advance(&mut rng, spec, &mut live);
         }
+        degrade(spec, &mut detections, &mut next);
         let mut spans = BTreeMap::<u32, (u32, u32)>::new();
         for (time, markers) in frames.iter().enumerate() {
             for marker in markers {
@@ -291,6 +282,28 @@ impl Phantom {
 
     pub fn into_parts(self) -> (Truth, Vec<Vec<TrackDetection>>) {
         (self.truth, self.detections)
+    }
+}
+
+const SPECTRUM_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+
+fn degrade(spec: Spec, detections: &mut [Vec<TrackDetection>], next: &mut u32) {
+    let mut rng = StdRng::seed_from_u64(spec.seed ^ SPECTRUM_SEED);
+    for frame in detections.iter_mut() {
+        frame.retain(|_| rng.random::<f32>() >= spec.miss);
+        if rng.random::<f32>() < spec.false_alarm {
+            let scale = scale_of(&mut rng, spec);
+            let truth = radii(spec, scale);
+            let position = spawn(&mut rng, spec.extent, truth);
+            frame.push(measure(
+                &mut rng,
+                spec,
+                ObjectId::new(*next),
+                position,
+                truth,
+            ));
+            *next += 1;
+        }
     }
 }
 

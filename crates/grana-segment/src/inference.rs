@@ -278,7 +278,6 @@ impl Segmenter {
             width: width as usize,
             height: height as usize,
             tile_width: tile_width as usize,
-            tile_height: tile_height as usize,
             tile_area,
             x_start: x.start as usize,
             y_start: y.start as usize,
@@ -286,8 +285,6 @@ impl Segmenter {
             y_inner: y.inner as usize,
             x_halo: x.halo as usize,
             y_halo: y.halo as usize,
-            resized_height,
-            resized_width,
         };
         self.model.decode(
             &features,
@@ -365,7 +362,6 @@ struct Copy {
     width: usize,
     height: usize,
     tile_width: usize,
-    tile_height: usize,
     tile_area: usize,
     x_start: usize,
     y_start: usize,
@@ -373,15 +369,10 @@ struct Copy {
     y_inner: usize,
     x_halo: usize,
     y_halo: usize,
-    resized_height: usize,
-    resized_width: usize,
 }
 
 impl Copy {
     fn planes(&self, channels: &mut [Vec<f32>; CHANNELS], index: usize, values: &[f32]) {
-        let _ = self.tile_height;
-        let _ = self.resized_height;
-        let _ = self.resized_width;
         for channel in 0..CHANNELS {
             let source = &values[channel * self.tile_area..(channel + 1) * self.tile_area];
             for local_y in 0..self.y_inner {
