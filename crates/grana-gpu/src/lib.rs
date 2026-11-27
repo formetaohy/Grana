@@ -12,10 +12,11 @@ mod table;
 
 pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TEXTURE_BINDING_ARRAY
     .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
-    .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+    .union(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
+    .union(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT);
 
 pub use buffer::storage as storage_buffer;
-pub use command::{IndirectDraw, InstanceCommands};
+pub use command::{InstanceCommands, MultiDraw};
 pub use device::{Gpu, Graphics, HEADLESS_FORMAT, Headless, Lost};
 pub use ledger::{Claim, Consumer, Ledger};
 pub use memory::{Memory, Pool};

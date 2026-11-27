@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use grana_volume::{
-    Calibration, Census, ChannelInfo, Extent, Intensity, Level, NoData, Placement, Pyramid,
-    Spacing, Statistics, VoxelData, VoxelFormat, name_of, tint_of,
+    Calibration, Census, ChannelInfo, Extent, Intensity, Level, Measured, NoData, Placement,
+    Pyramid, Spacing, Statistics, VoxelData, VoxelFormat, name_of, tint_of,
 };
 
 use grana_ome::{Image as OmeImage, TiffData};
@@ -332,7 +332,7 @@ impl Image {
                     .any(|(held, _)| *held == index as usize)
                 {
                     true => info,
-                    false => match sampled {
+                    false => match &sampled {
                         Some(sampled) => info.with_background(sampled.background()),
                         None => info,
                     },
@@ -348,11 +348,12 @@ impl Image {
                 Some((data, window)) => ChannelInfo::new(
                     name,
                     tint,
-                    Statistics::declared(data, sampled.semantics()),
+                    Statistics::declared(data, sampled.statistics().semantics()),
                     format,
                 )
-                .with_window(window),
-                None => ChannelInfo::new(name, tint, sampled, format),
+                .with_window(window)
+                .with_measured(sampled),
+                None => ChannelInfo::measured(name, tint, sampled, format),
             };
             channels.push(info);
         }
@@ -1120,7 +1121,7 @@ fn sample_range(
     levels: &[LevelPages],
     channel: u32,
     frames: u32,
-) -> Result<Option<Statistics>, Error> {
+) -> Result<Option<Measured>, Error> {
     let Some(level) = levels.first() else {
         return Ok(None);
     };

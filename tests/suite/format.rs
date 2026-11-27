@@ -1645,6 +1645,15 @@ fn reads_ome_tiff_metadata_and_voxels() {
     assert_eq!(pyramid.level(0).spacing(), Spacing::new(0.2, 0.2, 1.0));
     assert_eq!(pyramid.channels()[0].name(), "GFP");
     assert_eq!(pyramid.channels()[0].tint(), [0.0, 1.0, 0.0]);
+    let channel = &pyramid.channels()[0];
+    let profile = channel
+        .histogram()
+        .expect("a censused channel keeps its intensity profile");
+    assert_eq!(
+        profile.range(),
+        channel.intensity(),
+        "the profile spans the intensity the census declares"
+    );
     assert_eq!(image.series().len(), 1);
     let data = image
         .read_region(0, 0, 0, 0..32, 0..32, 0..2)

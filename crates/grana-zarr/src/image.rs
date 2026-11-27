@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use grana_volume::{
-    Calibration, Census, ChannelInfo, Intensity, NoData, Pyramid, Statistics, VoxelData,
+    Calibration, Census, ChannelInfo, Intensity, Measured, NoData, Pyramid, Statistics, VoxelData,
     VoxelFormat, VoxelSemantics, name_of, tint_of,
 };
 use serde_json::{Map, Value};
@@ -863,19 +863,30 @@ fn channels(
             let omero_window = metadata
                 .and_then(|metadata| metadata.window)
                 .and_then(valid);
-            let statistics = match data_range {
-                Some(data) => Statistics::declared(data, semantics),
-                None => {
-                    let sampled = sample_range(tiles, levels, index as usize, frames, no_data)?;
-                    let sampled = sampled.ok_or_else(|| Error::Metadata {
-                        path: origin.to_string(),
-                        detail: format!("the channel {index} exposes no voxel to census"),
-                    })?;
-                    Statistics::declared(sampled.intensity(), semantics)
-                }
+            let sampled = match data_range {
+                Some(_) => None,
+                None => Some(
+                    sample_range(tiles, levels, index as usize, frames, no_data)?.ok_or_else(
+                        || Error::Metadata {
+                            path: origin.to_string(),
+                            detail: format!("the channel {index} exposes no voxel to census"),
+                        },
+                    )?,
+                ),
+            };
+            let statistics = match &sampled {
+                Some(sampled) => Statistics::declared(sampled.statistics().intensity(), semantics),
+                None => Statistics::declared(
+                    data_range.expect("a declared channel names its own range"),
+                    semantics,
+                ),
             };
             let info = ChannelInfo::new(name, tint, statistics, format);
             let info = info.with_no_data(no_data);
+            let info = match sampled {
+                Some(sampled) => info.with_measured(sampled),
+                None => info,
+            };
             Ok(match omero_window {
                 Some(window) => info.with_window(window),
                 None => info,
@@ -890,7 +901,7 @@ fn sample_range(
     channel: usize,
     frames: u32,
     no_data: NoData,
-) -> Result<Option<Statistics>, Error> {
+) -> Result<Option<Measured>, Error> {
     let index = levels.len() - 1;
     let level = levels.last().expect("a multiscale image has a level");
     let unit = crate::tile::Unit {

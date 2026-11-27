@@ -1,5 +1,7 @@
 use bytemuck::bytes_of;
-use wgpu::{Buffer, BufferUsages, Device, Queue};
+use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
+
+const REGION_LIMIT: usize = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -11,32 +13,40 @@ struct IndexedArgs {
     first_instance: u32,
 }
 
-pub struct IndirectDraw {
+pub struct MultiDraw {
     args: Buffer,
-    counters: Buffer,
+    counts: Buffer,
     stride: u64,
+    regions: usize,
+    capacity: u32,
 }
 
-impl IndirectDraw {
-    pub fn new(device: &Device, label: &'static str, regions: usize) -> Self {
-        assert!(regions > 0, "an indirect draw table holds a region");
+impl MultiDraw {
+    pub fn new(device: &Device, label: &'static str, regions: usize, capacity: u32) -> Self {
+        assert!(
+            (1..=REGION_LIMIT).contains(&regions),
+            "a multi draw holds one to {REGION_LIMIT} regions"
+        );
+        assert!(capacity > 0, "a multi draw holds one row per object");
         let stride = size_of::<IndexedArgs>() as u64;
-        let args = device.create_buffer(&wgpu::BufferDescriptor {
+        let args = device.create_buffer(&BufferDescriptor {
             label: Some(label),
-            size: stride * regions as u64,
-            usage: BufferUsages::INDIRECT | BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            size: stride * capacity as u64 * regions as u64,
+            usage: BufferUsages::INDIRECT | BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let counters = device.create_buffer(&wgpu::BufferDescriptor {
+        let counts = device.create_buffer(&BufferDescriptor {
             label: Some(label),
-            size: size_of::<[u32; 8]>() as u64,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            size: (regions * size_of::<u32>()) as u64,
+            usage: BufferUsages::INDIRECT | BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         Self {
             args,
-            counters,
+            counts,
             stride,
+            regions,
+            capacity,
         }
     }
 
@@ -44,16 +54,37 @@ impl IndirectDraw {
         &self.args
     }
 
-    pub fn counters(&self) -> &Buffer {
-        &self.counters
+    pub fn counts(&self) -> &Buffer {
+        &self.counts
+    }
+
+    pub fn capacity(&self) -> u32 {
+        self.capacity
     }
 
     pub fn region(&self, region: usize) -> u64 {
-        self.stride * region as u64
+        assert!(
+            region < self.regions,
+            "a draw region lies inside the multi draw"
+        );
+        self.stride * self.capacity as u64 * region as u64
+    }
+
+    pub fn count(&self, region: usize) -> u64 {
+        assert!(
+            region < self.regions,
+            "a draw region lies inside the multi draw"
+        );
+        size_of::<u32>() as u64 * region as u64
     }
 
     pub fn reset(&self, queue: &Queue) {
-        queue.write_buffer(&self.counters, 0, bytes_of(&[0u32; 8]));
+        const ZERO: [u8; REGION_LIMIT * size_of::<u32>()] = [0; REGION_LIMIT * size_of::<u32>()];
+        queue.write_buffer(&self.counts, 0, &ZERO[..self.regions * size_of::<u32>()]);
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.args.size() + self.counts.size()
     }
 }
 
@@ -63,7 +94,7 @@ pub struct InstanceCommands {
 
 impl InstanceCommands {
     pub fn new(device: &Device, label: &'static str) -> Self {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let buffer = device.create_buffer(&BufferDescriptor {
             label: Some(label),
             size: size_of::<[u32; 4]>() as u64,
             usage: BufferUsages::INDIRECT | BufferUsages::STORAGE | BufferUsages::COPY_DST,

@@ -4,8 +4,6 @@
 @group(4) @binding(3) var oit_residual_color: texture_2d<f32>;
 @group(4) @binding(4) var oit_residual_moment: texture_2d<f32>;
 
-const MAXIMUM_ENTRIES: u32 = 9u;
-
 struct Layers {
     depth: array<f32, MAXIMUM_ENTRIES>,
     color: array<vec2<u32>, MAXIMUM_ENTRIES>,

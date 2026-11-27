@@ -4,8 +4,8 @@ use glam::Vec2;
 
 use crate::color::Color;
 use crate::content::{
-    Content, DragValueContent, GradientBarContent, ProgressContent, RangeSliderContent,
-    SliderContent,
+    Content, DragValueContent, GradientBarContent, HistogramProfile, ProgressContent,
+    RangeSliderContent, SliderContent,
 };
 use crate::element::{Element, Layout, Length, Size};
 use crate::geometry::{Corners, Rect};
@@ -13,12 +13,26 @@ use crate::motion::Motion;
 use crate::node::{Node, Runtime};
 use crate::paint::Painter;
 use crate::text::{Align, TextStyle};
-use crate::theme::{Level, Role, Theme};
+use crate::theme::{Level, Palette, Role, Theme};
 
 use super::PaintInfo;
 
 const ARROW_STEP: f32 = 0.01;
 const PAGE_STEP: f32 = 0.1;
+const RANGE_EDGE: f32 = 6.0;
+const RANGE_BAR: f32 = 16.0;
+const RANGE_HANDLE: f32 = 12.0;
+const PROFILE_HEIGHT: f32 = 28.0;
+const PROFILE_GAP: f32 = 4.0;
+
+fn range_height(histogram: bool) -> f32 {
+    let base = 2.0 * RANGE_HANDLE;
+    if histogram {
+        base + PROFILE_HEIGHT + PROFILE_GAP
+    } else {
+        base
+    }
+}
 
 pub fn slider_sized<'a, A>(
     theme: &Theme,
@@ -62,9 +76,11 @@ pub fn range_slider<'a, A>(
     end: f32,
     range: RangeInclusive<f32>,
     gradient: &[Color],
+    histogram: Option<HistogramProfile>,
 ) -> Element<'a, A> {
+    let height = range_height(histogram.is_some());
     Element::new(Layout {
-        size: Size::new(Length::Fill, Length::Fixed(28.0)),
+        size: Size::new(Length::Fill, Length::Fixed(height)),
         ..Layout::row()
     })
     .with_content(Content::RangeSlider(RangeSliderContent {
@@ -73,6 +89,7 @@ pub fn range_slider<'a, A>(
         range,
         gradient: gradient.to_vec(),
         width: Length::Fill,
+        histogram,
     }))
 }
 
@@ -129,7 +146,7 @@ pub(super) fn measure_range(range: &RangeSliderContent, available: Vec2) -> Vec2
         Length::Minimum(minimum) => minimum.max(available.x),
         Length::Maximum(maximum) => maximum.min(available.x),
     };
-    Vec2::new(width, 28.0)
+    Vec2::new(width, range_height(range.histogram.is_some()))
 }
 
 pub(super) fn measure_drag(drag: &DragValueContent, theme: &Theme) -> Vec2 {
@@ -206,8 +223,8 @@ pub(crate) fn range_at(range: &RangeSliderContent, rect: Rect, pointer: Vec2) ->
     let (minimum, maximum) = (*range.range.start(), *range.range.end());
     let span = (maximum - minimum).max(1.0e-6);
     let track = Rect::from_min_max(
-        Vec2::new(rect.min.x + 6.0, rect.min.y),
-        Vec2::new(rect.max.x - 6.0, rect.max.y),
+        Vec2::new(rect.min.x + RANGE_EDGE, rect.min.y),
+        Vec2::new(rect.max.x - RANGE_EDGE, rect.max.y),
     );
     let value =
         minimum + ((pointer.x - track.min.x) / track.width().max(1.0)).clamp(0.0, 1.0) * span;
@@ -382,14 +399,25 @@ pub(super) fn paint_range(
 ) {
     let palette = info.theme.palette;
     let rect = info.rect;
-    let bar = Rect::from_min_max(
-        Vec2::new(rect.min.x + 4.0, rect.center().y - 8.0),
-        Vec2::new(rect.max.x - 4.0, rect.center().y + 8.0),
+    let bar = Rect::from_center_size(
+        Vec2::new(rect.center().x, rect.max.y - RANGE_HANDLE),
+        Vec2::new(rect.width() - 2.0 * RANGE_EDGE, RANGE_BAR),
     );
     let low_t = runtime.value.value.clamp(0.0, 1.0);
     let high_t = runtime.extent.value.clamp(0.0, 1.0);
     let low_x = bar.min.x + bar.width() * low_t;
     let high_x = bar.min.x + bar.width() * high_t;
+    if let Some(profile) = &range.histogram {
+        paint_profile(
+            profile,
+            bar,
+            bar.min.y - PROFILE_GAP,
+            low_t,
+            high_t,
+            painter,
+            palette,
+        );
+    }
     let engaged = info.engaged;
     let gap = info.theme.metrics.slider_gap;
     let outer_r = 8.0;
@@ -445,10 +473,53 @@ pub(super) fn paint_range(
         .copied()
         .unwrap_or(palette.primary)
         .lerp(Color::WHITE, 0.18);
-    let handle_size = Vec2::new(4.0 + engaged * 1.2, 24.0 + engaged * 2.0);
+    let handle_size = Vec2::new(4.0 + engaged * 1.2, 22.0 + engaged * 2.0);
     for x in [low_x, high_x] {
         let handle = Rect::from_center_size(Vec2::new(x, bar.center().y), handle_size);
         painter.rect(handle, Corners::capsule(), handle_color);
+    }
+}
+
+fn paint_profile(
+    profile: &HistogramProfile,
+    bar: Rect,
+    floor: f32,
+    low_t: f32,
+    high_t: f32,
+    painter: &mut Painter,
+    palette: Palette,
+) {
+    let peak = profile.peak();
+    if peak == 0 {
+        return;
+    }
+    let bins = profile.bins();
+    let ceiling = floor - PROFILE_HEIGHT;
+    let span = floor - ceiling;
+    let width = bar.width() / bins.len() as f32;
+    let inside = palette.primary.with_alpha(0.85);
+    let outside = palette.on_surface.with_alpha(0.14);
+    for (index, count) in bins.iter().enumerate() {
+        if *count == 0 {
+            continue;
+        }
+        let height = span * (*count as f32 / peak as f32).sqrt();
+        let left = bar.min.x + width * index as f32;
+        let right = (left + width + 0.5).min(bar.max.x);
+        if right <= left {
+            continue;
+        }
+        let middle = (index as f32 + 0.5) / bins.len() as f32;
+        let color = if middle >= low_t && middle <= high_t {
+            inside
+        } else {
+            outside
+        };
+        painter.rect(
+            Rect::from_min_max(Vec2::new(left, floor - height), Vec2::new(right, floor)),
+            Corners::top(1.5),
+            color,
+        );
     }
 }
 

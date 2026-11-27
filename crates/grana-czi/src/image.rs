@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use grana_volume::{
-    Census, ChannelInfo, Extent, Intensity, Level, Pyramid, Statistics, VoxelData, VoxelFormat,
-    VoxelSemantics, name_of, tint_of,
+    Census, ChannelInfo, Extent, Intensity, Level, Measured, Pyramid, Statistics, VoxelData,
+    VoxelFormat, VoxelSemantics, name_of, tint_of,
 };
 
 use crate::Error;
@@ -136,9 +136,23 @@ impl Image {
             let format = pixel.format();
             let display = metadata.display.get(index);
             let embedded = display.and_then(|display| window(display.low, display.high, format));
-            let measured = match embedded {
-                Some(measured) => Statistics::declared(measured, VoxelSemantics::Scalar),
-                None => probe(&document.store, path, identity, base, format, index as u32)?,
+            let sampled = match embedded {
+                Some(_) => None,
+                None => Some(probe(
+                    &document.store,
+                    path,
+                    identity,
+                    base,
+                    format,
+                    index as u32,
+                )?),
+            };
+            let statistics = match &sampled {
+                Some(sampled) => sampled.statistics(),
+                None => Statistics::declared(
+                    embedded.expect("a channel either declares its window or is probed"),
+                    VoxelSemantics::Scalar,
+                ),
             };
             let source = metadata.channels.get(index);
             let name = display
@@ -150,7 +164,11 @@ impl Image {
                 .and_then(|channel| channel.tint)
                 .or_else(|| display.and_then(|display| display.tint))
                 .unwrap_or_else(|| tint_of(index as u32));
-            channels.push(ChannelInfo::new(name, tint, measured, format));
+            let info = ChannelInfo::new(name, tint, statistics, format);
+            channels.push(match sampled {
+                Some(sampled) => info.with_measured(sampled),
+                None => info,
+            });
         }
         let stored = selected.levels.len();
         let pyramid = Pyramid::new(
@@ -403,7 +421,7 @@ fn probe(
     level: &LevelLayout,
     format: VoxelFormat,
     channel: u32,
-) -> Result<Statistics, Error> {
+) -> Result<Measured, Error> {
     let extent = level.extent;
     let mut census = Census::of(extent, 1);
     let measured = census.measure(None, |time, ranges| {

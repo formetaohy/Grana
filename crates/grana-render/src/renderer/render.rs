@@ -394,17 +394,6 @@ impl Renderer {
         if stale {
             residence.load_passes(scene.versions);
         }
-        if started.recompacts() {
-            if let Some(passes) = splats.as_mut() {
-                passes.rewind(queue);
-                passes.cull_volume(encoder, resources.scene.group());
-            }
-            if !shot.slice
-                && let Some(passes) = meshes.as_mut()
-            {
-                passes.compact(queue, encoder, resources.scene.group());
-            }
-        }
         Ok(Prepared {
             shot,
             levels: outlook.levels,
@@ -511,6 +500,15 @@ impl Renderer {
         }
         if let Some(passes) = meshes.as_mut() {
             passes.write_uniforms(queue, data, frame.scene.shading);
+        }
+        if let Some(passes) = splats.as_mut() {
+            passes.rewind(queue);
+            passes.cull_volume(encoder, resources.scene.group());
+        }
+        if !shot.slice
+            && let Some(passes) = meshes.as_ref()
+        {
+            passes.cull(queue, encoder, resources.scene.group());
         }
         draw::encode(draw::Stage {
             device,

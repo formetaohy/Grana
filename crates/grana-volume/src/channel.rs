@@ -1,4 +1,6 @@
-use crate::{Intensity, NoData, Statistics, VoxelFormat, VoxelSemantics};
+use std::sync::Arc;
+
+use crate::{Histogram, Intensity, Measured, NoData, Statistics, VoxelFormat, VoxelSemantics};
 
 const BITS: usize = crate::CHANNEL_LIMIT;
 
@@ -110,6 +112,7 @@ pub struct ChannelInfo {
     window: Option<Intensity>,
     no_data: Option<NoData>,
     color_table: Option<ColorTable>,
+    histogram: Option<Arc<Histogram>>,
 }
 
 impl ChannelInfo {
@@ -131,7 +134,35 @@ impl ChannelInfo {
             window: None,
             no_data: None,
             color_table: None,
+            histogram: None,
         }
+    }
+
+    pub fn measured(
+        name: impl Into<String>,
+        tint: [f32; 3],
+        measured: Measured,
+        format: VoxelFormat,
+    ) -> Self {
+        let (statistics, histogram) = measured.into_parts();
+        Self::new(name, tint, statistics, format).with_histogram(histogram)
+    }
+
+    pub fn with_histogram(mut self, histogram: Histogram) -> Self {
+        assert!(
+            histogram.range().span() >= 0.0,
+            "a channel histogram spans a non empty intensity"
+        );
+        self.histogram = Some(Arc::new(histogram));
+        self
+    }
+
+    pub fn with_measured(self, measured: Measured) -> Self {
+        self.with_histogram(measured.into_parts().1)
+    }
+
+    pub fn histogram(&self) -> Option<&Histogram> {
+        self.histogram.as_deref()
     }
 
     pub fn with_window(mut self, window: Intensity) -> Self {
@@ -155,6 +186,7 @@ impl ChannelInfo {
         self.statistics =
             Statistics::declared(color_table.indices(), VoxelSemantics::Label).with_background(0.0);
         self.color_table = Some(color_table);
+        self.histogram = None;
         self
     }
 

@@ -20,6 +20,10 @@ const RESOLVE: &str = concat!(
     include_str!("shader/oit_resolve.wgsl")
 );
 
+fn resolve_shader() -> String {
+    format!("{}{}", crate::oit::prelude(), RESOLVE)
+}
+
 pub(crate) struct OitResolve {
     pipeline: RenderPipeline,
 }
@@ -28,7 +32,7 @@ impl OitResolve {
     pub fn new(device: &Device, layouts: &Layouts, pipelines: &Pipelines) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.oit.resolve"),
-            source: ShaderSource::Wgsl(RESOLVE.into()),
+            source: ShaderSource::Wgsl(resolve_shader().into()),
         });
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.oit.resolve"),

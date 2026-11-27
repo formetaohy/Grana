@@ -63,6 +63,10 @@ const COMPOSITE: &str = concat!(
     include_str!("shader/volume.wgsl")
 );
 
+fn composite_shader() -> String {
+    format!("{}{}", crate::oit::prelude(), COMPOSITE)
+}
+
 const SLICE: &str = concat!(
     "enable wgpu_binding_array;\n",
     include_str!("shader/screen.wgsl"),
@@ -143,7 +147,7 @@ impl VolumePass {
             &layouts.volume_composite,
             "grana.volume.composite",
             "fs_main",
-            COMPOSITE,
+            &composite_shader(),
             &[(SCENE_FORMAT, Some(BLEND))],
             pipelines,
         );
@@ -247,7 +251,7 @@ fn pipeline(
     layout: &PipelineLayout,
     label: &str,
     fragment: &str,
-    source: &'static str,
+    source: &str,
     targets: &[(wgpu::TextureFormat, Option<BlendState>)],
     pipelines: &Pipelines,
 ) -> RenderPipeline {

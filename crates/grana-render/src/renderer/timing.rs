@@ -19,7 +19,6 @@ pub(super) struct Begin<'a> {
 
 #[derive(Clone, Copy)]
 pub(super) struct Started {
-    pub(super) restart: bool,
     pub(super) refresh: bool,
     pub(super) restaged: bool,
     pub(super) restyled: bool,
@@ -32,10 +31,6 @@ pub(super) struct Started {
 impl Started {
     pub(super) fn clamps_history(self) -> bool {
         self.moved
-    }
-
-    pub(super) fn recompacts(self) -> bool {
-        self.restart || self.restaged || self.restyled || self.resplatted || self.moved
     }
 
     pub(super) fn resets_age(self) -> bool {
@@ -94,7 +89,6 @@ pub(super) fn begin(begin: Begin<'_>) -> Started {
         target.phase = 0;
     }
     Started {
-        restart,
         refresh,
         restaged,
         restyled,

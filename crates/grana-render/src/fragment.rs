@@ -6,8 +6,7 @@ const COLOR_BYTES: u64 = 8;
 const SLOT_BYTES: u64 = KEY_BYTES + COLOR_BYTES;
 const RESIDUAL_BYTES: u64 = 16;
 const PIXEL_STEP: u64 = 1 << 17;
-const LAYER_LIMIT: u64 = 8;
-
+pub(crate) const LAYER_LIMIT: u64 = 8;
 pub const LAYERS: u64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,6 +4,37 @@ use crate::{Histogram, Intensity, NoData, VoxelData, VoxelSemantics};
 
 const DISTINCT_LIMIT: usize = 1024;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Measured {
+    statistics: Statistics,
+    histogram: Histogram,
+}
+
+impl Measured {
+    pub(crate) fn of(statistics: Statistics, histogram: Histogram) -> Self {
+        Self {
+            statistics,
+            histogram,
+        }
+    }
+
+    pub fn statistics(&self) -> Statistics {
+        self.statistics
+    }
+
+    pub fn histogram(&self) -> &Histogram {
+        &self.histogram
+    }
+
+    pub fn background(&self) -> f32 {
+        self.statistics.background()
+    }
+
+    pub fn into_parts(self) -> (Statistics, Histogram) {
+        (self.statistics, self.histogram)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Statistics {
     intensity: Intensity,
@@ -32,7 +63,7 @@ impl Statistics {
         }
     }
 
-    pub fn census(data: &VoxelData, no_data: Option<NoData>) -> Self {
+    pub fn census(data: &VoxelData, no_data: Option<NoData>) -> Measured {
         let mut values = BTreeSet::new();
         let mut minimum = f64::INFINITY;
         let mut maximum = f64::NEG_INFINITY;
@@ -48,13 +79,22 @@ impl Statistics {
             }
         });
         if minimum > maximum {
-            return Self::of(Intensity::new(0.0, 0.0), 1);
+            let statistics = Self::of(Intensity::new(0.0, 0.0), 1);
+            let histogram = Histogram::over(statistics.intensity());
+            return Measured {
+                statistics,
+                histogram,
+            };
         }
         let distinct = u32::try_from(values.len()).unwrap_or(u32::MAX).max(1);
         let intensity = Intensity::new(minimum as f32, maximum as f32);
         let mut histogram = Histogram::over(intensity);
         data.for_each_present_value(no_data, |value| histogram.add(value));
-        Self::of(intensity, distinct).with_background(histogram.background())
+        let statistics = Self::of(intensity, distinct).with_background(histogram.background());
+        Measured {
+            statistics,
+            histogram,
+        }
     }
 
     pub fn intensity(self) -> Intensity {

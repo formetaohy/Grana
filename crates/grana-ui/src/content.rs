@@ -239,12 +239,33 @@ pub struct SliderContent {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct HistogramProfile {
+    bins: std::sync::Arc<[u32]>,
+}
+
+impl HistogramProfile {
+    pub fn new(bins: Vec<u32>) -> Self {
+        assert!(!bins.is_empty(), "a histogram profile holds a column");
+        Self { bins: bins.into() }
+    }
+
+    pub fn bins(&self) -> &[u32] {
+        &self.bins
+    }
+
+    pub fn peak(&self) -> u32 {
+        self.bins.iter().copied().max().unwrap_or(0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RangeSliderContent {
     pub start: f32,
     pub end: f32,
     pub range: RangeInclusive<f32>,
     pub gradient: Vec<Color>,
     pub width: crate::element::Length,
+    pub histogram: Option<HistogramProfile>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

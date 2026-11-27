@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use bytemuck::{Pod, Zeroable};
 use grana_geometry::PackedMesh;
 use grana_gpu::Pipelines;
-use grana_gpu::{IndirectDraw, Table};
+use grana_gpu::{MultiDraw, Table};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, Buffer, BufferUsages,
     ColorTargetState, ColorWrites, CommandEncoder, CompareFunction, ComputePipeline,
@@ -21,12 +21,11 @@ use crate::target::{NORMAL_FORMAT, PICK_FORMAT, SCENE_FORMAT};
 use crate::volume::depth_state;
 use grana_display::{Shading, srgb_to_linear};
 
-const COMPACT_SHADER: &str = concat!(
+const CULL_SHADER: &str = concat!(
     include_str!("shader/scene.wgsl"),
     "\n",
-    include_str!("shader/mesh_compact.wgsl")
+    include_str!("shader/mesh_cull.wgsl")
 );
-const ARGS_SHADER: &str = include_str!("shader/mesh_args.wgsl");
 const NORMAL_SHADER: &str = concat!(
     include_str!("shader/mesh_binding.wgsl"),
     "\n",
@@ -69,6 +68,10 @@ const FORWARD_SHADER: &str = concat!(
     "\n",
     include_str!("shader/mesh_forward.wgsl")
 );
+
+fn forward_shader() -> String {
+    format!("{}{}", crate::oit::prelude(), FORWARD_SHADER)
+}
 const OPAQUE: usize = 0;
 const LAYER: usize = 1;
 const PICK: usize = 2;
@@ -159,9 +162,7 @@ pub(crate) struct MeshPasses {
     order: u64,
     budget: u64,
     resident: u64,
-    compact: ComputePipeline,
-    settle: ComputePipeline,
-    count: ComputePipeline,
+    cull: ComputePipeline,
     normal_pipeline: RenderPipeline,
     opaque_pipeline: RenderPipeline,
     oit_pipeline: RenderPipeline,
@@ -240,35 +241,15 @@ impl MeshPasses {
             ],
             immediate_size: 0,
         });
-        let compact_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh.compact"),
-            source: ShaderSource::Wgsl(COMPACT_SHADER.into()),
+        let cull_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grana.mesh.cull"),
+            source: ShaderSource::Wgsl(CULL_SHADER.into()),
         });
-        let count = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("grana.mesh.count"),
-            layout: Some(&layouts.mesh_compact_pipeline),
-            module: &compact_module,
-            entry_point: Some("mesh_count"),
-            compilation_options: Default::default(),
-            cache: pipelines.cache(),
-        });
-        let compact = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("grana.mesh.compact"),
-            layout: Some(&layouts.mesh_compact_pipeline),
-            module: &compact_module,
-            entry_point: Some("mesh_compact"),
-            compilation_options: Default::default(),
-            cache: pipelines.cache(),
-        });
-        let args_module = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("grana.mesh.args"),
-            source: ShaderSource::Wgsl(ARGS_SHADER.into()),
-        });
-        let settle = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("grana.mesh.args"),
-            layout: Some(&layouts.mesh_args_pipeline),
-            module: &args_module,
-            entry_point: Some("mesh_args"),
+        let cull = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("grana.mesh.cull"),
+            layout: Some(&layouts.mesh_cull_pipeline),
+            module: &cull_module,
+            entry_point: Some("mesh_cull"),
             compilation_options: Default::default(),
             cache: pipelines.cache(),
         });
@@ -278,7 +259,7 @@ impl MeshPasses {
         });
         let forward_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.mesh.forward"),
-            source: ShaderSource::Wgsl(FORWARD_SHADER.into()),
+            source: ShaderSource::Wgsl(forward_shader().into()),
         });
         let normal_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.mesh.normal"),
@@ -413,9 +394,7 @@ impl MeshPasses {
             order: 0,
             budget,
             resident: 0,
-            compact,
-            settle,
-            count,
+            cull,
             normal_pipeline,
             opaque_pipeline,
             oit_pipeline,
@@ -551,41 +530,26 @@ impl MeshPasses {
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    pub fn compact(&self, queue: &Queue, encoder: &mut CommandEncoder, scene: &BindGroup) {
+    pub fn cull(&self, queue: &Queue, encoder: &mut CommandEncoder, scene: &BindGroup) {
         if self.active.is_empty() {
             return;
         }
         for (geometry, _) in &self.active {
             self.geometries[geometry].draws.reset(queue);
         }
-        for (pipeline, label) in [
-            (&self.count, "grana.mesh.count.pass"),
-            (&self.compact, "grana.mesh.compact.pass"),
-        ] {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(label),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, scene, &[]);
-            for (geometry, rows) in &self.active {
-                let geometry = &self.geometries[geometry];
-                let rows = &self.rows[rows];
-                pass.set_bind_group(1, &geometry.object_group, &[]);
-                pass.set_bind_group(2, &rows.style_group, &[]);
-                pass.set_bind_group(3, &geometry.compact_group, &[]);
-                pass.dispatch_workgroups(geometry.object_count.div_ceil(WORKGROUP), 1, 1);
-            }
-        }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("grana.mesh.args.pass"),
+            label: Some("grana.mesh.cull.pass"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.settle);
-        for (geometry, _) in &self.active {
+        pass.set_pipeline(&self.cull);
+        pass.set_bind_group(0, scene, &[]);
+        for (geometry, rows) in &self.active {
             let geometry = &self.geometries[geometry];
-            pass.set_bind_group(0, &geometry.args_group, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
+            let rows = &self.rows[rows];
+            pass.set_bind_group(1, &geometry.object_group, &[]);
+            pass.set_bind_group(2, &rows.style_group, &[]);
+            pass.set_bind_group(3, &geometry.draw_group, &[]);
+            pass.dispatch_workgroups(geometry.object_count.div_ceil(WORKGROUP), 1, 1);
         }
     }
 
@@ -705,11 +669,10 @@ impl MeshPasses {
 
 struct MeshGeometry {
     vertices: Buffer,
-    pool: Buffer,
+    indices: Buffer,
     object_group: BindGroup,
-    compact_group: BindGroup,
-    args_group: BindGroup,
-    draws: IndirectDraw,
+    draw_group: BindGroup,
+    draws: MultiDraw,
     object_count: u32,
     vertex_count: usize,
     index_count: usize,
@@ -786,72 +749,45 @@ impl MeshGeometry {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("grana.mesh.indices"),
                 contents: bytemuck::cast_slice(&indices),
-                usage: BufferUsages::STORAGE,
+                usage: BufferUsages::INDEX,
             })
         } else {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("grana.mesh.indices"),
                 size: size_of::<u32>() as u64,
-                usage: BufferUsages::STORAGE,
+                usage: BufferUsages::INDEX,
                 mapped_at_creation: false,
             })
         };
-        let pool = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("grana.mesh.pool"),
-            size: (index_count * size_of::<u32>()).max(size_of::<u32>()) as u64,
-            usage: BufferUsages::INDEX | BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
         let mut object_table =
             Table::with_capacity(device, "grana.mesh.objects", object_count as usize);
         let grown = object_table.write(device, queue, &objects);
         assert!(!grown, "the object table holds every mesh object");
         let object_group = bind_group(device, &layouts.objects, object_table.buffer());
-        let draws = IndirectDraw::new(device, "grana.mesh.args", REGIONS);
-        let compact_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.mesh.compact.group"),
-            layout: &layouts.mesh_compact,
+        let draws = MultiDraw::new(device, "grana.mesh.draw", REGIONS, object_count);
+        let draw_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("grana.mesh.draw.group"),
+            layout: &layouts.mesh_draw,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: indices.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: pool.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: draws.counters().as_entire_binding(),
-                },
-            ],
-        });
-        let args_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("grana.mesh.args.group"),
-            layout: &layouts.mesh_args,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: draws.counters().as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
                     resource: draws.args().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: draws.counts().as_entire_binding(),
                 },
             ],
         });
         let bytes = (points.len() * size_of::<PointData>()
             + indices.size() as usize
-            + pool.size() as usize
             + object_count as usize * size_of::<ObjectData>()) as u64
-            + draws.args().size()
-            + draws.counters().size();
+            + draws.bytes();
         Self {
             vertices,
-            pool,
+            indices,
             object_group,
-            compact_group,
-            args_group,
+            draw_group,
             draws,
             object_count,
             vertex_count: mesh.vertex_count(),
@@ -873,8 +809,14 @@ impl MeshGeometry {
 
     fn draw<'a>(&'a self, pass: &mut RenderPass<'a>, region: usize) {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        pass.set_index_buffer(self.pool.slice(..), IndexFormat::Uint32);
-        pass.draw_indexed_indirect(self.draws.args(), self.draws.region(region));
+        pass.set_index_buffer(self.indices.slice(..), IndexFormat::Uint32);
+        pass.multi_draw_indexed_indirect_count(
+            self.draws.args(),
+            self.draws.region(region),
+            self.draws.counts(),
+            self.draws.count(region),
+            self.draws.capacity(),
+        );
     }
 }
 

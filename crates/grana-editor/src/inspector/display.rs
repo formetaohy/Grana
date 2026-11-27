@@ -5,6 +5,7 @@ const DEFAULT_WAVELENGTH: f32 = 0.52;
 const DEFAULT_IMMERSION: f32 = 1.515;
 const DEFAULT_SAMPLE: f32 = 1.33;
 const DEFAULT_ITERATIONS: u32 = 10;
+const PROFILE_COLUMNS: usize = 128;
 
 pub(super) fn restore_fields<'a>(
     ctx: &mut BuildContext<'_, Message>,
@@ -201,8 +202,11 @@ pub(super) fn display<'a>(
         Some(&channel_name),
     ));
     if !indexed {
+        let profile = scene.channel(index).histogram().map(|histogram| {
+            grana_ui::HistogramProfile::new(histogram.profiled(data, PROFILE_COLUMNS))
+        });
         children.push(
-            grana_ui::widget::range_slider(start, end, available, &gradient)
+            grana_ui::widget::range_slider(start, end, available, &gradient, profile)
                 .key(Key::new("display.window"))
                 .on_range(move |low, high| {
                     Message::Command(Command::SetWindow {

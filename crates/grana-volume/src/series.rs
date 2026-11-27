@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use crate::{
-    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Level, Pyramid, Volume, VoxelData,
+    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, Histogram, Intensity, Level,
+    Pyramid, Volume, VoxelData,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -123,12 +124,16 @@ impl VolumeSeries {
                         let statistics = frames.iter().fold(channel.statistics(), |held, frame| {
                             held.folded(frame.channels()[index].statistics())
                         });
-                        ChannelInfo::new(
+                        let info = ChannelInfo::new(
                             channel.name(),
                             channel.tint(),
                             statistics,
                             channel.format(),
-                        )
+                        );
+                        match profile(frames, index, statistics.intensity()) {
+                            Some(histogram) => info.with_histogram(histogram),
+                            None => info,
+                        }
                     }
                 };
                 match channel.no_data() {
@@ -146,4 +151,19 @@ impl VolumeSeries {
             Calibration::Recorded,
         )
     }
+}
+
+fn profile(frames: &[Volume], index: usize, intensity: Intensity) -> Option<Histogram> {
+    let mut folded: Option<Histogram> = None;
+    for frame in frames {
+        let Some(held) = frame.channels()[index].histogram() else {
+            continue;
+        };
+        let rebased = held.rebased(intensity);
+        match folded.as_mut() {
+            Some(folded) => folded.merge(&rebased),
+            None => folded = Some(rebased),
+        }
+    }
+    folded
 }

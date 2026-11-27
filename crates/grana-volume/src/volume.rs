@@ -1,6 +1,6 @@
 use crate::{
-    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, ColorTable, Extent, Intensity,
-    Level, NoData, Pyramid, Spacing, Statistics, VoxelData, VoxelFormat, VoxelSemantics,
+    BrickCoord, BrickData, BrickGrid, Calibration, ChannelInfo, ColorTable, Extent, Histogram,
+    Intensity, Level, NoData, Pyramid, Spacing, Statistics, VoxelData, VoxelFormat, VoxelSemantics,
     brick::pad_brick,
 };
 
@@ -9,6 +9,7 @@ pub struct Channel {
     name: String,
     tint: [f32; 3],
     statistics: Statistics,
+    histogram: Option<Histogram>,
     data: VoxelData,
     no_data: Option<NoData>,
     color_table: Option<ColorTable>,
@@ -20,11 +21,12 @@ impl Channel {
             tint.iter().all(|component| (0.0..=1.0).contains(component)),
             "a channel tint is an srgb triple"
         );
-        let statistics = Statistics::census(&data, None);
+        let (statistics, histogram) = Statistics::census(&data, None).into_parts();
         Self {
             name: name.into(),
             tint,
             statistics,
+            histogram: Some(histogram),
             data,
             no_data: None,
             color_table: None,
@@ -39,6 +41,7 @@ impl Channel {
         );
         self.statistics = Statistics::declared(color_table.indices(), VoxelSemantics::Label)
             .with_background(self.statistics.background());
+        self.histogram = None;
         self.color_table = Some(color_table);
         self
     }
@@ -55,7 +58,9 @@ impl Channel {
         );
         let declared = no_data.declared();
         if declared.is_some() {
-            self.statistics = Statistics::census(&self.data, declared);
+            let (statistics, histogram) = Statistics::census(&self.data, declared).into_parts();
+            self.statistics = statistics;
+            self.histogram = Some(histogram);
         }
         self.no_data = declared;
         self
@@ -79,6 +84,10 @@ impl Channel {
 
     pub fn statistics(&self) -> Statistics {
         self.statistics
+    }
+
+    pub fn histogram(&self) -> Option<&Histogram> {
+        self.histogram.as_ref()
     }
 
     pub fn background(&self) -> f32 {
@@ -152,12 +161,18 @@ impl Volume {
                     )
                     .with_color_table(color_table.clone())
                     .with_background(channel.background()),
-                    None => ChannelInfo::new(
-                        channel.name(),
-                        channel.tint(),
-                        channel.statistics(),
-                        channel.format(),
-                    ),
+                    None => {
+                        let info = ChannelInfo::new(
+                            channel.name(),
+                            channel.tint(),
+                            channel.statistics(),
+                            channel.format(),
+                        );
+                        match channel.histogram() {
+                            Some(histogram) => info.with_histogram(histogram.clone()),
+                            None => info,
+                        }
+                    }
                 };
                 match channel.no_data() {
                     Some(no_data) => info.with_no_data(no_data),

@@ -23,8 +23,7 @@ pub(crate) struct Layouts {
     pub styles: BindGroupLayout,
     pub objects: BindGroupLayout,
     pub pick: BindGroupLayout,
-    pub mesh_compact: BindGroupLayout,
-    pub mesh_args: BindGroupLayout,
+    pub mesh_draw: BindGroupLayout,
     pub splat_cull: BindGroupLayout,
     pub splat_rows: BindGroupLayout,
     pub splat_pick_slot: BindGroupLayout,
@@ -46,8 +45,7 @@ pub(crate) struct Layouts {
     pub volume_slice: PipelineLayout,
     pub cull: PipelineLayout,
     pub plan_pipeline: PipelineLayout,
-    pub mesh_compact_pipeline: PipelineLayout,
-    pub mesh_args_pipeline: PipelineLayout,
+    pub mesh_cull_pipeline: PipelineLayout,
     pub splat_slice: PipelineLayout,
     pub splat_oit: PipelineLayout,
     pub splat_pick: PipelineLayout,
@@ -238,16 +236,8 @@ impl Layouts {
                 true,
             )],
         });
-        let mesh_compact = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.mesh.compact.layout"),
-            entries: &[
-                storage(0, ShaderStages::COMPUTE, true),
-                storage(1, ShaderStages::COMPUTE, false),
-                storage(2, ShaderStages::COMPUTE, false),
-            ],
-        });
-        let mesh_args = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("grana.mesh.args.layout"),
+        let mesh_draw = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("grana.mesh.draw.layout"),
             entries: &[
                 storage(0, ShaderStages::COMPUTE, false),
                 storage(1, ShaderStages::COMPUTE, false),
@@ -417,13 +407,11 @@ impl Layouts {
             &[&scene, &level_write, &plan_storage],
         );
         let plan_pipeline = pipeline_layout(device, "grana.plan.layout", &[&plan_data]);
-        let mesh_compact_pipeline = pipeline_layout(
+        let mesh_cull_pipeline = pipeline_layout(
             device,
-            "grana.mesh.compact.layout",
-            &[&scene, &objects, &styles, &mesh_compact],
+            "grana.mesh.cull.pipeline.layout",
+            &[&scene, &objects, &styles, &mesh_draw],
         );
-        let mesh_args_pipeline =
-            pipeline_layout(device, "grana.mesh.args.pipeline.layout", &[&mesh_args]);
         let splat_slice = pipeline_layout(device, "grana.splat.layout", &[&scene, &splat_rows]);
         let splat_oit = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("grana.splat.oit.layout"),
@@ -515,8 +503,7 @@ impl Layouts {
             styles,
             objects,
             pick,
-            mesh_compact,
-            mesh_args,
+            mesh_draw,
             splat_cull,
             splat_rows,
             splat_pick_slot,
@@ -538,8 +525,7 @@ impl Layouts {
             volume_slice,
             cull,
             plan_pipeline,
-            mesh_compact_pipeline,
-            mesh_args_pipeline,
+            mesh_cull_pipeline,
             splat_slice,
             splat_oit,
             splat_pick,

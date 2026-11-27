@@ -1,6 +1,7 @@
 use std::ops::RangeInclusive;
 
 use crate::color::Color;
+use crate::content::HistogramProfile;
 use crate::element::{Element, Length, text};
 use crate::geometry::{Band, Edges};
 use crate::icon::{Icon, IconStyle};
@@ -110,8 +111,9 @@ impl<'a, A> BuildContext<'a, A> {
         end: f32,
         range: RangeInclusive<f32>,
         gradient: &[Color],
+        histogram: Option<HistogramProfile>,
     ) -> Element<'e, A> {
-        widget::range_slider(start, end, range, gradient)
+        widget::range_slider(start, end, range, gradient, histogram)
     }
 
     pub fn drag_value<'e>(&self, value: f32, decimals: usize) -> Element<'e, A> {

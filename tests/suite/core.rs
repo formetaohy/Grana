@@ -318,6 +318,29 @@ fn anchors_the_default_transfer_on_the_value_the_volume_mostly_holds() {
         (background - 200.0).abs() < 0.5,
         "the background is the value the volume mostly holds: {background}"
     );
+    let channel = &bright.dataset.channels()[0];
+    let profile = channel
+        .histogram()
+        .expect("a censused channel keeps the profile its background came from");
+    assert_eq!(
+        profile.range(),
+        channel.intensity(),
+        "the profile spans the intensity the channel declares"
+    );
+    let counted = count as u32;
+    assert_eq!(
+        profile.bins().iter().sum::<u32>(),
+        counted,
+        "the profile weighs every voxel the census read"
+    );
+    assert_eq!(
+        profile
+            .profiled(channel.intensity(), 128)
+            .iter()
+            .sum::<u32>(),
+        counted,
+        "the profile a window draws keeps the mass it was built from"
+    );
     let stops = bright.channels[0]
         .transfer()
         .stops()

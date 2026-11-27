@@ -10,6 +10,39 @@ use crate::layout::Layouts;
 
 const EPOCH_LIMIT: u32 = 255;
 
+pub(crate) struct Key {
+    slot: u32,
+    depth: u32,
+}
+
+impl Key {
+    pub(crate) fn of(layers: u64) -> Self {
+        let slot = u32::BITS
+            - u32::try_from(layers)
+                .expect("a fragment store names its layers in the key")
+                .leading_zeros();
+        let epoch = u32::BITS - EPOCH_LIMIT.leading_zeros();
+        assert!(
+            slot + epoch < u32::BITS,
+            "a fragment key holds an epoch, a depth and a layer slot"
+        );
+        Self {
+            slot,
+            depth: u32::BITS - epoch - slot,
+        }
+    }
+}
+
+pub(crate) fn prelude() -> String {
+    let key = Key::of(crate::fragment::LAYER_LIMIT);
+    format!(
+        "const MAXIMUM_ENTRIES: u32 = {}u;\nconst OIT_SLOT_BITS: u32 = {}u;\nconst OIT_DEPTH_BITS: u32 = {}u;\n",
+        crate::fragment::LAYERS + 1,
+        key.slot,
+        key.depth,
+    )
+}
+
 pub(crate) const RESIDUAL_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 pub(crate) const RESIDUAL_MOMENT_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 

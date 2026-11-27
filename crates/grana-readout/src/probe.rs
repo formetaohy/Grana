@@ -22,10 +22,10 @@ pub(crate) fn statistics(
     let mut ranges = Vec::with_capacity(views.len());
     for view in views {
         let plane = plane_at(path, dataset, info, view, 0, source)?;
-        let mut measured = Statistics::census(&samples(&plane, view.sample), None);
+        let mut measured = Statistics::census(&samples(&plane, view.sample), None).statistics();
         for block in &blocks {
             let strided = strided(&plane, view.sample, block);
-            measured = measured.folded(Statistics::census(&strided, None));
+            measured = measured.folded(Statistics::census(&strided, None).statistics());
         }
         ranges.push(measured);
     }

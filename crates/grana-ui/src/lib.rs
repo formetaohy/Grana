@@ -33,6 +33,7 @@ pub mod widget;
 
 pub use clipboard::Clipboard;
 pub use color::Color;
+pub use content::HistogramProfile;
 pub use edit::{Edit, Outcome as EditOutcome};
 pub use element::{
     Axis, CanvasInfo, CanvasPaint, Element, Flow, Key, Layer, Layout, Length, Phase, Pointer, Size,

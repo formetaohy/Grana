@@ -35,6 +35,10 @@ const SPLAT_SHADER: &str = concat!(
     include_str!("shader/splat.wgsl")
 );
 
+fn splat_shader() -> String {
+    format!("{}{}", crate::oit::prelude(), SPLAT_SHADER)
+}
+
 const CULL_WORKGROUP: u32 = 64;
 const VERTEX_COUNT: u32 = 6;
 
@@ -471,7 +475,7 @@ impl SplatPasses {
         });
         let module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("grana.splat"),
-            source: ShaderSource::Wgsl(SPLAT_SHADER.into()),
+            source: ShaderSource::Wgsl(splat_shader().into()),
         });
         let slice = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("grana.splat.slice"),

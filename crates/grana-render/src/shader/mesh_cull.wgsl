@@ -13,21 +13,29 @@ struct StyleData {
     surface: vec4<f32>,
 }
 
-struct Counters {
-    counts: array<atomic<u32>, 4>,
-    cursors: array<atomic<u32>, 4>,
+struct IndexedArgs {
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    base_vertex: i32,
+    first_instance: u32,
 }
 
+struct Counters {
+    counts: array<atomic<u32>, 4>,
+}
+
+const REGIONS: u32 = 4u;
 const OPAQUE: u32 = 0u;
 const LAYER: u32 = 1u;
-const SHADOW: u32 = 2u;
-const HIDDEN: u32 = 3u;
+const PICK: u32 = 2u;
+const SHADOW: u32 = 3u;
+const HIDDEN: u32 = 4u;
 
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<storage, read> styles: array<StyleData>;
-@group(3) @binding(0) var<storage, read> indices: array<u32>;
-@group(3) @binding(1) var<storage, read_write> pool: array<u32>;
-@group(3) @binding(2) var<storage, read_write> counters: Counters;
+@group(3) @binding(0) var<storage, read_write> args: array<IndexedArgs>;
+@group(3) @binding(1) var<storage, read_write> counters: Counters;
 
 fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
     for (var index = 0u; index < 6u; index += 1u) {
@@ -39,7 +47,7 @@ fn outside_sphere(center: vec3<f32>, radius: f32) -> bool {
     return false;
 }
 
-fn slot(visible: bool, inside: bool, opaque: bool, shadows: bool) -> u32 {
+fn region(visible: bool, inside: bool, opaque: bool, shadows: bool) -> u32 {
     if (!visible) {
         return HIDDEN;
     }
@@ -60,7 +68,7 @@ fn classify(index: u32) -> u32 {
     let style = styles[index];
     let inside = !outside_sphere(object.center_radius.xyz, object.center_radius.w)
         && !outside_region_sphere(object.center_radius.xyz, object.center_radius.w);
-    return slot(
+    return region(
         style.flags.x >= 0.5,
         inside,
         style.flags.z >= 0.5,
@@ -68,41 +76,34 @@ fn classify(index: u32) -> u32 {
     );
 }
 
-@compute @workgroup_size(64)
-fn mesh_count(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = id.x;
-    if (index >= arrayLength(&objects)) {
-        return;
-    }
-    let kind = classify(index);
-    let count = objects[index].index_count;
-    if (kind >= HIDDEN || count == 0u) {
-        return;
-    }
-    atomicAdd(&counters.counts[kind], count);
+fn publish(index: u32, kind: u32) {
+    let capacity = arrayLength(&args) / REGIONS;
+    let slot = atomicAdd(&counters.counts[kind], 1u);
+    let object = objects[index];
+    args[kind * capacity + slot] = IndexedArgs(
+        object.index_count,
+        1u,
+        object.first_index,
+        0,
+        0u,
+    );
 }
 
 @compute @workgroup_size(64)
-fn mesh_compact(@builtin(global_invocation_id) id: vec3<u32>) {
+fn mesh_cull(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
     if (index >= arrayLength(&objects)) {
         return;
     }
-    let kind = classify(index);
-    let count = objects[index].index_count;
-    if (kind >= HIDDEN || count == 0u) {
+    if (objects[index].index_count == 0u) {
         return;
     }
-    var offset = 0u;
-    if (kind > OPAQUE) {
-        offset = atomicLoad(&counters.counts[OPAQUE]);
-        if (kind > LAYER) {
-            offset += atomicLoad(&counters.counts[LAYER]);
-        }
+    let kind = classify(index);
+    if (kind == HIDDEN) {
+        return;
     }
-    let base = offset + atomicAdd(&counters.cursors[kind], count);
-    let first = objects[index].first_index;
-    for (var at = 0u; at < count; at += 1u) {
-        pool[base + at] = indices[first + at];
+    publish(index, kind);
+    if (kind == OPAQUE || kind == LAYER) {
+        publish(index, PICK);
     }
 }
