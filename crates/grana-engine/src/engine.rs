@@ -207,7 +207,7 @@ impl Engine {
             "a viewport covers at least one pixel"
         );
         self.renderer.set_exporting(false);
-        let keys = view::key(view.scene);
+        let keys = view::key(view.scene, view.surfaces);
         let content = self.content_of(&view, keys);
         if self.content == Some(content) && self.resolved(view.delivery) {
             return Ok(());

@@ -172,11 +172,15 @@ fn item_digest(item: Item) -> u64 {
     }
 }
 
-pub fn key(scene: &Scene) -> Key {
+pub fn key(scene: &Scene, surfaces: &[ChannelSurface<'_>]) -> Key {
     let mut topology = Digest::new();
     topology.mix(u64::from(scene.time()));
     topology.mix(scene.channels.len() as u64);
     topology.mix(scene.derived().len() as u64);
+    for surface in surfaces {
+        topology.mix(surface.channel() as u64);
+        topology.mix(surface.revision());
+    }
     let mut classification = Digest::new();
     let mut appearance = Digest::new();
     for set in scene.objects.iter() {
@@ -667,4 +671,47 @@ fn spend(available: &mut u64, bytes: u64, part: &str) {
     *available = available.checked_sub(bytes).unwrap_or_else(|| {
         panic!("the {part} splats hold {bytes} bytes but the splat residency keeps {available}")
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use grana_geometry::{Mesh, MeshVertex, PackedMesh};
+    use grana_scene::Dataset;
+    use grana_volume::{
+        Calibration, ChannelInfo, Extent, Intensity, Level, Pyramid, Spacing, Statistics,
+        VoxelFormat, VoxelSemantics,
+    };
+
+    fn scene() -> Scene {
+        let level = Level::new(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0));
+        let statistics = Statistics::declared(Intensity::new(0.0, 255.0), VoxelSemantics::Scalar);
+        let channel = ChannelInfo::new("signal", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8);
+        let pyramid = Pyramid::new(vec![level], 1, vec![channel], 1, 1.0, Calibration::Recorded);
+        Scene::new(Dataset::synthetic("keys", pyramid))
+    }
+
+    fn mesh() -> Arc<PackedMesh> {
+        let vertices = vec![
+            MeshVertex::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
+            MeshVertex::new([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0),
+            MeshVertex::new([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 0),
+        ];
+        Arc::new(PackedMesh::new(Mesh::new(vertices, vec![0, 1, 2])))
+    }
+
+    #[test]
+    fn a_channel_surface_changes_the_prepared_keys() {
+        let scene = scene();
+        let colors = Arc::new(vec![[0.2, 0.6, 0.2]]);
+        let mesh = mesh();
+        let surface = ChannelSurface::new(0, &mesh, &colors, 11);
+        assert_ne!(
+            key(&scene, &[]).topology(),
+            key(&scene, &[surface]).topology(),
+            "a channel surface that arrives after the frame settled must re-prepare it"
+        );
+    }
 }
