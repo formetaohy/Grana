@@ -53,6 +53,12 @@ impl Span {
     pub(crate) fn crop(self, tensor: Tensor<5>, halo: usize) -> Tensor<5> {
         tensor.narrow(4, self.front(halo), self.extent)
     }
+
+    pub(crate) fn inner(self, tensor: Tensor<5>, reach: usize) -> Tensor<5> {
+        let context = self.context(1);
+        let outer = self.context(reach);
+        tensor.narrow(4, context.start - outer.start, context.len())
+    }
 }
 
 impl Stripe {

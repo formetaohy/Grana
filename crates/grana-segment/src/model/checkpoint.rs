@@ -264,6 +264,15 @@ impl Conv3d {
         self.weight.device()
     }
 
+    pub(crate) fn radius(&self) -> usize {
+        let [depth, height, width] = self.kernel;
+        assert!(
+            depth == height && height == width && width % 2 == 1,
+            "a chained decoder convolution is an odd cube"
+        );
+        width / 2
+    }
+
     pub(crate) fn normalized(self, norm: &ChannelNorm) -> Self {
         let count = self.bias.dims()[0];
         let scale = norm.weight.clone() / (norm.variance.clone() + NORMALIZATION_EPSILON).sqrt();

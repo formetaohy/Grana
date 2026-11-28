@@ -560,14 +560,18 @@ fn mean_difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> f32 {
     total / (left.len() * 3) as f32
 }
 
-fn placed_quads(quads: &[([f32; 2], f32)]) -> Mesh {
+fn placed_quads(quads: &[([f32; 3], f32)]) -> Mesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     for (object, (center, half)) in quads.iter().enumerate() {
         let base = vertices.len() as u32;
         for (across, down) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
             vertices.push(MeshVertex::new(
-                [center[0] + across * half, center[1] + down * half, 0.0],
+                [
+                    center[0] + across * half,
+                    center[1] + down * half,
+                    center[2],
+                ],
                 [0.0, 0.0, 1.0],
                 object as u32,
             ));
@@ -602,7 +606,7 @@ fn restyles_and_hides_objects_without_rebuilding_the_meshes() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let centers = [([-3.4, 0.0], 1.6), ([3.4, 0.0], 1.6)];
+    let centers = [([-3.4, 0.0, 0.0], 1.6), ([3.4, 0.0, 0.0], 1.6)];
     let mesh = Arc::new(PackedMesh::new(placed_quads(&centers)));
     let stamp = revision();
     let styles = Arc::from([
@@ -764,7 +768,11 @@ fn composites_a_mesh_layer() {
     let channels = channels(&pyramid, &transfers);
     let mut camera = Camera::new(35.0);
     camera.fit(Vec3::from(volume.world_extent()), 1.0);
-    let centers = [([-3.4, 0.0], 1.6), ([3.4, 0.0], 1.6), ([0.0, 3.4], 1.6)];
+    let centers = [
+        ([-3.4, 0.0, 0.0], 1.6),
+        ([3.4, 0.0, 0.0], 1.6),
+        ([0.0, 3.4, 0.0], 1.6),
+    ];
     let mesh = PackedMesh::new(placed_quads(&centers));
     let styles = Arc::from([
         Style::new([1.0, 0.1, 0.1], true, false, 1.0),
@@ -852,6 +860,137 @@ fn composites_a_mesh_layer() {
     assert_eq!(picked(&gpu, &mut renderer), PickId::Style(1));
     assert!(renderer.request_pick(gpu.device(), gpu.queue(), hidden));
     assert_eq!(picked(&gpu, &mut renderer), PickId::None);
+}
+
+fn empty_channel(pyramid: &Pyramid, visible: bool) -> Vec<grana_render::ChannelRow> {
+    pyramid
+        .channels()
+        .iter()
+        .map(|channel| grana_render::ChannelRow {
+            visible,
+            opacity: 1.0,
+            intensity: channel.intensity(),
+            transfer: TransferFunction::tinted(channel.tint()),
+            volume: VolumeStyle::default(),
+        })
+        .collect()
+}
+
+fn shadow_samples(
+    gpu: &Gpu,
+    volume: &Volume,
+    camera: &Camera,
+    mesh: Arc<PackedMesh>,
+    style: [Style; 2],
+    shading: Shading,
+) -> Vec<[u8; 4]> {
+    let pyramid = volume.pyramid();
+    let rows = empty_channel(&pyramid, false);
+    let layers = [Layer::new(
+        LayerKey::new(1, 0, 0),
+        1,
+        1,
+        Arc::clone(&mesh),
+        Arc::from(style),
+        0,
+    )];
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &rows,
+        shading,
+        step_scale: 1.0,
+        layers: &layers,
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let mut renderer = build_renderer(gpu, &pyramid);
+    let target = texture(gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    settle(gpu, &mut renderer, &view, volume);
+    read_pixels(gpu, &target, [SIDE, SIDE])
+}
+
+fn brightness(pixels: &[[u8; 4]], at: [u32; 2]) -> f32 {
+    let pixel = pixels[(at[1] * SIDE + at[0]) as usize];
+    (0..3).map(|channel| f32::from(pixel[channel])).sum::<f32>() / 3.0
+}
+
+#[test]
+fn casts_mesh_shadows_across_a_coarse_volume() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let volume = Volume::new(
+        EMPTY,
+        Spacing::new(1.0, 1.0, 1.0),
+        vec![Channel::new(
+            "empty",
+            [0.3, 0.6, 1.0],
+            VoxelData::U16(vec![0; EMPTY.voxel_count() as usize]),
+        )],
+    );
+    let mut camera = Camera::new(35.0);
+    camera.fit(Vec3::from(volume.world_extent()), 1.0);
+    let placed = [([0.0, 0.0, -1.0], 6.0), ([0.0, 0.0, 1.0], 1.5)];
+    let mesh = Arc::new(PackedMesh::new(placed_quads(&placed)));
+    let lit = Shading {
+        shadows: 1.0,
+        azimuth: 40.0,
+        elevation: 50.0,
+        ..Shading::default()
+    };
+    let receiver = Style::new([0.9, 0.9, 0.9], true, false, 1.0);
+    let caster = Style::new([1.0, 0.1, 0.1], true, false, 1.0);
+    let light = lit.light();
+    let cast = [-2.0 * light.x / light.z, -2.0 * light.y / light.z, -1.0];
+    let style = [receiver, caster];
+    let drawn = shadow_samples(&gpu, &volume, &camera, Arc::clone(&mesh), style, lit);
+    let off = shadow_samples(
+        &gpu,
+        &volume,
+        &camera,
+        Arc::clone(&mesh),
+        style,
+        Shading {
+            shadows: 0.0,
+            ..lit
+        },
+    );
+    let hidden = shadow_samples(
+        &gpu,
+        &volume,
+        &camera,
+        mesh,
+        [receiver, Style::new([1.0, 0.1, 0.1], false, false, 1.0)],
+        lit,
+    );
+    assert!(
+        max_difference(&drawn, &off) > 24,
+        "the key light casts no mesh shadow: {}",
+        max_difference(&drawn, &off)
+    );
+    let under = project(&camera, cast);
+    assert!(
+        brightness(&hidden, under) - brightness(&drawn, under) > 16.0,
+        "hiding the caster left the receiver as dark as it was: {:.1} against {:.1}",
+        brightness(&hidden, under),
+        brightness(&drawn, under)
+    );
+    let clear = project(&camera, [-cast[0], -cast[1], -1.0]);
+    assert!(
+        (brightness(&drawn, clear) - brightness(&off, clear)).abs() < 8.0,
+        "the shadow spilled away from the caster: {:.1} against {:.1}",
+        brightness(&drawn, clear),
+        brightness(&off, clear)
+    );
 }
 
 fn far_pair_volume() -> Volume {
@@ -1975,7 +2114,7 @@ fn composites_soft_splats_through_the_depth_layers() {
         solid.contrast(core),
         faint.contrast(core)
     );
-    let occluder = PackedMesh::new(placed_quads(&[([0.0, 0.0], 2.5)]));
+    let occluder = PackedMesh::new(placed_quads(&[([0.0, 0.0, 0.0], 2.5)]));
     let occluding = [Layer::new(
         LayerKey::new(1, 0, 0),
         1,

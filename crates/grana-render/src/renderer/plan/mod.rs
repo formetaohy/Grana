@@ -235,7 +235,6 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
     } = frame;
     let finest = pyramid.level(0);
     let world = Vec3::from(finest.world_extent());
-    let spacing = finest.spacing();
     let held = match *summary {
         Some(held) if held.holds(versions) => held,
         _ => {
@@ -245,12 +244,7 @@ pub(super) fn shadow(frame: ShadowFrame<'_>) -> ShadowPlan {
         }
     };
     let (low, high) = held.bounds();
-    let space = ShadowSpace::new(
-        scene.shading.light(),
-        low,
-        high,
-        Vec3::new(spacing.x(), spacing.y(), spacing.z()),
-    );
+    let space = ShadowSpace::new(scene.shading.light(), low, high);
     let layers = digest(&[
         versions.topology(),
         versions.classification(),

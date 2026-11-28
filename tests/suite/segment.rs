@@ -121,11 +121,17 @@ fn splitting_the_decode_keeps_every_label() {
     };
     let _serial = serial();
     let depth = 8;
-    let segmenter = bench.opened(depth);
+    let settings =
+        Settings::new(0.5, 0.0, 0.0).expect("the striped decode keeps every foreground voxel");
+    let segmenter = Segmenter::open(&bench.weights, settings).expect("the weights stay resident");
     let wide = segmenter.forced_plan(depth, 8);
     let tight = segmenter.forced_plan(depth, 16);
     let whole = bench.run(&segmenter, depth, wide);
     let split = bench.run(&segmenter, depth, tight);
+    assert!(
+        whole.count() > 0,
+        "the whole decode segments nothing, so the striped comparison proves nothing"
+    );
     assert_eq!(whole.width(), split.width());
     assert_eq!(whole.height(), split.height());
     assert_eq!(whole.depth(), split.depth());

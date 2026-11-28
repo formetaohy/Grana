@@ -43,11 +43,10 @@ pub(crate) struct ShadowSpace {
     depth: f32,
     width: f32,
     height: f32,
-    unit: f32,
 }
 
 impl ShadowSpace {
-    pub fn new(light: Vec3, low: Vec3, high: Vec3, voxel: Vec3) -> Self {
+    pub fn new(light: Vec3, low: Vec3, high: Vec3) -> Self {
         assert!(
             light.is_finite() && light.length() > 1.0e-6,
             "a shadow space follows a finite light"
@@ -88,18 +87,12 @@ impl ShadowSpace {
                 1.0,
             ],
         ]);
-        let unit = voxel.min_element();
-        assert!(
-            unit.is_finite() && unit > 0.0,
-            "a shadow space follows a voxel"
-        );
         Self {
             view,
             inverse: view.inverse(),
             depth,
             width,
             height,
-            unit,
         }
     }
 
@@ -112,11 +105,11 @@ impl ShadowSpace {
     }
 
     pub fn reach(&self) -> [f32; 4] {
-        let texel = self.width.max(self.height) / OBJECT_SIDE as f32;
+        let texel = self.texel();
         [
             self.depth,
             DEPTH_BIAS,
-            NORMAL_OFFSET * self.unit,
+            NORMAL_OFFSET * texel,
             texel / self.depth,
         ]
     }
@@ -127,6 +120,10 @@ impl ShadowSpace {
             key = key.rotate_left(9) ^ (column.to_bits() as u64);
         }
         key
+    }
+
+    pub fn texel(&self) -> f32 {
+        self.width.max(self.height) / OBJECT_SIDE as f32
     }
 
     pub fn width(&self) -> f32 {
@@ -244,8 +241,8 @@ impl Shadow {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             compare: Some(CompareFunction::LessEqual),
             ..Default::default()
         });

@@ -3,6 +3,7 @@ use burn::tensor::activation::relu;
 
 use crate::Result;
 use crate::model::checkpoint::{Checkpoint, Conv3d};
+use crate::model::decoder::REACH;
 use crate::model::decoder::strip::{Gate, Strip};
 use crate::model::decoder::sums::Statistics;
 
@@ -24,7 +25,7 @@ impl Head {
         )?;
         let first_right = first.clone().narrow_inputs(channels, channels).silenced();
         let first_left = first.narrow_inputs(0, channels);
-        Ok(Self {
+        let head = Self {
             first_left,
             first_right,
             second: Conv3d::load(
@@ -35,7 +36,13 @@ impl Head {
                 device,
             )?,
             strip: Strip::load(checkpoint, "decoder_head.block.1", channels, device)?,
-        })
+        };
+        assert_eq!(
+            REACH,
+            head.first_left.radius() + head.second.radius(),
+            "a span halo spans the chained convolutions of the head"
+        );
+        Ok(head)
     }
 
     pub(crate) fn combine(

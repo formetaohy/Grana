@@ -3,6 +3,7 @@ use burn::tensor::activation::relu;
 
 use crate::Result;
 use crate::model::checkpoint::{Checkpoint, Conv3d};
+use crate::model::decoder::REACH;
 use crate::model::decoder::deconv::gate_of;
 use crate::model::decoder::parts::{Parts, split};
 use crate::model::decoder::span::{Source, Stripe};
@@ -23,7 +24,7 @@ impl ConvBlock {
         output: usize,
         device: &Device,
     ) -> Result<Self> {
-        Ok(Self {
+        let block = Self {
             first: Conv3d::load(
                 checkpoint,
                 &format!("{prefix}.block.0.block.1.weight"),
@@ -39,7 +40,13 @@ impl ConvBlock {
                 device,
             )?,
             strip: Strip::load(checkpoint, &format!("{prefix}.block.1"), output, device)?,
-        })
+        };
+        assert_eq!(
+            REACH,
+            block.first.radius() + block.second.radius(),
+            "a span halo spans the chained convolutions of a block"
+        );
+        Ok(block)
     }
 
     pub(crate) fn split(&self, source: Source<'_>, stripe: Stripe) -> Parts {
@@ -57,14 +64,11 @@ impl ConvBlock {
         let mut raised_sums: Option<ColumnSums> = None;
         let mut raised_parts = Vec::with_capacity(spans.len());
         for &span in &spans {
-            let window = source(span.context(1));
+            let window = source(span.context(REACH));
             let raised = relu(self.first.forward(first_stats.normalise(window), [1, 1, 1]));
-            accumulate(
-                &mut raised_sums,
-                &span.crop(raised.clone(), 1),
-                span.start(),
-            );
-            raised_parts.push((span, raised));
+            let held = span.inner(raised, REACH);
+            accumulate(&mut raised_sums, &span.crop(held.clone(), 1), span.start());
+            raised_parts.push((span, held));
         }
         let second_stats = raised_sums.expect("a stripe holds one span").statistics();
 

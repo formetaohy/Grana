@@ -21,6 +21,7 @@ use crate::model::decoder::strip::no_gate;
 use crate::model::decoder::sums::{ColumnSums, DepthSums, accumulate};
 
 const SPAN_FLOOR: usize = 32;
+const REACH: usize = 2;
 
 const EMBEDDING: usize = 256;
 const FEATURES: [usize; 4] = [256, 128, 64, 32];
@@ -323,7 +324,11 @@ impl Decoder {
             let left = self.output.span(&xout_of, wide, side);
             let right = self.deconv[3].span(&z0_of, wide, side);
             let part = self.head.combine(left, right, &left_stats, &right_stats);
-            accumulate(&mut sums, &span.crop(part, 1), span.start());
+            accumulate(
+                &mut sums,
+                &span.crop(span.inner(part, REACH), 1),
+                span.start(),
+            );
         }
         let combined_stats = sums.expect("a stripe holds one span").statistics();
 
@@ -333,7 +338,10 @@ impl Decoder {
             let left = self.output.span(&xout_of, wide, side);
             let right = self.deconv[3].span(&z0_of, wide, side);
             let part = self.head.combine(left, right, &left_stats, &right_stats);
-            let refined = span.crop(self.head.refine(part, &combined_stats), 1);
+            let refined = span.crop(
+                self.head.refine(span.inner(part, REACH), &combined_stats),
+                1,
+            );
             let mut depth_sums = DepthSums::of(&refined);
             depth_sums.add(&refined);
             let gate = if depth_sums.depth() <= 1 {
@@ -349,7 +357,7 @@ impl Decoder {
 }
 
 fn widened(span: Span, side: usize) -> Span {
-    let context = span.context(1);
+    let context = span.context(REACH);
     Span::new(context.start, context.end - context.start, side)
 }
 
@@ -392,7 +400,11 @@ pub(crate) fn residency(depth: usize) -> u64 {
 fn span_width(side: usize, splits: usize) -> usize {
     let count = splits.min(side / SPAN_FLOOR).max(1);
     let extent = side / count;
-    if count == 1 { extent } else { extent + 2 }
+    if count == 1 {
+        extent
+    } else {
+        extent + 2 * REACH
+    }
 }
 
 fn slab(channels: usize, side: usize, width: usize, depth: usize) -> u64 {
