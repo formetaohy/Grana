@@ -61,7 +61,7 @@ pub(crate) fn copy_plane(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn plane_rows<T: Copy>(
+pub(crate) fn plane_rows<T: Copy>(
     out: &mut [T],
     out_dims: [u32; 3],
     out_origin: [u32; 3],

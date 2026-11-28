@@ -56,6 +56,7 @@ impl Capture for OfflineCapture {
             CaptureKind::Still { .. } | CaptureKind::Sequence => size,
         };
         let camera = request.view.camera;
+        let rendered = Arc::new(Channels::render(channels.image_shared(), scene));
         let (destination, poses, fps) = match request.kind {
             CaptureKind::Still { time } => (
                 Destination::Image {
@@ -96,9 +97,9 @@ impl Capture for OfflineCapture {
                 )
             }
         };
-        let surfaces = crate::surfaces::traced(&grana_pipeline::surface::trace_channels(
-            channels, scene, cancel,
-        )?);
+        let surfaces = Arc::new(crate::surfaces::Traced::new(Arc::new(
+            grana_pipeline::surface::Cache::new(Arc::clone(&rendered), scene),
+        )));
         let task = Task {
             plan: Plan {
                 destination,
@@ -109,10 +110,7 @@ impl Capture for OfflineCapture {
                 region: scene.region,
             },
             scene: scene.snapshot().into_scene(),
-            bricks: Arc::new(ImageBricks::new(Channels::render(
-                channels.image_shared(),
-                scene,
-            ))),
+            bricks: Arc::new(ImageBricks::new(rendered)),
             surfaces,
         };
         match offline.run(task, cancel, &mut |_, _| {}) {

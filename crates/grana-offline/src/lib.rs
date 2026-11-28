@@ -15,5 +15,5 @@ mod worker;
 
 pub use offline::{Offline, Outcome};
 pub use plan::{Destination, Plan, Pose, name, poses};
-pub use task::{Bricks, Task};
+pub use task::{Bricks, NoSurfaces, Surfaces, Task};
 pub use worker::{Event, Handle, Worker};

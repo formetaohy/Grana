@@ -273,6 +273,7 @@ pub struct Session {
     stitch: Option<Stitch>,
     localization: Localizations,
     traced: Surfaces,
+    traced_cache: Option<Arc<grana_pipeline::surface::Cache>>,
 }
 
 impl Default for Session {
@@ -378,6 +379,7 @@ impl Session {
             stitch: None,
             localization: Localizations::default(),
             traced: Surfaces::default(),
+            traced_cache: None,
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -463,6 +465,7 @@ impl Session {
 
     pub(crate) fn replace(&mut self) {
         self.traced.clear();
+        self.traced_cache = None;
         self.replaced = self.touch();
         self.content = self.replaced;
     }

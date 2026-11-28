@@ -194,6 +194,10 @@ impl VoxelData {
     }
 
     pub fn reinterpret(format: VoxelFormat, bytes: &[u8]) -> Self {
+        Self::from_native_bytes(format, bytes.to_vec())
+    }
+
+    pub fn from_native_bytes(format: VoxelFormat, bytes: Vec<u8>) -> Self {
         assert!(
             bytes.len().is_multiple_of(format.bytes()),
             "the bytes hold whole samples of the format"
@@ -213,7 +217,7 @@ impl VoxelData {
             };
         }
         match format {
-            VoxelFormat::U8 => Self::U8(bytes.to_vec()),
+            VoxelFormat::U8 => Self::U8(bytes),
             VoxelFormat::U16 => decode!(U16, u16),
             VoxelFormat::U32 => decode!(U32, u32),
             VoxelFormat::U64 => decode!(U64, u64),

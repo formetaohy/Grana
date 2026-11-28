@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
-use grana_offline::{Bricks, Destination, Offline, Outcome, Plan, Pose, Task};
+use grana_offline::{Bricks, Destination, NoSurfaces, Offline, Outcome, Plan, Pose, Task};
 use grana_scene::{Dataset, ObjectKind, Scene};
 use grana_volume::{
     BrickData, BrickGrid, BrickRequest, Calibration, ChannelInfo, Extent, Intensity, Level, NoData,
@@ -105,7 +105,7 @@ fn task(volume: Volume, plan: Plan) -> Task {
         plan,
         scene,
         bricks: Arc::new(VolumeBricks { volume, pyramid }),
-        surfaces: Vec::new(),
+        surfaces: std::sync::Arc::new(NoSurfaces),
     }
 }
 
@@ -366,7 +366,7 @@ fn paints_the_scene_overlay_in_an_export() {
         plan,
         scene: scene.snapshot().into_scene(),
         bricks: Arc::new(VolumeBricks { volume, pyramid }),
-        surfaces: Vec::new(),
+        surfaces: std::sync::Arc::new(NoSurfaces),
     };
     match offline(&gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}
@@ -428,7 +428,7 @@ fn exports_a_slice_view() {
         plan,
         scene,
         bricks: Arc::new(VolumeBricks { volume, pyramid }),
-        surfaces: Vec::new(),
+        surfaces: std::sync::Arc::new(NoSurfaces),
     };
     match offline(&gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}
@@ -630,7 +630,7 @@ fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_cover
         plan,
         scene,
         bricks: Arc::clone(&bricks) as Arc<dyn Bricks>,
-        surfaces: Vec::new(),
+        surfaces: std::sync::Arc::new(NoSurfaces),
     };
     match context.run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}
@@ -645,4 +645,170 @@ fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_cover
         0,
         "the export decodes the bricks the storage reports as empty"
     );
+}
+
+struct Stage<'a> {
+    gpu: &'a Gpu,
+    scene: &'a Scene,
+    bricks: Arc<dyn Bricks>,
+    size: OutputSize,
+    camera: grana_display::CameraState,
+}
+
+fn sequence(
+    stage: &Stage<'_>,
+    surfaces: Arc<dyn grana_offline::Surfaces>,
+    directory: std::path::PathBuf,
+    stem: &str,
+) -> Vec<grana_raster::Raster> {
+    let plan = Plan {
+        destination: Destination::Sequence {
+            directory: directory.clone(),
+            stem: stem.to_string(),
+        },
+        size: stage.size,
+        transparent: false,
+        poses: (0..2)
+            .map(|time| Pose {
+                time,
+                camera: stage.camera,
+            })
+            .collect(),
+        fps: 0,
+        region: Region::none(),
+    };
+    let task = Task {
+        plan,
+        scene: stage.scene.snapshot().into_scene(),
+        bricks: Arc::clone(&stage.bricks),
+        surfaces,
+    };
+    match offline(stage.gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
+        Outcome::Complete { .. } => {}
+        Outcome::Failed { detail } => panic!("the export failed: {detail}"),
+        Outcome::Cancelled => panic!("the export was cancelled"),
+    }
+    (0..2)
+        .map(|time| {
+            let path = directory.join(frame_name(stem, time));
+            grana_raster::read(&path).expect("the export wrote its frame")
+        })
+        .collect()
+}
+
+fn frame_name(stem: &str, time: u32) -> String {
+    format!("{stem}-{time:04}-t{time:04}.png")
+}
+
+fn painted(surface: &grana_raster::Raster, empty: &grana_raster::Raster) -> Vec<[u32; 2]> {
+    let mut pixels = Vec::new();
+    for y in 0..surface.height() {
+        for x in 0..surface.width() {
+            if surface.pixel(x, y) != empty.pixel(x, y) {
+                pixels.push([x, y]);
+            }
+        }
+    }
+    pixels
+}
+
+#[test]
+fn paints_each_frame_surface_where_that_frame_labels_lie() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let temp = Temp::new("grana-export-surface-frames");
+    let root = temp.path().join("labels");
+    crate::support::labelled_frames(&root);
+    let mut session = grana_session::Session::new();
+    crate::support::open_path(&mut session, root);
+    crate::support::wait_for_scene(&mut session, 2);
+    let scene = session.scene().expect("the dataset opens");
+    let cache = session
+        .surface_cache()
+        .expect("the indexed channel traces a surface");
+    let image = session.image().expect("the dataset decodes");
+    let bricks = Arc::new(grana_app::ImageBricks::new(Arc::new(
+        grana_pipeline::Channels::render(image, scene),
+    ))) as Arc<dyn Bricks>;
+    let size = OutputSize::of(320, 160);
+    let mut camera = Camera::new(35.0);
+    camera.fit(scene.dataset.world_size(), aspect(size));
+    let mut state = camera.state();
+    state.yaw = 0.0;
+    state.pitch = 0.0;
+    state.aperture = 0.0;
+    state.projection = grana_display::CameraProjection::Orthographic;
+    camera.restore(state);
+    let level = scene.dataset.pyramid().level(0);
+    let boxed = |first: u32| [[first, 2, 1], [first + 4, 6, 3]];
+    let rect = |corner: [[u32; 3]; 2]| {
+        let points = corner.map(|point| {
+            project(
+                &camera,
+                level.voxel_center(point.map(|value| value as f32)),
+                size,
+            )
+        });
+        [
+            points[0][0].min(points[1][0]).saturating_sub(6),
+            points[0][1].min(points[1][1]).saturating_sub(6),
+            points[0][0].max(points[1][0]).saturating_add(6),
+            points[0][1].max(points[1][1]).saturating_add(6),
+        ]
+    };
+    let rects = [rect(boxed(2)), rect(boxed(10))];
+    assert!(
+        rects[0][2] < rects[1][0] || rects[1][2] < rects[0][0],
+        "the two frames place their labels far apart: {rects:?}"
+    );
+    let stage = Stage {
+        gpu: &gpu,
+        scene,
+        bricks,
+        size,
+        camera: camera.state(),
+    };
+    let traced = sequence(
+        &stage,
+        Arc::new(grana_app::Traced::new(Arc::clone(&cache))),
+        temp.path().join("traced"),
+        "labels",
+    );
+    let empty = sequence(
+        &stage,
+        Arc::new(NoSurfaces),
+        temp.path().join("empty"),
+        "labels",
+    );
+    for (time, rect) in rects.iter().enumerate() {
+        let pixels = painted(&traced[time], &empty[time]);
+        assert!(
+            pixels.len() > 32,
+            "frame {time} paints the surface of its labels: {} pixels",
+            pixels.len()
+        );
+        let out = pixels
+            .iter()
+            .filter(|point| {
+                point[0] < rect[0] || point[1] < rect[1] || point[0] > rect[2] || point[1] > rect[3]
+            })
+            .count();
+        assert_eq!(
+            out,
+            0,
+            "frame {time} paints {} of its {} surface pixels away from the labels it traced: {rect:?}",
+            out,
+            pixels.len()
+        );
+    }
+}
+
+fn project(camera: &Camera, point: [f32; 3], size: OutputSize) -> [u32; 2] {
+    let aspect = aspect(size);
+    let clip =
+        camera.view_projection(aspect, 1.0) * glam::Vec4::new(point[0], point[1], point[2], 1.0);
+    let x = (clip.x / clip.w * 0.5 + 0.5) * size.width() as f32;
+    let y = (0.5 - clip.y / clip.w * 0.5) * size.height() as f32;
+    [x.floor().max(0.0) as u32, y.floor().max(0.0) as u32]
 }

@@ -55,19 +55,19 @@ impl Export {
         plan: Plan,
         image: Arc<Image>,
         scene: &Scene,
-        surfaces: &[grana_engine::Surface],
+        surfaces: Arc<dyn grana_offline::Surfaces>,
         language: grana_i18n::Language,
     ) -> Result<(), String> {
         if self.active.is_some() {
             return Err(grana_i18n::app::export_running_error(language).to_string());
         }
         let scene = scene.snapshot().into_scene();
-        let channels = Channels::render(image, &scene);
+        let channels = Arc::new(Channels::render(image, &scene));
         let task = Task {
             plan,
             scene,
             bricks: Arc::new(ImageBricks::new(channels)),
-            surfaces: surfaces.to_vec(),
+            surfaces,
         };
         self.active = Some(self.worker.submit(task));
         self.progress = None;
@@ -177,8 +177,12 @@ impl App {
             self.set_output_message(grana_i18n::app::dataset_opening(language));
             return;
         };
-        let surfaces = crate::surfaces::traced(self.session.surfaces());
-        match self.export.start(plan, image, scene, &surfaces, language) {
+        let Some(cache) = self.session.surface_cache() else {
+            self.set_output_message(grana_i18n::app::dataset_opening(language));
+            return;
+        };
+        let surfaces = Arc::new(crate::surfaces::Traced::new(cache));
+        match self.export.start(plan, image, scene, surfaces, language) {
             Ok(()) => {
                 self.output = None;
                 self.repaint_at = Some(Instant::now());

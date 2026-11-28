@@ -1,6 +1,7 @@
 mod bounds;
 mod budget;
 mod bvh;
+mod digest;
 mod ellipsoid;
 mod geometry;
 mod graph;
@@ -21,6 +22,7 @@ mod volume;
 pub use bounds::Bounds;
 pub use budget::TriangleBudget;
 pub use bvh::{Bvh, Primitive};
+pub use digest::Digest;
 pub use ellipsoid::Ellipsoid;
 pub use geometry::Geometry;
 pub use graph::{ends, push_graph};

@@ -9,10 +9,8 @@ pub struct ImageBricks {
 }
 
 impl ImageBricks {
-    pub fn new(channels: Channels) -> Self {
-        Self {
-            channels: Arc::new(channels),
-        }
+    pub fn new(channels: Arc<Channels>) -> Self {
+        Self { channels }
     }
 }
 

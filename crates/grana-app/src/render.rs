@@ -14,7 +14,6 @@ use grana_session::{Kind as MessageKind, Session, Transfer};
 use crate::bricks::ImageBricks;
 
 const OPEN_LIMIT: Duration = Duration::from_secs(600);
-const SURFACE_LIMIT: Duration = Duration::from_secs(600);
 const OPEN_POLL: Duration = Duration::from_millis(10);
 
 pub struct Request {
@@ -75,7 +74,6 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         })?;
     }
     let mut session = open(&request.input)?;
-    settle_surfaces(&mut session);
     let view = named(&mut session, request.view.as_deref(), &request.input)?;
     let scene = session.scene().expect("the opened session holds a scene");
     let image = session.image().expect("the opened session holds an image");
@@ -150,13 +148,23 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         }
         .plan()?
     };
-    let surfaces = crate::surfaces::traced(session.surfaces());
+    let surfaces = match session.surface_cache() {
+        Some(cache) => {
+            Arc::new(crate::surfaces::Traced::new(cache)) as Arc<dyn grana_offline::Surfaces>
+        }
+        None => {
+            return Err(format!(
+                "{} has not finished opening its channels",
+                request.input.display()
+            ));
+        }
+    };
     let channels = Channels::render(image, scene);
     let mut offline = Offline::headless()?;
     let task = Task {
         plan,
         scene: scene.snapshot().into_scene(),
-        bricks: Arc::new(ImageBricks::new(channels)),
+        bricks: Arc::new(ImageBricks::new(Arc::new(channels))),
         surfaces,
     };
     let cancel = AtomicBool::new(false);
@@ -289,21 +297,6 @@ fn classify(output: &Path, lineage: bool) -> Result<DestinationKind, String> {
         Some(other) => Err(format!(
             "a render writes PNG, OME-TIFF, SVG, PDF, MP4, MOV or a frame folder, not `.{other}`"
         )),
-    }
-}
-
-fn settle_surfaces(session: &mut Session) {
-    let start = Instant::now();
-    while !session.surfaces_settled() {
-        if start.elapsed() >= SURFACE_LIMIT {
-            eprintln!(
-                "the channel surfaces did not finish within {} seconds",
-                SURFACE_LIMIT.as_secs()
-            );
-            return;
-        }
-        session.poll();
-        std::thread::sleep(OPEN_POLL);
     }
 }
 

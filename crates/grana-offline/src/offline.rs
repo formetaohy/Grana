@@ -221,6 +221,7 @@ impl Offline {
         ui.resize(export.size());
         progress(0, export.progress().1);
         let mut prepared: Option<(u32, grana_engine::Targets, RenderedScene)> = None;
+        let mut shown: Option<(u32, Vec<grana_engine::Surface>)> = None;
         let mut cache = grana_engine::Cache::new();
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -234,11 +235,27 @@ impl Offline {
                 .as_ref()
                 .is_none_or(|(time, cached, _)| *time != pose.time || *cached != targets);
             if stale {
-                let budget = self.renderer.splat_budget();
-                let views = surfaces
+                if shown.as_ref().is_none_or(|(time, _)| *time != pose.time) {
+                    match surfaces.frame(&scene, pose.time, cancel) {
+                        Ok(held) => shown = Some((pose.time, held)),
+                        Err(detail) => {
+                            export.discard();
+                            return Outcome::Failed { detail };
+                        }
+                    }
+                    if cancel.load(Ordering::Relaxed) {
+                        export.discard();
+                        return Outcome::Cancelled;
+                    }
+                }
+                let views = shown
+                    .as_ref()
+                    .expect("the surfaces of the frame are traced")
+                    .1
                     .iter()
                     .map(grana_engine::Surface::view)
                     .collect::<Vec<_>>();
+                let budget = self.renderer.splat_budget();
                 match grana_engine::frame(&scene, &targets, &mut cache, budget, &views) {
                     Ok(rendered) => prepared = Some((pose.time, targets, rendered)),
                     Err(detail) => {

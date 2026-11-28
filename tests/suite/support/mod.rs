@@ -926,3 +926,81 @@ impl grana_analysis::localization::LocalizationSource for Localizations {
         )
     }
 }
+
+pub fn labelled_frames(path: &Path) {
+    use grana_archive::{Channel, Fill, ImageSpec};
+    use grana_volume::{ColorTable, Intensity, Level};
+
+    let extent = Extent::new(16, 8, 4);
+    let table = ColorTable::new(vec![[0.0, 0.0, 0.0], [0.2, 0.6, 0.2]]);
+    let channels = [Channel {
+        name: "labels",
+        tint: [0.2, 0.6, 0.2],
+        data: Intensity::new(0.0, 1.0),
+        window: Intensity::new(0.0, 1.0),
+        color_table: Some(&table),
+    }];
+    let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
+    let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
+        let start = if block.frame == 0 { 2 } else { 10 };
+        let [width, height, _] = block.extent;
+        let mut values = vec![0u8; block.voxels()];
+        for z in 0..block.extent[2] {
+            for y in 0..block.extent[1] {
+                for x in 0..block.extent[0] {
+                    let point = [
+                        block.origin[0] + x,
+                        block.origin[1] + y,
+                        block.origin[2] + z,
+                    ];
+                    if (start..start + 4).contains(&point[0])
+                        && (2..6).contains(&point[1])
+                        && (1..3).contains(&point[2])
+                    {
+                        values[(x + width * (y + height * z)) as usize] = 1;
+                    }
+                }
+            }
+        }
+        Ok(VoxelData::U8(values))
+    };
+    let mut progress = |_, _| {};
+    grana_zarr::write_image(
+        path,
+        &mut ImageSpec {
+            name: "labels",
+            channels: &channels,
+            levels: &levels,
+            placement: [0.0; 3],
+            frames: 2,
+            interval: Some(1.0),
+            sample: grana_volume::VoxelFormat::U8,
+            calibration: grana_volume::Calibration::Recorded,
+            fill: Fill::EveryLevel(&fill),
+            cancel: &AtomicBool::new(false),
+            progress: &mut progress,
+        },
+    )
+    .expect("the labelled frames write");
+}
+
+pub fn open_path(session: &mut grana_session::Session, path: PathBuf) {
+    assert!(
+        matches!(session.open_path(path), grana_session::Transfer::Started),
+        "the session starts opening the path"
+    );
+}
+
+pub fn wait_for_scene(session: &mut grana_session::Session, frames: u32) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while session.scene().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dataset never opens"
+        );
+        session.poll();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let scene = session.scene().expect("the dataset opens");
+    assert_eq!(scene.frame_count(), frames, "the dataset keeps its frames");
+}

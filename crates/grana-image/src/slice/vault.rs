@@ -74,16 +74,12 @@ impl Vault {
             .into_par_iter()
             .map(|z| self.plane(pyramid, key(self.namespace, time, level, channel, z)))
             .collect::<Result<Vec<_>, Error>>()?;
-        for (offset, plane) in planes.iter().enumerate() {
-            region::copy_plane(
-                &mut out,
-                ranges,
-                plane.data(),
-                [plane.width(), plane.height()],
-                [clipped[0].clone(), clipped[1].clone()],
-                rows.start + offset as u32,
-            );
-        }
+        place(
+            &mut out,
+            ranges,
+            &planes,
+            [clipped[0].clone(), clipped[1].clone()],
+        );
         Ok(out)
     }
 
@@ -164,6 +160,53 @@ fn key(namespace: u64, time: u32, level: usize, channel: usize, z: u32) -> Key {
         channel: u32::try_from(channel).expect("a pyramid holds fewer than 4G channels"),
         z,
     }
+}
+
+fn place(
+    out: &mut VoxelData,
+    ranges: &[Range<u32>; 3],
+    planes: &[Arc<Plane>],
+    columns: [Range<u32>; 2],
+) {
+    let dims = [
+        ranges[0].end - ranges[0].start,
+        ranges[1].end - ranges[1].start,
+    ];
+    let x = ranges[0].start.max(columns[0].start)..ranges[0].end.min(columns[0].end);
+    let y = ranges[1].start.max(columns[1].start)..ranges[1].end.min(columns[1].end);
+    if x.start >= x.end || y.start >= y.end {
+        return;
+    }
+    let first = ranges[2].start;
+    macro_rules! place {
+        ($($variant:ident),*) => {
+            match out {
+                $(
+                    VoxelData::$variant(target) => target
+                        .par_chunks_mut(dims[0] as usize * dims[1] as usize)
+                        .zip(planes)
+                        .enumerate()
+                        .for_each(|(offset, (slab, plane))| {
+                            let z = first + offset as u32;
+                            let VoxelData::$variant(source) = plane.data() else {
+                                panic!("a plane carries the format of the volume it serves");
+                            };
+                            region::plane_rows(
+                                slab,
+                                [dims[0], dims[1], 1],
+                                [ranges[0].start, ranges[1].start, z],
+                                source,
+                                [plane.width(), plane.height()],
+                                &x,
+                                &y,
+                                z,
+                            );
+                        }),
+                )*
+            }
+        };
+    }
+    place!(U8, U16, U32, U64, I8, I16, I32, I64, F32, F64);
 }
 
 fn clip(ranges: &[Range<u32>; 3], extent: Extent) -> [Range<u32>; 3] {

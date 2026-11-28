@@ -289,17 +289,29 @@ impl Page {
                 ));
             }
             let width = right - left;
-            let extracted = extract(
-                &held,
-                block.width as usize,
-                channels as usize,
-                index as usize,
-                left - block.origin.0..right - block.origin.0,
-                top - block.origin.1..bottom - block.origin.1,
-            );
+            let covers = channels == 1
+                && left == block.origin.0
+                && right == block.origin.0 + block.width
+                && top == block.origin.1
+                && bottom == block.origin.1 + block.rows;
+            let narrowed;
+            let (source, from) = match covers {
+                true => (&*held, Placement::new(block.width, [0, 0])),
+                false => {
+                    narrowed = extract(
+                        &held,
+                        block.width as usize,
+                        channels as usize,
+                        index as usize,
+                        left - block.origin.0..right - block.origin.0,
+                        top - block.origin.1..bottom - block.origin.1,
+                    );
+                    (&narrowed, Placement::new(width, [0, 0]))
+                }
+            };
             out.blit(
-                &extracted,
-                Placement::new(width, [0, 0]),
+                source,
+                from,
                 Placement::new(plane.x.1 - plane.x.0, [left - plane.x.0, top - plane.y.0]),
                 width,
                 bottom - top,
@@ -384,7 +396,7 @@ impl Page {
                     shortage(block, self.sample_type.bits, decoded.len(), expected),
                 ));
             }
-            return Ok(VoxelData::reinterpret(self.format, &decoded));
+            return Ok(VoxelData::from_native_bytes(self.format, decoded));
         }
         let mut data = if decoded.len() < expected {
             if !block.padding {
@@ -430,7 +442,7 @@ impl Page {
                 .map_err(|detail| Error::unsupported(path, detail))?;
             }
         }
-        let reinterpreted = VoxelData::reinterpret(self.format, &data);
+        let reinterpreted = VoxelData::from_native_bytes(self.format, data);
         if self.color.converts() {
             Ok(self.color.convert(
                 self.format,
