@@ -4,18 +4,98 @@ use std::ops::Range;
 use glam::Vec3;
 use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 use grana_geometry::{Mesh, MeshVertex};
-use grana_volume::Level;
+use grana_volume::{Level, VoxelData};
 
 const HALO: u32 = 1;
 const WORD: usize = 64;
 const BACKGROUND: u32 = 0;
+const BACKGROUND_TOLERANCE: f32 = 0.5;
+
+pub trait TraceVoxel: Copy + PartialEq {
+    fn sample(self) -> f32;
+
+    fn cast(value: f32) -> Self;
+
+    fn background(value: f32) -> Self {
+        Self::cast((value + BACKGROUND_TOLERANCE).floor().max(f32::MIN))
+    }
+
+    fn label(self) -> u32 {
+        self.sample().round().max(0.0) as u32
+    }
+}
+
+macro_rules! integer_voxel {
+    ($($format:ty),*) => {
+        $(
+            impl TraceVoxel for $format {
+                fn sample(self) -> f32 {
+                    self as f32
+                }
+
+                fn cast(value: f32) -> Self {
+                    value.round().clamp(0.0, 1.0e15) as $format
+                }
+            }
+        )*
+    };
+}
+
+integer_voxel!(u8, u16, u32, u64);
+
+macro_rules! signed_voxel {
+    ($($format:ty),*) => {
+        $(
+            impl TraceVoxel for $format {
+                fn sample(self) -> f32 {
+                    self as f32
+                }
+
+                fn cast(value: f32) -> Self {
+                    value.round().clamp(-1.0e15, 1.0e15) as $format
+                }
+            }
+        )*
+    };
+}
+
+signed_voxel!(i8, i16, i32, i64);
+
+impl TraceVoxel for f32 {
+    fn sample(self) -> f32 {
+        self
+    }
+
+    fn cast(value: f32) -> Self {
+        value
+    }
+
+    fn background(value: f32) -> Self {
+        value
+    }
+}
+
+impl TraceVoxel for f64 {
+    fn sample(self) -> f32 {
+        self as f32
+    }
+
+    fn cast(value: f32) -> Self {
+        f64::from(value)
+    }
+
+    fn background(value: f32) -> Self {
+        f64::from(value)
+    }
+}
 
 pub struct TraceBand<'a> {
     level: Level,
     origin: [u32; 3],
     extent: [u32; 3],
     cells: [Range<u32>; 3],
-    labels: &'a [u32],
+    data: &'a VoxelData,
+    background: f32,
 }
 
 impl<'a> TraceBand<'a> {
@@ -24,16 +104,9 @@ impl<'a> TraceBand<'a> {
         origin: [u32; 3],
         extent: [u32; 3],
         cells: [Range<u32>; 3],
-        labels: &'a [u32],
+        data: &'a VoxelData,
+        background: f32,
     ) -> Self {
-        assert_eq!(
-            labels.len(),
-            extent
-                .iter()
-                .map(|value| *value as usize)
-                .product::<usize>(),
-            "a label band holds every voxel of its extent"
-        );
         for axis in 0..3 {
             assert!(
                 cells[axis].start < cells[axis].end && cells[axis].end < extent[axis],
@@ -45,7 +118,45 @@ impl<'a> TraceBand<'a> {
             origin,
             extent,
             cells,
+            data,
+            background,
+        }
+    }
+}
+
+struct Field<'a, L: TraceVoxel> {
+    level: Level,
+    origin: [u32; 3],
+    extent: [u32; 3],
+    cells: [Range<u32>; 3],
+    labels: &'a [L],
+    background: L,
+}
+
+impl<'a, L: TraceVoxel> Field<'a, L> {
+    fn of(
+        level: Level,
+        origin: [u32; 3],
+        extent: [u32; 3],
+        cells: [Range<u32>; 3],
+        labels: &'a [L],
+        background: f32,
+    ) -> Self {
+        assert_eq!(
+            labels.len(),
+            extent
+                .iter()
+                .map(|value| *value as usize)
+                .product::<usize>(),
+            "a label band holds every voxel of its extent"
+        );
+        Self {
+            level,
+            origin,
+            extent,
+            cells,
             labels,
+            background: L::background(background),
         }
     }
 }
@@ -86,8 +197,37 @@ impl Tracer {
             origin,
             extent,
             cells,
-            labels,
+            data,
+            background,
         } = band;
+        macro_rules! field {
+            ($values:expr) => {
+                Field::of(level, origin, extent, cells, $values, background)
+            };
+        }
+        match data {
+            VoxelData::U8(values) => self.band(field!(values)),
+            VoxelData::U16(values) => self.band(field!(values)),
+            VoxelData::U32(values) => self.band(field!(values)),
+            VoxelData::U64(values) => self.band(field!(values)),
+            VoxelData::I8(values) => self.band(field!(values)),
+            VoxelData::I16(values) => self.band(field!(values)),
+            VoxelData::I32(values) => self.band(field!(values)),
+            VoxelData::I64(values) => self.band(field!(values)),
+            VoxelData::F32(values) => self.band(field!(values)),
+            VoxelData::F64(values) => self.band(field!(values)),
+        }
+    }
+
+    fn band<L: TraceVoxel>(&mut self, field: Field<'_, L>) {
+        let Field {
+            level,
+            origin,
+            extent,
+            cells,
+            labels,
+            background,
+        } = field;
         let dims = [0, 1, 2].map(|axis| extent[axis] as usize);
         let stride = [1usize, dims[0], dims[0] * dims[1]];
         let scan = [0, 1, 2].map(|axis| {
@@ -103,7 +243,7 @@ impl Tracer {
                 for x in voxels[0].clone() {
                     let voxel =
                         x as usize * stride[0] + y as usize * stride[1] + z as usize * stride[2];
-                    if labels[voxel] == BACKGROUND {
+                    if labels[voxel] == background {
                         continue;
                     }
                     for dz in z.saturating_sub(1)..=(z + 1).min(scan[2].end - 1) {
@@ -130,19 +270,21 @@ impl Tracer {
                         bits &= bits - 1;
                         let cell = [scan[0].start + column as u32, y, z];
                         let emit = (0..3).all(|axis| cells[axis].contains(&cell[axis]));
-                        self.cell(level, origin, extent, labels, cell, emit);
+                        self.cell(level, origin, extent, labels, background, cell, emit);
                     }
                 }
             }
         }
     }
 
-    fn cell(
+    #[allow(clippy::too_many_arguments)]
+    fn cell<L: TraceVoxel>(
         &mut self,
         level: Level,
         origin: [u32; 3],
         extent: [u32; 3],
-        labels: &[u32],
+        labels: &[L],
+        background: L,
         cell: [u32; 3],
         emit: bool,
     ) {
@@ -150,7 +292,7 @@ impl Tracer {
         let mut distinct = [BACKGROUND; 8];
         let mut count = 0usize;
         for (corner, point) in CORNER.iter().enumerate() {
-            let label = voxel(extent, labels, cell, point);
+            let label = voxel(extent, labels, background, cell, point);
             corners[corner] = label;
             if label != BACKGROUND && !distinct[..count].contains(&label) {
                 distinct[count] = label;
@@ -297,7 +439,13 @@ impl Tracer {
     }
 }
 
-fn voxel(extent: [u32; 3], labels: &[u32], cell: [u32; 3], corner: &[i64; 3]) -> u32 {
+fn voxel<L: TraceVoxel>(
+    extent: [u32; 3],
+    labels: &[L],
+    background: L,
+    cell: [u32; 3],
+    corner: &[i64; 3],
+) -> u32 {
     let mut local = [0usize; 3];
     for axis in 0..3 {
         let value = i64::from(cell[axis]) + corner[axis];
@@ -306,13 +454,17 @@ fn voxel(extent: [u32; 3], labels: &[u32], cell: [u32; 3], corner: &[i64; 3]) ->
         }
         local[axis] = value as usize;
     }
-    labels[local[0] + extent[0] as usize * (local[1] + extent[1] as usize * local[2])]
+    let value = labels[local[0] + extent[0] as usize * (local[1] + extent[1] as usize * local[2])];
+    match value == background {
+        true => BACKGROUND,
+        false => value.label(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grana_volume::{Extent, Spacing};
+    use grana_volume::{Extent, Spacing, VoxelData};
 
     const SIDE: u32 = 16;
 
@@ -337,7 +489,8 @@ mod tests {
             [0, 0, 0],
             [SIDE, SIDE, SIDE],
             cells,
-            labels,
+            &VoxelData::U32(labels.to_vec()),
+            0.0,
         ));
         tracer.finish().expect("the labels trace a surface")
     }
@@ -422,7 +575,8 @@ mod tests {
             [0, 0, 0],
             [SIDE, SIDE, SIDE],
             [0..SIDE - 1, 0..SIDE - 1, 0..SIDE - 1],
-            &labels,
+            &VoxelData::U32(labels.clone()),
+            0.0,
         ));
         let whole = whole.finish().expect("the labels trace a surface");
         let mut split = Tracer::new();
@@ -432,7 +586,8 @@ mod tests {
                 [0, 0, 0],
                 [SIDE, SIDE, SIDE],
                 [0..SIDE - 1, 0..SIDE - 1, low..high],
-                &labels,
+                &VoxelData::U32(labels.clone()),
+                0.0,
             ));
         }
         let split = split.finish().expect("the labels trace a surface");

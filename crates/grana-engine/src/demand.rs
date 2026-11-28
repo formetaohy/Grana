@@ -44,3 +44,39 @@ fn splats(set: &ObjectSet) -> bool {
             .manual()
             .is_some_and(|frames| frames.iter().any(|seed| !seed.is_empty()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grana_scene::Dataset;
+    use grana_volume::{
+        Calibration, ChannelInfo, ColorTable, Extent, Intensity, Level, Pyramid, Spacing,
+        Statistics, VoxelFormat, VoxelSemantics,
+    };
+
+    fn scene(palette: bool) -> Scene {
+        let level = Level::new(Extent::new(8, 8, 4), Spacing::new(1.0, 1.0, 1.0));
+        let statistics = Statistics::declared(Intensity::new(0.0, 255.0), VoxelSemantics::Scalar);
+        let channel = ChannelInfo::new("signal", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8);
+        let channel = match palette {
+            true => {
+                channel.with_color_table(ColorTable::new(vec![[0.0, 0.0, 0.0], [0.2, 0.6, 0.2]]))
+            }
+            false => channel,
+        };
+        let pyramid = Pyramid::new(vec![level], 1, vec![channel], 1, 1.0, Calibration::Recorded);
+        Scene::new(Dataset::synthetic("demand", pyramid))
+    }
+
+    #[test]
+    fn an_indexed_channel_demands_no_volume() {
+        assert!(
+            !demand(&scene(true)).volume,
+            "an indexed channel traces its boundary geometry instead of marching a volume"
+        );
+        assert!(
+            demand(&scene(false)).volume,
+            "a scalar channel still marches its volume"
+        );
+    }
+}

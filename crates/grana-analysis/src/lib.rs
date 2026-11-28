@@ -44,5 +44,5 @@ pub use schedule::{Delivery, Run, ordered, parallel, workers};
 pub use surface::{
     SeedPolicy, Sources, SurfaceBuilder, SurfaceScan, apply, merge, recut, split, surface_level,
 };
-pub use trace::{TraceBand, Traced, Tracer};
+pub use trace::{TraceBand, TraceVoxel, Traced, Tracer};
 pub use track::TrackLinker;
