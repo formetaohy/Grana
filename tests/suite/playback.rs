@@ -49,6 +49,7 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
             session.scene().expect("a scene").dataset.pyramid(),
             budget(256 << 20, [320, 320]),
             [320, 320],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
@@ -97,6 +98,7 @@ fn play(delivery: Delivery, seconds: f64, advancing: bool) -> Option<(u32, usize
                     size: [320, 320],
                     delivery,
                     overlays: &[],
+                    surfaces: &[],
                 },
             )
             .expect("the viewport draws");
@@ -133,7 +135,7 @@ fn a_zoomed_out_proxy_prepares_only_the_level_it_draws() {
             }),
             &mut cache,
         );
-        let rendered = grana_engine::frame(&scene, &targets, &mut cache, 8 << 20)
+        let rendered = grana_engine::frame(&scene, &targets, &mut cache, 8 << 20, &[])
             .expect("the proxy scene renders");
         assert_eq!(
             rendered.splats.len(),
@@ -160,13 +162,13 @@ fn a_tight_splat_residency_coarsens_the_drawn_tier() {
     };
     let mut cache = Cache::new();
     let targets = grana_engine::plan_with(&scene, Some(lens), &mut cache);
-    let whole = grana_engine::frame(&scene, &targets, &mut cache, u64::MAX)
+    let whole = grana_engine::frame(&scene, &targets, &mut cache, u64::MAX, &[])
         .expect("the unconstrained proxy renders");
     let wanted = whole.splats[0].level();
     let bytes = whole.splats[0].bytes();
     let mut cache = Cache::new();
     let targets = grana_engine::plan_with(&scene, Some(lens), &mut cache);
-    let fitted = grana_engine::frame(&scene, &targets, &mut cache, bytes / 2)
+    let fitted = grana_engine::frame(&scene, &targets, &mut cache, bytes / 2, &[])
         .expect("the constrained proxy renders");
     assert!(
         fitted.splats[0].level() > wanted,
@@ -198,8 +200,8 @@ fn a_budget_change_that_keeps_the_mesh_level_keeps_the_topology() {
             }),
             &mut cache,
         );
-        let rendered =
-            grana_engine::frame(&scene, &targets, &mut cache, u64::MAX).expect("the cube renders");
+        let rendered = grana_engine::frame(&scene, &targets, &mut cache, u64::MAX, &[])
+            .expect("the cube renders");
         (targets, rendered.versions)
     });
     assert_ne!(

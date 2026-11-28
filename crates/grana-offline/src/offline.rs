@@ -84,6 +84,7 @@ impl Offline {
             plan,
             mut scene,
             bricks,
+            surfaces,
         } = task;
         scene.region = plan.region;
         if let Err(detail) = plan::validate(&plan) {
@@ -146,6 +147,10 @@ impl Offline {
             EXPORT_CEILING.min(self.ledger.spare().saturating_add(self.renderer.claimed()));
         let mut demand = grana_engine::demand(&scene);
         demand.transparent |= plan.transparent;
+        let samples = match demand.volume {
+            true => crate::export::SAMPLES,
+            false => 1,
+        };
         let frame = FrameBudget { size, demand };
         let room = match self.renderer.capacity(
             &self.device,
@@ -205,6 +210,7 @@ impl Offline {
             self.format,
             plan,
             needed.levels,
+            samples,
             claim,
             footprint,
         ) {
@@ -229,7 +235,11 @@ impl Offline {
                 .is_none_or(|(time, cached, _)| *time != pose.time || *cached != targets);
             if stale {
                 let budget = self.renderer.splat_budget();
-                match grana_engine::frame(&scene, &targets, &mut cache, budget) {
+                let views = surfaces
+                    .iter()
+                    .map(grana_engine::Surface::view)
+                    .collect::<Vec<_>>();
+                match grana_engine::frame(&scene, &targets, &mut cache, budget, &views) {
                     Ok(rendered) => prepared = Some((pose.time, targets, rendered)),
                     Err(detail) => {
                         export.discard();

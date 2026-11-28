@@ -105,6 +105,7 @@ fn task(volume: Volume, plan: Plan) -> Task {
         plan,
         scene,
         bricks: Arc::new(VolumeBricks { volume, pyramid }),
+        surfaces: Vec::new(),
     }
 }
 
@@ -365,6 +366,7 @@ fn paints_the_scene_overlay_in_an_export() {
         plan,
         scene: scene.snapshot().into_scene(),
         bricks: Arc::new(VolumeBricks { volume, pyramid }),
+        surfaces: Vec::new(),
     };
     match offline(&gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}
@@ -426,6 +428,7 @@ fn exports_a_slice_view() {
         plan,
         scene,
         bricks: Arc::new(VolumeBricks { volume, pyramid }),
+        surfaces: Vec::new(),
     };
     match offline(&gpu).run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}
@@ -627,6 +630,7 @@ fn claims_the_bricks_an_empty_volume_holds_rather_than_the_bricks_the_view_cover
         plan,
         scene,
         bricks: Arc::clone(&bricks) as Arc<dyn Bricks>,
+        surfaces: Vec::new(),
     };
     match context.run(task, &AtomicBool::new(false), &mut |_, _| {}) {
         Outcome::Complete { .. } => {}

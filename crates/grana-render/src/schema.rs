@@ -185,6 +185,7 @@ pub struct ChannelRow {
     pub intensity: grana_volume::Intensity,
     pub transfer: TransferFunction,
     pub volume: VolumeStyle,
+    pub surface: bool,
 }
 
 #[derive(Clone)]

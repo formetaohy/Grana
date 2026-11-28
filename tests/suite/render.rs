@@ -74,6 +74,7 @@ fn channels(pyramid: &Pyramid, transfers: &[TransferFunction]) -> Vec<grana_rend
             intensity: channel.intensity(),
             transfer: transfer.clone(),
             volume: VolumeStyle::default(),
+            surface: false,
         })
         .collect()
 }
@@ -93,6 +94,7 @@ fn build_renderer(gpu: &Gpu, pyramid: &Pyramid) -> Renderer {
             pyramid,
             budget(BUDGET, [SIDE, SIDE]),
             [SIDE, SIDE],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the volume");
     renderer
@@ -244,6 +246,7 @@ fn background(
             intensity: row.intensity,
             transfer: row.transfer.clone(),
             volume: row.volume,
+            surface: row.surface,
         })
         .collect::<Vec<_>>();
     let scene = SceneFrame {
@@ -872,6 +875,7 @@ fn empty_channel(pyramid: &Pyramid, visible: bool) -> Vec<grana_render::ChannelR
             intensity: channel.intensity(),
             transfer: TransferFunction::tinted(channel.tint()),
             volume: VolumeStyle::default(),
+            surface: false,
         })
         .collect()
 }
@@ -1269,6 +1273,7 @@ fn render_volume_with(
         intensity: pyramid.channels()[0].intensity(),
         transfer,
         volume: style,
+        surface: false,
     }];
     let scene = SceneFrame {
         versions: versions(),
@@ -1292,57 +1297,6 @@ fn render_volume_with(
     };
     settle(gpu, &mut renderer, &view, volume);
     read_pixels(gpu, &target, [SIDE, SIDE])
-}
-
-#[test]
-fn an_indexed_channel_paints_every_index_but_its_background() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let extent = Extent::new(64, 64, 16);
-    let mut values = vec![5u8; extent.voxel_count() as usize];
-    for z in 4..12u32 {
-        for y in 24..40u32 {
-            for x in 24..40u32 {
-                values[extent.index(x, y, z) as usize] = 200;
-            }
-        }
-    }
-    let colors = (0..256u32)
-        .map(|index| {
-            [
-                (index % 5) as f32 / 4.0,
-                (index % 3) as f32 / 2.0,
-                (index % 7) as f32 / 6.0,
-            ]
-        })
-        .collect::<Vec<_>>();
-    let table = grana_volume::ColorTable::new(colors.clone());
-    let volume = Volume::new(
-        extent,
-        Spacing::new(1.0, 1.0, 1.0),
-        vec![
-            Channel::new("indexed", [0.3, 0.6, 1.0], VoxelData::U8(values)).with_color_table(table),
-        ],
-    );
-    let camera = axis_camera(&volume);
-    let transfer = TransferFunction::indexed(colors);
-    let style = VolumeStyle::new(grana_display::VolumeMode::Blend, 0.5);
-    let background = render_volume_with(&gpu, &volume, style, &camera, transfer.clone(), false);
-    let image = render_volume_with(&gpu, &volume, style, &camera, transfer, true);
-    assert_eq!(
-        rect_difference(&image, &background, [4, 4, 20, 20]),
-        0.0,
-        "the background index painted the empty corner of its tile"
-    );
-    assert!(
-        rect_difference(&image, &background, [50, 50, 78, 78]) > 10.0,
-        "the labelled blob never rendered"
-    );
-    assert!(
-        painted(&image, &background) * 8 < (SIDE * SIDE) as usize,
-        "the background index was painted as a solid tile of volume"
-    );
 }
 
 fn difference(left: &[[u8; 4]], right: &[[u8; 4]]) -> f32 {
@@ -1608,6 +1562,7 @@ fn fits_the_volume_level_to_the_residency_budget() {
                 &pyramid,
                 budget(128 << 20, [SIDE, SIDE]),
                 [SIDE, SIDE],
+                grana_render::Demand::full(),
             )
             .expect("the test budget holds the volume");
         let target = texture(&gpu, SIDE);
@@ -1638,6 +1593,7 @@ fn fits_the_volume_level_to_the_residency_budget() {
             &pyramid,
             budget(45 << 20, [SIDE, SIDE]),
             [SIDE, SIDE],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
@@ -3047,6 +3003,7 @@ fn prefetches_the_carried_frame_into_vacant_slots() {
             &pyramid,
             budget(128 << 20, [SIDE, SIDE]),
             [SIDE, SIDE],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the volume");
     let target = texture(&gpu, SIDE);
@@ -3185,6 +3142,7 @@ fn keeps_the_fitted_level_across_a_camera_move() {
             &pyramid,
             budget(HOLLOW_BUDGET, [SIDE, SIDE]),
             [SIDE, SIDE],
+            grana_render::Demand::full(),
         )
         .expect("the hollow budget holds the volume");
     let target = texture(&gpu, SIDE);
@@ -3297,7 +3255,13 @@ fn carries_its_bricks_across_a_resize_that_reseats_the_atlas() {
         gpu.pipelines(),
     );
     renderer
-        .set_dataset(gpu.device(), &pyramid, total, narrow)
+        .set_dataset(
+            gpu.device(),
+            &pyramid,
+            total,
+            narrow,
+            grana_render::Demand::full(),
+        )
         .expect("the test budget holds the volume");
     let narrow_target = texture(&gpu, narrow[0]);
     let narrow_view = narrow_target.create_view(&Default::default());

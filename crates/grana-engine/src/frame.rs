@@ -3,6 +3,7 @@ use grana_render::{Delivery, Frame, FrameInfo, Renderer};
 use grana_scene::Scene;
 use wgpu::{Device, Queue, TextureView};
 
+use crate::surface::ChannelSurface;
 use crate::view;
 
 pub struct View<'a> {
@@ -11,6 +12,7 @@ pub struct View<'a> {
     pub size: [u32; 2],
     pub delivery: Delivery,
     pub overlays: &'a [grana_render::Overlay<'a>],
+    pub surfaces: &'a [ChannelSurface<'a>],
 }
 
 pub(crate) struct Draw<'a> {

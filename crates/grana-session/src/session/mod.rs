@@ -24,6 +24,7 @@ mod replay;
 mod scene_import;
 mod seed;
 mod stitch;
+mod surface;
 mod tasks;
 use std::cell::Cell;
 use std::collections::hash_map::Entry;
@@ -80,6 +81,7 @@ use grana_protocol::{NamedViewSpec, Protocol, Staged, Step, ViewSpec};
 pub use localization::Localizations;
 use recover::{Restore, Restored};
 use stitch::Stitch;
+use surface::Surfaces;
 use tasks::Tasks;
 
 const MAX_IN_FLIGHT: usize = 8192;
@@ -270,6 +272,7 @@ pub struct Session {
     import: Vec<ImportNote>,
     stitch: Option<Stitch>,
     localization: Localizations,
+    traced: Surfaces,
 }
 
 impl Default for Session {
@@ -374,6 +377,7 @@ impl Session {
             import: Vec::new(),
             stitch: None,
             localization: Localizations::default(),
+            traced: Surfaces::default(),
         }
     }
     pub fn insert_keyframe(&mut self, key: Keyframe) -> usize {
@@ -458,6 +462,7 @@ impl Session {
     }
 
     pub(crate) fn replace(&mut self) {
+        self.traced.clear();
         self.replaced = self.touch();
         self.content = self.replaced;
     }
@@ -500,6 +505,7 @@ impl Session {
             || self.tasks.busy()
             || self.edits.busy()
             || self.stitch.as_ref().is_some_and(Stitch::busy)
+            || self.traced.busy()
             || self.batch_running
             || self.previewing()
     }
@@ -881,6 +887,7 @@ impl Session {
         repaint |= self.poll_batch_scan();
         repaint |= self.poll_batch();
         repaint |= self.poll_stitch();
+        repaint |= self.poll_surfaces();
         repaint |= self.refresh_masks();
         repaint |= self.sync_localizations();
         if self.deferred && self.analysis.is_empty() && self.progress.is_empty() {
@@ -890,6 +897,7 @@ impl Session {
         if repaint {
             self.touch();
         }
+        self.ensure_surfaces();
         repaint
     }
 

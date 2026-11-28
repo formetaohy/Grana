@@ -7,6 +7,7 @@ pub mod label;
 pub mod mesh;
 pub mod profile;
 pub mod run;
+pub mod surface;
 
 pub use batch::{
     Batch, BatchPoll, Comparison, ComparisonReport, ComparisonSample, Control, DatasetEntry,
@@ -24,3 +25,4 @@ pub use profile::ProfileSource;
 pub use run::{
     ColocRequest, DetectRequest, DetectSources, DriftRequest, ObjectColocRequest, RegisterRequest,
 };
+pub use surface::Surface;

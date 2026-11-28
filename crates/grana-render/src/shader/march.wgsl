@@ -63,7 +63,7 @@ fn march_volume(
         let limit = min(walk.exit, finish);
         while (cursor < limit && samples < frame.bounds.x && cells < frame.bounds.y) {
             cells += 1u;
-            let stride = walk_stride(walk, cursor);
+            let stride = walk_stride(cursor);
             let voxel = walk_voxel(walk, cursor);
             let coord = walk_cell(walk, voxel);
             let cell = cell_index(coord);
@@ -82,7 +82,7 @@ fn march_volume(
             let ceiling = select(
                 stride * SEGMENT_STRIDE,
                 stride,
-                projection() || categorical_scene(),
+                projection(),
             );
             let advance = clamp(
                 SEGMENT_ERROR / max(sample.extinction * walk.voxels, 1.0e-9),
@@ -91,27 +91,15 @@ fn march_volume(
             );
             let segment = min(advance, limit - cursor);
             let tau = sample.extinction * segment * walk.voxels;
-            let surfacing = sample.surface != 0u;
-            var surface_normal = vec4<f32>(0.0);
-            if (surfacing) {
-                let normal = categorical_normal(
-                    walk.tap,
-                    local,
-                    sample.surface - 1u,
-                );
-                surface_normal = vec4<f32>(normal, 1.0);
-            }
-            let alpha = select(1.0 - exp(-tau), sample.alpha, surfacing);
-            let weight = select(sample.extinction, sample.alpha, surfacing);
+            let alpha = 1.0 - exp(-tau);
             if (alpha > 0.0) {
                 let world = origin + direction * cursor;
-                let albedo = sample.emission / max(weight, OPTICAL_MINIMUM_TAU);
-                var lit: vec3<f32>;
-                if (surfacing) {
-                    lit = categorical_lighting(albedo, surface_normal.xyz, world);
-                } else {
-                    lit = structure_lighting(albedo, structure_tap(walk.tap, local), world);
-                }
+                let albedo = sample.emission / max(sample.extinction, OPTICAL_MINIMUM_TAU);
+                let lit = structure_lighting(
+                    albedo,
+                    structure_tap(walk.tap, local),
+                    world,
+                );
                 march.radiance += march.transmittance * alpha * lit;
                 march.transmittance *= 1.0 - alpha;
                 if (march.surface.x >= UNREACHED_DEPTH) {
@@ -121,11 +109,7 @@ fn march_volume(
             if (march.surface.y >= 1.0
                 && (1.0 - march.transmittance >= SURFACE_OPACITY || sample.peak)) {
                 march.surface.y = clip_depth(origin + direction * cursor);
-                if (surfacing) {
-                    march.normal = surface_normal;
-                } else {
-                    march.normal = structure_sample_normal(structure_tap(walk.tap, local));
-                }
+                march.normal = structure_sample_normal(structure_tap(walk.tap, local));
             }
             cursor += segment;
             samples += 1u;

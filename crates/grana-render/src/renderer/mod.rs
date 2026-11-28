@@ -674,7 +674,10 @@ impl Renderer {
                 self.install(
                     device,
                     &pyramid,
-                    reserve::Allocation::Display(split.residency),
+                    reserve::Allocation::Display {
+                        budget: split.residency,
+                        volume: self.demand.volume,
+                    },
                     Reset::Residency(queue),
                 )?;
             }
@@ -762,8 +765,10 @@ impl Renderer {
         pyramid: &Pyramid,
         budget: u64,
         size: [u32; 2],
+        demand: budget::Demand,
     ) -> Result<(), String> {
         assert!(budget > 0, "a renderer needs a texture budget");
+        self.demand = demand;
         self.ceiling = if budget > self.total {
             budget
         } else {
@@ -788,7 +793,10 @@ impl Renderer {
         self.install(
             device,
             pyramid,
-            reserve::Allocation::Display(split.residency),
+            reserve::Allocation::Display {
+                budget: split.residency,
+                volume: self.demand.volume,
+            },
             Reset::Dataset,
         )?;
         self.settle()?;
@@ -837,6 +845,9 @@ impl Renderer {
         device: &Device,
         pending: &HashSet<BrickRequest>,
     ) -> Result<Option<Requests>, String> {
+        if !self.demand.volume {
+            return Ok(None);
+        }
         let time = self.time;
         let prefetch = self.prefetch;
         let Some(resources) = self.resources.as_mut() else {
@@ -859,7 +870,7 @@ impl Renderer {
     }
 
     pub fn requests_pending(&self) -> bool {
-        self.residence.pending()
+        self.demand.volume && self.residence.pending()
     }
 
     pub fn upload(&mut self, bricks: &[(BrickRequest, PackedBrick)]) {

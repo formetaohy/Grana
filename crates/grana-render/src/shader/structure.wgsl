@@ -22,7 +22,7 @@ fn structure_density(texel: vec3<i32>) -> f32 {
             if (channel >= count) {
                 break;
             }
-            if (channel_categorical(channel)) {
+            if (channel_surface(channel)) {
                 continue;
             }
             total += max(values[component], 0.0);

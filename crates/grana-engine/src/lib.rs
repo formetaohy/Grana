@@ -7,14 +7,16 @@ mod overlay;
 mod splat;
 mod spot;
 mod style;
+mod surface;
 mod view;
 mod viewport;
 
-pub use demand::demand;
+pub use demand::{demand, surface_channel};
 pub use engine::{Engine, Picked};
 pub use frame::View;
 pub use grana_render::Overlay;
 pub use overlay::overlays;
 pub use splat::{SplatCache, SplatMembers};
+pub use surface::{ChannelSurface, Surface};
 pub use view::{Cache, Key, Lens, PickRows, RenderedScene, Targets, frame, key, plan, plan_with};
 pub use viewport::Viewport;

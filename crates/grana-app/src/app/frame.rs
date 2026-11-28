@@ -98,7 +98,10 @@ impl App {
             return Ok(());
         };
         if replaced || !engine.holds(&pyramid) {
-            engine.set_dataset(surface.device(), &pyramid, surface.budget(), size)?;
+            let demand = session
+                .scene()
+                .map_or_else(grana_render::Demand::full, grana_engine::demand);
+            engine.set_dataset(surface.device(), &pyramid, surface.budget(), size, demand)?;
         } else {
             engine.invalidate(&pyramid);
         }
@@ -125,6 +128,19 @@ impl App {
         let viewport = self.viewport();
         let scene = self.session.scene();
         let overlays = scene.map_or_else(Vec::new, grana_engine::overlays);
+        let surfaces = self
+            .session
+            .surfaces()
+            .iter()
+            .map(|surface| {
+                grana_engine::ChannelSurface::new(
+                    surface.channel(),
+                    surface.mesh(),
+                    surface.colors(),
+                    surface.revision(),
+                )
+            })
+            .collect::<Vec<_>>();
         let outcome = {
             let App {
                 surface,
@@ -142,6 +158,7 @@ impl App {
                         size: [viewport.region[2], viewport.region[3]],
                         delivery,
                         overlays: &overlays,
+                        surfaces: &surfaces,
                     },
                 ),
                 _ => Ok(()),

@@ -254,20 +254,25 @@ pub(super) fn display<'a>(
         },
     ));
     let volume = scene.channels[index].volume();
-    let modes = VolumeMode::ALL.map(|mode| volume_mode_label(language, mode));
-    children.push(view::segmented_fill(
-        ctx,
-        "display.volume",
-        &modes,
-        volume.mode().index(),
-        move |selected| {
-            Message::Command(Command::SetVolumeMode {
-                channel: index,
-                mode: VolumeMode::from_index(selected).expect("the segment names a volume mode"),
-            })
-        },
-    ));
-    if volume.mode() == VolumeMode::Isosurface {
+    if indexed {
+        children.push(view::weak(ctx, grana_i18n::inspector::surface(language)));
+    } else {
+        let modes = VolumeMode::ALL.map(|mode| volume_mode_label(language, mode));
+        children.push(view::segmented_fill(
+            ctx,
+            "display.volume",
+            &modes,
+            volume.mode().index(),
+            move |selected| {
+                Message::Command(Command::SetVolumeMode {
+                    channel: index,
+                    mode: VolumeMode::from_index(selected)
+                        .expect("the segment names a volume mode"),
+                })
+            },
+        ));
+    }
+    if !indexed && volume.mode() == VolumeMode::Isosurface {
         let isovalue = volume.isovalue();
         let value = format!("{:.0}", current.value(isovalue));
         children.push(view::slider_readout(

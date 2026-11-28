@@ -423,7 +423,7 @@ pub(crate) fn volume_target(view: TargetView<'_>) -> usize {
         }
         CameraProjection::Orthographic => 2.0 * camera.half_height() / height.max(1.0),
     };
-    let footprint = pixel_world / crate::material::samples_per_voxel(pyramid);
+    let footprint = pixel_world;
     let wanted = finest_for(pyramid, first, footprint);
     match kept {
         Some(kept)
@@ -477,11 +477,11 @@ mod tests {
     use super::*;
     use grana_display::Camera;
     use grana_volume::{
-        Calibration, ChannelInfo, ColorTable, Extent, Intensity, Level, Spacing, Statistics,
-        VoxelFormat, VoxelSemantics,
+        Calibration, ChannelInfo, Extent, Intensity, Level, Spacing, Statistics, VoxelFormat,
+        VoxelSemantics,
     };
 
-    fn pyramid(palette: bool) -> Pyramid {
+    fn pyramid() -> Pyramid {
         let fine = Level::new(Extent::new(1024, 1024, 1024), Spacing::new(1.0, 1.0, 1.0));
         let mut levels = vec![fine];
         for _ in 0..2 {
@@ -489,12 +489,7 @@ mod tests {
             levels.push(coarser);
         }
         let statistics = Statistics::declared(Intensity::new(0.0, 255.0), VoxelSemantics::Scalar);
-        let channel = if palette {
-            ChannelInfo::new("labels", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8)
-                .with_color_table(ColorTable::new(vec![[0.0, 0.0, 0.0], [0.2, 0.6, 0.2]]))
-        } else {
-            ChannelInfo::new("signal", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8)
-        };
+        let channel = ChannelInfo::new("signal", [0.2, 0.6, 0.2], statistics, VoxelFormat::U8);
         Pyramid::new(levels, 3, vec![channel], 1, 1.0, Calibration::Recorded)
     }
 
@@ -524,7 +519,7 @@ mod tests {
 
     #[test]
     fn a_level_holds_until_the_footprint_leaves_its_band() {
-        let sampled = pyramid(false);
+        let sampled = pyramid();
         let mut heights = Vec::new();
         let mut height = 40.0f32;
         while height < 4000.0 {
@@ -556,19 +551,6 @@ mod tests {
             target_kept(&sampled, 40.0, 0),
             coarse,
             "a footprint far outside the finest band releases it"
-        );
-    }
-
-    #[test]
-    fn keeps_a_categorical_volume_finer_than_the_same_scalar_volume() {
-        let scalar = pyramid(false);
-        let categorical = pyramid(true);
-        let held = target(&scalar, 600.0);
-        let kept = target(&categorical, 600.0);
-        assert!(held > 0, "the scalar volume coarsens at this pixel size");
-        assert!(
-            kept < held,
-            "a categorical volume keeps two samples per voxel: level {kept} against {held}"
         );
     }
 }

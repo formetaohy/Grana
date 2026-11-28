@@ -31,6 +31,7 @@ fn keeps_one_scale_across_depth_and_spreads_the_aperture() {
             &pyramid,
             budget(256 << 20, [SIDE, SIDE]),
             [SIDE, SIDE],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the volume");
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
@@ -142,6 +143,7 @@ fn hidden(pyramid: &Pyramid) -> Vec<ChannelRow> {
             intensity: channel.intensity(),
             transfer: TransferFunction::tinted(channel.tint()),
             volume: VolumeStyle::default(),
+            surface: false,
         })
         .collect()
 }

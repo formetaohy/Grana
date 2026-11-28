@@ -14,6 +14,7 @@ use grana_session::{Kind as MessageKind, Session, Transfer};
 use crate::bricks::ImageBricks;
 
 const OPEN_LIMIT: Duration = Duration::from_secs(600);
+const SURFACE_LIMIT: Duration = Duration::from_secs(600);
 const OPEN_POLL: Duration = Duration::from_millis(10);
 
 pub struct Request {
@@ -74,6 +75,7 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         })?;
     }
     let mut session = open(&request.input)?;
+    settle_surfaces(&mut session);
     let view = named(&mut session, request.view.as_deref(), &request.input)?;
     let scene = session.scene().expect("the opened session holds a scene");
     let image = session.image().expect("the opened session holds an image");
@@ -148,12 +150,14 @@ pub fn run(request: &Request) -> Result<PathBuf, String> {
         }
         .plan()?
     };
+    let surfaces = crate::surfaces::traced(session.surfaces());
     let channels = Channels::render(image, scene);
     let mut offline = Offline::headless()?;
     let task = Task {
         plan,
         scene: scene.snapshot().into_scene(),
         bricks: Arc::new(ImageBricks::new(channels)),
+        surfaces,
     };
     let cancel = AtomicBool::new(false);
     let mut shown = u32::MAX;
@@ -285,6 +289,21 @@ fn classify(output: &Path, lineage: bool) -> Result<DestinationKind, String> {
         Some(other) => Err(format!(
             "a render writes PNG, OME-TIFF, SVG, PDF, MP4, MOV or a frame folder, not `.{other}`"
         )),
+    }
+}
+
+fn settle_surfaces(session: &mut Session) {
+    let start = Instant::now();
+    while !session.surfaces_settled() {
+        if start.elapsed() >= SURFACE_LIMIT {
+            eprintln!(
+                "the channel surfaces did not finish within {} seconds",
+                SURFACE_LIMIT.as_secs()
+            );
+            return;
+        }
+        session.poll();
+        std::thread::sleep(OPEN_POLL);
     }
 }
 

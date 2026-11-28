@@ -6,6 +6,7 @@ mod clipboard;
 mod preference;
 pub mod render;
 mod stitch;
+mod surfaces;
 mod window;
 
 pub use app::{App, Wake};

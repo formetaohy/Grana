@@ -18,7 +18,7 @@ use crate::plan::{Destination, Plan, Pose, Still, camera, detail_lens, still};
 use crate::sink::Sink;
 use grana_page::Format;
 
-const SAMPLES: u32 = 32;
+pub(crate) const SAMPLES: u32 = 32;
 const ATTEMPTS: u32 = 4096;
 const READBACK_SLOTS: usize = 2;
 
@@ -101,6 +101,7 @@ impl Export {
         format: TextureFormat,
         plan: Plan,
         levels: Vec<usize>,
+        samples: u32,
         claim: Claim,
         footprint: Footprint,
     ) -> Result<Self, String> {
@@ -201,7 +202,7 @@ impl Export {
             frame: 0,
             written: 0,
             attempts: 0,
-            frames: SAMPLES,
+            frames: samples,
             drawn: 0,
             viewport,
             lens,

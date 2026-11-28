@@ -19,4 +19,5 @@ pub struct Task {
     pub plan: Plan,
     pub scene: Scene,
     pub bricks: Arc<dyn Bricks>,
+    pub surfaces: Vec<grana_engine::Surface>,
 }

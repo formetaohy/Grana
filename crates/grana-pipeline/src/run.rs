@@ -36,6 +36,7 @@ mod localization_report;
 mod localization_window;
 mod mask;
 mod segment;
+mod trace;
 
 pub use self::calibration::calibrate;
 use self::domain::Domain;
@@ -57,6 +58,7 @@ pub use self::localization_report::{LocalizationReportRequest, localization_repo
 pub use self::localization_window::LocalizationWindow;
 pub use self::mask::{MaskRequest, mask};
 pub use self::segment::{SegmentRequest, segment};
+pub use self::trace::{SurfaceEvent, TraceRequest, trace};
 
 pub type EditedFrame = (u32, Option<Arc<ObjectFrame>>);
 

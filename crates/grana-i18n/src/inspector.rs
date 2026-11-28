@@ -41,6 +41,7 @@ labels! {
     blend => "Blend" / "混合";
     maximum_projection => "MIP" / "最大投影";
     isosurface => "Iso" / "等值面";
+    surface => "Surface" / "表面";
     auto => "Auto" / "自动";
     tinted => "Tinted" / "通道着色";
     gray => "Gray" / "灰度";

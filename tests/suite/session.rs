@@ -2103,6 +2103,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
             session.scene().expect("the series opens").dataset.pyramid(),
             support::budget(256 << 20, [160, 160]),
             [160, 160],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
@@ -2152,6 +2153,7 @@ fn a_mask_radius_restreams_the_engine_without_rebuilding_the_dataset() {
                             size,
                             delivery: Delivery::Immediate,
                             overlays: &[],
+                            surfaces: &[],
                         },
                     )
                     .expect("the viewport draws");
@@ -2227,6 +2229,7 @@ fn reads_each_streamed_brick_once() {
             &pyramid,
             support::budget(256 << 20, [160, 160]),
             [160, 160],
+            grana_render::Demand::full(),
         )
         .expect("the test budget holds the series");
     let mut camera = Camera::new(35.0);
@@ -2275,6 +2278,7 @@ fn reads_each_streamed_brick_once() {
                     size: [160, 160],
                     delivery: Delivery::Immediate,
                     overlays: &[],
+                    surfaces: &[],
                 },
             )
             .expect("the viewport draws");

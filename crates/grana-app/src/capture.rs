@@ -96,6 +96,9 @@ impl Capture for OfflineCapture {
                 )
             }
         };
+        let surfaces = crate::surfaces::traced(&grana_pipeline::surface::trace_channels(
+            channels, scene, cancel,
+        )?);
         let task = Task {
             plan: Plan {
                 destination,
@@ -110,6 +113,7 @@ impl Capture for OfflineCapture {
                 channels.image_shared(),
                 scene,
             ))),
+            surfaces,
         };
         match offline.run(task, cancel, &mut |_, _| {}) {
             Outcome::Complete { .. } => Ok(()),

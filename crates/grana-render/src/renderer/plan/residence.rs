@@ -4,7 +4,7 @@ use super::super::residency::{Mode, Resolution, ViewState};
 use super::super::signature::digest;
 use super::super::view::View;
 use super::super::*;
-use super::{Input, levels};
+use super::{Input, Planned, levels};
 use crate::hollow::Cursor;
 use crate::planner::{Demand, decode_plan};
 use crate::schema::Versions;
@@ -256,6 +256,7 @@ impl Missing {
 }
 
 pub(crate) struct Adapt<'a> {
+    pub(crate) volume: bool,
     pub(crate) pyramid: &'a Pyramid,
     pub(crate) camera: &'a Camera,
     pub(crate) region: Region,
@@ -484,6 +485,7 @@ impl Residence {
 
     pub(crate) fn adapt(&mut self, adapt: Adapt<'_>) -> Outlook {
         let Adapt {
+            volume,
             pyramid,
             camera,
             region,
@@ -507,16 +509,25 @@ impl Residence {
         });
         self.kept = Some(target);
         let quantum = Resolution::of(pyramid, target, camera, size[1]);
-        let planned = levels(Input {
-            pyramid,
-            camera,
-            region,
-            view,
-            target,
-            hollow,
-            denial: &self.denial,
-            budget,
-        });
+        let planned = match volume {
+            true => levels(Input {
+                pyramid,
+                camera,
+                region,
+                view,
+                target,
+                hollow,
+                denial: &self.denial,
+                budget,
+            }),
+            false => Planned {
+                levels: Levels {
+                    level: target,
+                    capacity: budget,
+                },
+                truncated: false,
+            },
+        };
         for count in &mut self.denial {
             *count /= 2;
         }
@@ -534,7 +545,7 @@ impl Residence {
             },
         );
         let replan = self.planned.as_ref() != Some(&key);
-        let settled = self.settled == Some(key);
+        let settled = !volume || self.settled == Some(key);
         let ready_at_time = settled && (!assured || !planned.truncated);
         let ready = if awaits || assured {
             ready_at_time

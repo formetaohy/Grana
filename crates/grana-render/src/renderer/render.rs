@@ -47,7 +47,7 @@ impl Shot {
                 .scene
                 .channels
                 .iter()
-                .any(|row| row.visible && row.opacity > 0.0),
+                .any(|row| row.visible && row.opacity > 0.0 && !row.surface),
         }
     }
 
@@ -98,11 +98,17 @@ impl Renderer {
         let mut prepared = match self.prepare(device, queue, &mut encoder, target, &frame, shot) {
             Ok(prepared) => prepared,
             Err(Halt::Blank) => {
+                eprintln!("PROBE render holds no resources");
                 blank(&mut encoder, frame.target);
                 queue.submit([encoder.finish()]);
                 return Ok(self.info);
             }
             Err(Halt::Hold(info)) => {
+                eprintln!(
+                    "PROBE render holds the frame: awaits={} exported={}",
+                    frame.delivery.awaits(),
+                    self.exporting
+                );
                 self.waits += 1;
                 queue.submit([encoder.finish()]);
                 return Ok(info);
@@ -228,6 +234,7 @@ impl Renderer {
         let forgotten = resources.atlas.remember(frame.time);
         resources.drop_hollows(&forgotten);
         let outlook = residence.adapt(Adapt {
+            volume: shot.volume,
             pyramid: &resources.pyramid,
             camera: frame.camera,
             region: frame.region,
@@ -294,7 +301,10 @@ impl Renderer {
         ) {
             return Err(Halt::Fail(detail));
         }
-        let reserved = residence.reserve(outlook.replan);
+        let reserved = match shot.volume {
+            true => residence.reserve(outlook.replan),
+            false => None,
+        };
         if shot.awaits && !outlook.ready && reserved.is_none() {
             info.rebuilt = false;
             info.fading = false;

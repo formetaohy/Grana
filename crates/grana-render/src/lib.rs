@@ -12,7 +12,6 @@ mod hollow;
 mod image;
 mod jitter;
 mod layout;
-mod material;
 mod mesh;
 mod occupancy;
 mod oit;

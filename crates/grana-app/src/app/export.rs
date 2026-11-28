@@ -55,6 +55,7 @@ impl Export {
         plan: Plan,
         image: Arc<Image>,
         scene: &Scene,
+        surfaces: &[grana_engine::Surface],
         language: grana_i18n::Language,
     ) -> Result<(), String> {
         if self.active.is_some() {
@@ -66,6 +67,7 @@ impl Export {
             plan,
             scene,
             bricks: Arc::new(ImageBricks::new(channels)),
+            surfaces: surfaces.to_vec(),
         };
         self.active = Some(self.worker.submit(task));
         self.progress = None;
@@ -175,7 +177,8 @@ impl App {
             self.set_output_message(grana_i18n::app::dataset_opening(language));
             return;
         };
-        match self.export.start(plan, image, scene, language) {
+        let surfaces = crate::surfaces::traced(self.session.surfaces());
+        match self.export.start(plan, image, scene, &surfaces, language) {
             Ok(()) => {
                 self.output = None;
                 self.repaint_at = Some(Instant::now());

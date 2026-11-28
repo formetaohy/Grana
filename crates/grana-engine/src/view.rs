@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use grana_display::{Camera, Shading, srgb_to_linear};
+
 use grana_geometry::TriangleBudget;
 use grana_render::{
     ChannelRow, Digest, Layer, LayerKey, SceneFrame, Splat, SplatChunk, SplatLevel, Splats, Style,
@@ -12,6 +13,9 @@ use crate::geometry::GeometryCache;
 use crate::splat::{SplatCache, SplatMembers};
 use crate::spot::{self, Choice};
 use crate::style::StyleCache;
+use crate::surface::ChannelSurface;
+
+const CHANNEL_OWNER: u64 = 1 << 63;
 
 const SEED_COLOR: [f32; 3] = [1.00, 0.97, 0.90];
 const SEED_SCALE: f32 = 2.0;
@@ -289,6 +293,7 @@ pub fn frame(
     targets: &Targets,
     cache: &mut Cache,
     budget: u64,
+    surfaces: &[ChannelSurface<'_>],
 ) -> Result<RenderedScene, String> {
     assert_eq!(
         targets.detail.len(),
@@ -526,6 +531,15 @@ pub fn frame(
         appearance.mix(item_digest(selection.item));
     }
     let channels = channel_rows(scene);
+    channel_layers(
+        scene,
+        surfaces,
+        &mut base,
+        &mut topology,
+        &mut appearance,
+        &mut layers,
+        &mut picks,
+    );
     assert_eq!(
         ordinal,
         targets.detail.len(),
@@ -553,16 +567,65 @@ pub fn frame(
     })
 }
 
+fn channel_layers(
+    scene: &Scene,
+    surfaces: &[ChannelSurface<'_>],
+    base: &mut u32,
+    topology: &mut Digest,
+    appearance: &mut Digest,
+    layers: &mut Vec<Layer>,
+    picks: &mut Vec<PickRows>,
+) {
+    for surface in surfaces {
+        let Some(channel) = scene.channels.get(surface.channel()) else {
+            continue;
+        };
+        if !channel.enabled {
+            continue;
+        }
+        let mut look = Digest::new();
+        for color in surface.colors() {
+            for component in color {
+                look.real(*component);
+            }
+        }
+        look.real(channel.opacity);
+        let look = look.finish();
+        let styles = surface
+            .colors()
+            .iter()
+            .map(|color| Style::new(*color, true, false, channel.opacity))
+            .collect::<Vec<_>>();
+        let mesh = Arc::clone(surface.mesh());
+        let count = mesh.object_count();
+        let key = LayerKey::new(CHANNEL_OWNER | surface.channel() as u64, 0, 0);
+        let layer = Layer::new(key, surface.revision(), look, mesh, styles.into(), *base);
+        topology.mix(key.digest());
+        topology.mix(surface.revision());
+        topology.mix(count as u64);
+        topology.mix(u64::from(*base));
+        appearance.mix(look);
+        *base += count as u32;
+        picks.push(PickRows {
+            base: layer.pick_base,
+            ids: Arc::from(Vec::new()),
+        });
+        layers.push(layer);
+    }
+}
+
 fn channel_rows(scene: &Scene) -> Vec<ChannelRow> {
     scene
         .channels
         .iter()
-        .map(|channel| ChannelRow {
+        .enumerate()
+        .map(|(index, channel)| ChannelRow {
             visible: channel.enabled,
             opacity: channel.opacity,
             intensity: channel.window,
             transfer: channel.transfer().clone(),
             volume: channel.volume(),
+            surface: crate::demand::surface_channel(scene, index),
         })
         .collect()
 }

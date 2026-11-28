@@ -126,10 +126,12 @@ impl Engine {
         pyramid: &Pyramid,
         budget: u64,
         size: [u32; 2],
+        demand: grana_render::Demand,
     ) -> Result<(), String> {
         assert!(budget > 0, "the engine keeps a positive texture budget");
         self.budget = budget;
-        self.renderer.set_dataset(device, pyramid, budget, size)?;
+        self.renderer
+            .set_dataset(device, pyramid, budget, size, demand)?;
         self.pending_pick = None;
         self.prepared = None;
         self.plan = None;
@@ -287,7 +289,8 @@ impl Engine {
                 || prepared.targets.as_ref() != detail.as_ref()
         }) {
             let budget = self.renderer.splat_budget();
-            let rendered = view::frame(view.scene, &detail, &mut self.cache, budget)?;
+            let rendered =
+                view::frame(view.scene, &detail, &mut self.cache, budget, view.surfaces)?;
             self.prepared = Some(Prepared {
                 topology: keys.topology(),
                 classification: keys.classification(),
@@ -302,8 +305,13 @@ impl Engine {
             prepared.appearance = keys.appearance();
             prepared.display = keys.display();
             let budget = self.renderer.splat_budget();
-            prepared.rendered =
-                view::frame(view.scene, &prepared.targets, &mut self.cache, budget)?;
+            prepared.rendered = view::frame(
+                view.scene,
+                &prepared.targets,
+                &mut self.cache,
+                budget,
+                view.surfaces,
+            )?;
         }
         let info = {
             let Self {
@@ -326,6 +334,7 @@ impl Engine {
                         size,
                         delivery: view.delivery,
                         overlays: view.overlays,
+                        surfaces: view.surfaces,
                     },
                 },
                 &prepared.rendered,

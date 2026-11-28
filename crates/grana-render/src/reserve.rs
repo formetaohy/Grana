@@ -64,21 +64,24 @@ pub(crate) struct Footprint {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Allocation {
-    Display(u64),
+    Display { budget: u64, volume: bool },
     Export { slots: usize, ceiling: u64 },
 }
 
 impl Allocation {
     pub(crate) fn shrink(self, least: u64) -> Option<Self> {
         match self {
-            Self::Display(budget) if budget > least => Some(Self::Display((budget / 2).max(least))),
+            Self::Display { budget, volume } if budget > least => Some(Self::Display {
+                budget: (budget / 2).max(least),
+                volume,
+            }),
             Self::Export { slots, ceiling } if slots > MINIMUM_SLOTS as usize => {
                 Some(Self::Export {
                     slots: (slots / 2).max(MINIMUM_SLOTS as usize),
                     ceiling,
                 })
             }
-            Self::Display(_) | Self::Export { .. } => None,
+            Self::Display { .. } | Self::Export { .. } => None,
         }
     }
 }
@@ -102,9 +105,9 @@ impl Plan {
     ) -> Result<Self, String> {
         let slot_bytes = slot_bytes(pyramid);
         match allocation {
-            Allocation::Display(budget) => {
+            Allocation::Display { budget, volume } => {
                 let (slots, record_limit, surface) =
-                    display(pyramid, budget, slot_bytes, max_dimension)?;
+                    display(pyramid, budget, slot_bytes, max_dimension, volume)?;
                 let charges = dataset(pyramid, slots, record_limit);
                 Ok(Self::assemble(
                     budget,
@@ -219,6 +222,7 @@ fn display(
     budget: u64,
     slot_bytes: u64,
     max_dimension: u32,
+    volume: bool,
 ) -> Result<(Slots, usize, u64), String> {
     let limit = (budget / RECORD_SHARE / brick::RECORD_BYTES) as usize;
     let record_limit = limit.max(coarsest_count(pyramid));
@@ -235,10 +239,13 @@ fn display(
         .saturating_sub(floor(pyramid));
     let affordable = (held / per_slot(slot_bytes)).max(1);
     let affordable = usize::try_from(affordable).unwrap_or(usize::MAX);
-    let slots = Slots::covering(brick_count(pyramid), max_dimension)
-        .ok()
-        .filter(|slots| slots.capacity() <= affordable)
-        .unwrap_or_else(|| Slots::fitting(affordable, max_dimension));
+    let slots = match volume {
+        true => Slots::covering(brick_count(pyramid), max_dimension)
+            .ok()
+            .filter(|slots| slots.capacity() <= affordable)
+            .unwrap_or_else(|| Slots::fitting(affordable, max_dimension)),
+        false => Slots::fitting(MINIMUM_SLOTS as usize, max_dimension),
+    };
     Ok((slots, record_limit, surface))
 }
 

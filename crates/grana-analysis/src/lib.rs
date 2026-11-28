@@ -17,6 +17,7 @@ mod relation;
 mod scan;
 mod schedule;
 mod surface;
+mod trace;
 mod track;
 mod work;
 
@@ -43,4 +44,5 @@ pub use schedule::{Delivery, Run, ordered, parallel, workers};
 pub use surface::{
     SeedPolicy, Sources, SurfaceBuilder, SurfaceScan, apply, merge, recut, split, surface_level,
 };
+pub use trace::{TraceBand, Traced, Tracer};
 pub use track::TrackLinker;

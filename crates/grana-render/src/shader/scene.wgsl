@@ -45,7 +45,6 @@ struct ChannelData {
     ceiling: f32,
     mode: f32,
     nearest: f32,
-    material: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: FrameData;
@@ -170,7 +169,7 @@ fn channel_ceiling(index: u32) -> f32 {
 }
 
 fn channel_empty(index: u32, unit: f32) -> bool {
-    if (channel_categorical(index)) {
+    if (channel_surface(index)) {
         return unit >= channel_threshold(index) && unit <= channel_ceiling(index);
     }
     return unit < channel_threshold(index);
@@ -231,12 +230,8 @@ fn channel_nearest(index: u32) -> bool {
     return channels[index].nearest > 0.5;
 }
 
-fn channel_categorical(index: u32) -> bool {
-    return channels[index].material > 0.5;
-}
-
-fn categorical_scene() -> bool {
-    return frame.packs.w != 0u;
+fn channel_surface(index: u32) -> bool {
+    return (frame.packs.w & (1u << index)) != 0u;
 }
 
 fn pack_nearest(pack: u32) -> u32 {

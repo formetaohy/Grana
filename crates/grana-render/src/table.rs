@@ -33,7 +33,6 @@ struct ChannelData {
     ceiling: f32,
     mode: f32,
     nearest: f32,
-    material: f32,
 }
 
 #[repr(C)]
@@ -43,7 +42,7 @@ struct NeutralData {
 }
 
 const _: () = {
-    assert!(size_of::<ChannelData>() == 36);
+    assert!(size_of::<ChannelData>() == 32);
     assert!(size_of::<NeutralData>() == 432);
 };
 
@@ -277,7 +276,7 @@ fn channel_data(
     let mut floor = f32::INFINITY;
     let mut channels = 0u32;
     let mut peaks = 0u32;
-    let mut categoricals = 0u32;
+    let mut surfaces = 0u32;
     let rows = rows
         .iter()
         .enumerate()
@@ -287,7 +286,7 @@ fn channel_data(
                 "a channel opacity lies in the unit interval"
             );
             let info = &pyramid.channels()[index];
-            let categorical = crate::material::categorical(info);
+            let surface = row.surface;
             let range = info.intensity();
             let (start, inverse) = window(range, row.intensity);
             let opaque = thresholds[index];
@@ -295,7 +294,7 @@ fn channel_data(
             let visible =
                 opaque.map_or(f32::INFINITY, |position| unit_at(start, inverse, position));
             let threshold = match mode {
-                VolumeMode::Isosurface if categorical => visible,
+                VolumeMode::Isosurface if surface => visible,
                 VolumeMode::Isosurface => unit_at(start, inverse, row.volume.isovalue()),
                 VolumeMode::Blend | VolumeMode::Maximum => match opaque {
                     Some(position) if position <= 0.0 => f32::NEG_INFINITY,
@@ -304,13 +303,13 @@ fn channel_data(
                 },
             };
             let background = info.statistics().background();
-            let (threshold, ceiling) = match categorical {
+            let (threshold, ceiling) = match surface {
                 true => (range.unit(background - 0.5), range.unit(background + 0.5)),
                 false => (threshold, f32::INFINITY),
             };
             let opacity = if row.visible { row.opacity } else { 0.0 };
-            if categorical {
-                categoricals |= 1 << index;
+            if surface {
+                surfaces |= 1 << index;
             }
             if opacity > 0.0 {
                 channels |= 1 << index;
@@ -319,7 +318,7 @@ fn channel_data(
                         peaks |= 1 << index;
                         start
                     }
-                    VolumeMode::Blend | VolumeMode::Isosurface if categorical => 0.0,
+                    VolumeMode::Blend | VolumeMode::Isosurface if surface => 0.0,
                     VolumeMode::Blend | VolumeMode::Isosurface => threshold,
                 };
                 floor = floor.min(reach);
@@ -332,8 +331,7 @@ fn channel_data(
                 threshold,
                 ceiling,
                 mode: mode.index() as f32,
-                nearest: f32::from(u8::from(categorical)),
-                material: f32::from(u8::from(categorical)),
+                nearest: f32::from(u8::from(surface)),
             }
         })
         .collect();
@@ -346,7 +344,7 @@ fn channel_data(
     ChannelTable {
         rows,
         floor,
-        packs: [channels, packs, peaks, categoricals],
+        packs: [channels, packs, peaks, surfaces],
     }
 }
 
