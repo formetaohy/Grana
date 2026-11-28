@@ -247,6 +247,9 @@ impl Offline {
                         export.discard();
                         return Outcome::Cancelled;
                     }
+                    if let Some(next) = export.next_surface_time() {
+                        surfaces.prefetch(&scene, next);
+                    }
                 }
                 let views = shown
                     .as_ref()

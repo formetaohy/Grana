@@ -68,18 +68,21 @@ fn open(capture: Option<PathBuf>, startup: Option<String>, access: Access) -> Ex
 }
 
 pub fn clear_cache() -> ExitCode {
-    match grana_image::clear_cache() {
+    let cleared = grana_image::clear_cache().and_then(|pyramid| {
+        grana_pipeline::surface::clear_cache().map(|surface| pyramid + surface)
+    });
+    match cleared {
         Ok(bytes) => {
-            grana_log::info!(target: "grana::cache", bytes, "cleared the derived pyramid cache");
+            grana_log::info!(target: "grana::cache", bytes, "cleared the derived cache");
             println!(
-                "cleared {:.1} MiB of derived pyramid tiles",
+                "cleared {:.1} MiB of derived data",
                 bytes as f64 / (1024.0 * 1024.0)
             );
             ExitCode::SUCCESS
         }
         Err(error) => {
-            grana_log::error!(target: "grana::cache", %error, "failed to clear the derived pyramid cache");
-            eprintln!("failed to clear the derived pyramid cache: {error}");
+            grana_log::error!(target: "grana::cache", %error, "failed to clear the derived cache");
+            eprintln!("failed to clear the derived cache: {error}");
             ExitCode::FAILURE
         }
     }

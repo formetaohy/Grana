@@ -1,12 +1,7 @@
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::fs::File;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
+use grana_store::{Crc32, DiskCache, DiskEntry};
 use grana_volume::{VoxelData, VoxelFormat};
 
 use crate::slice::Key;
@@ -16,20 +11,9 @@ const VERSION: u32 = 1;
 const HEADER: usize = 80;
 const TRAILER: usize = 4;
 const SUFFIX: &str = "slice";
-const STAGING: &str = "staging";
 const DISK_BUDGET: u64 = 4 << 30;
 const DISK_RETAIN: u64 = 3 << 30;
 const OVERRIDE: &str = "GRANA_PYRAMID_CACHE";
-const CRC_SEED: u32 = 0xffff_ffff;
-const CRC_POLYNOMIAL: u32 = 0xedb8_8320;
-
-static NONCE: AtomicU64 = AtomicU64::new(0);
-
-static ACCOUNTING: OnceLock<Mutex<HashMap<PathBuf, Accounting>>> = OnceLock::new();
-
-const CRC_TABLE: [u32; 256] = crc_table();
-
-type Accounting = Arc<Mutex<Option<u64>>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Shape {
@@ -39,29 +23,18 @@ pub(crate) struct Shape {
 }
 
 pub(crate) struct Store {
-    root: PathBuf,
-    staging: PathBuf,
-    bytes: Accounting,
-    recent: Mutex<HashMap<PathBuf, u64>>,
-    tick: AtomicU64,
+    disk: DiskCache,
 }
 
 impl Store {
     pub(crate) fn open(root: &Path) -> Option<Self> {
-        let staging = root.join(STAGING);
-        std::fs::create_dir_all(&staging).ok()?;
         Some(Self {
-            root: root.to_path_buf(),
-            staging,
-            bytes: accounting(root),
-            recent: Mutex::new(HashMap::new()),
-            tick: AtomicU64::new(0),
+            disk: DiskCache::open(root, DISK_BUDGET, DISK_RETAIN)?,
         })
     }
 
     pub(crate) fn load(&self, key: Key, shape: Shape, stamp: u64) -> Option<VoxelData> {
-        let path = self.entry(key);
-        let bytes = std::fs::read(&path).ok()?;
+        let bytes = self.disk.load(&entry(key))?;
         if bytes.len() < HEADER + TRAILER {
             return None;
         }
@@ -88,23 +61,13 @@ impl Store {
             return None;
         }
         let stored = read_u32(&bytes[bytes.len() - TRAILER..], 0);
-        if stored != crc(update(update(CRC_SEED, head), payload)) {
+        if stored != crc(head, payload) {
             return None;
         }
-        self.touch(&path);
         Some(VoxelData::from_le_bytes(shape.format, payload))
     }
 
     pub(crate) fn save(&self, key: Key, shape: Shape, stamp: u64, data: &VoxelData) {
-        let path = self.entry(key);
-        let Some(parent) = path.parent() else {
-            return;
-        };
-        if std::fs::create_dir_all(parent).is_err()
-            || std::fs::create_dir_all(&self.staging).is_err()
-        {
-            return;
-        }
         let payload = data.to_le_bytes();
         let mut head = [0u8; HEADER];
         head[0..8].copy_from_slice(&MAGIC);
@@ -119,125 +82,23 @@ impl Store {
         head[44] = shape.format.code();
         write_u64(&mut head, 48, stamp);
         write_u64(&mut head, 56, payload.len() as u64);
-        let stored = crc(update(update(CRC_SEED, &head), &payload));
-        let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
-        let staging = self
-            .staging
-            .join(format!("{:08x}-{nonce:016x}.{SUFFIX}", std::process::id()));
-        let written = (|| {
-            let mut file = File::create(&staging)?;
-            file.write_all(&head)?;
-            file.write_all(&payload)?;
-            file.write_all(&stored.to_le_bytes())
-        })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&staging);
-            return;
-        }
-        if std::fs::rename(&staging, &path).is_err() {
-            let _ = std::fs::remove_file(&staging);
-            return;
-        }
-        self.grow((HEADER + payload.len() + TRAILER) as u64);
-    }
-
-    fn entry(&self, key: Key) -> PathBuf {
-        self.root
-            .join(format!("{:016x}-{:02x}", key.namespace, key.level))
-            .join(format!(
-                "{:08x}-{:04x}-{:08x}.{SUFFIX}",
-                key.time, key.channel, key.z
-            ))
-    }
-
-    fn touch(&self, path: &Path) {
-        let tick = self.tick.fetch_add(1, Ordering::Relaxed) + 1;
-        let mut recent = self
-            .recent
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        recent.insert(path.to_path_buf(), tick);
-    }
-
-    fn forget(&self, path: &Path) {
-        self.recent
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(path);
-    }
-
-    fn grow(&self, length: u64) {
-        let mut guard = self.bytes.lock().unwrap_or_else(|error| error.into_inner());
-        let total = guard.get_or_insert_with(|| self.scan());
-        *total = total.saturating_add(length);
-        if *total > DISK_BUDGET {
-            self.evict(total);
-        }
-    }
-
-    fn scan(&self) -> u64 {
-        self.entries().iter().map(|(_, length, _)| *length).sum()
-    }
-
-    fn evict(&self, total: &mut u64) {
-        let mut entries = self.entries();
-        entries.sort_by_key(|entry| entry.0);
-        for (_, length, path) in entries {
-            if *total <= DISK_RETAIN {
-                break;
-            }
-            if std::fs::remove_file(&path).is_ok() {
-                self.forget(&path);
-                *total = total.saturating_sub(length);
-            }
-        }
-    }
-
-    fn entries(&self) -> Vec<(Recency, u64, PathBuf)> {
-        let recent = self
-            .recent
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let mut entries = Vec::new();
-        let Ok(directories) = std::fs::read_dir(&self.root) else {
-            return entries;
-        };
-        for directory in directories.flatten() {
-            if directory.file_name() == OsStr::new(STAGING) {
-                continue;
-            }
-            let Ok(files) = std::fs::read_dir(directory.path()) else {
-                continue;
-            };
-            for file in files.flatten() {
-                let Ok(metadata) = file.metadata() else {
-                    continue;
-                };
-                if !metadata.is_file() {
-                    continue;
-                }
-                let path = file.path();
-                let recency = match recent.get(&path) {
-                    Some(tick) => Recency {
-                        touched: 1,
-                        stamp: u128::from(*tick),
-                    },
-                    None => Recency {
-                        touched: 0,
-                        stamp: modified(&metadata),
-                    },
-                };
-                entries.push((recency, metadata.len(), path));
-            }
-        }
-        entries
+        let stored = crc(&head, &payload);
+        let mut bytes = Vec::with_capacity(HEADER + payload.len() + TRAILER);
+        bytes.extend_from_slice(&head);
+        bytes.extend_from_slice(&payload);
+        bytes.extend_from_slice(&stored.to_le_bytes());
+        self.disk.save(&entry(key), &bytes);
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Recency {
-    touched: u8,
-    stamp: u128,
+fn entry(key: Key) -> DiskEntry {
+    DiskEntry::new(
+        format!("{:016x}-{:02x}", key.namespace, key.level),
+        format!(
+            "{:08x}-{:04x}-{:08x}.{SUFFIX}",
+            key.time, key.channel, key.z
+        ),
+    )
 }
 
 pub(crate) fn default_root() -> Option<PathBuf> {
@@ -246,14 +107,6 @@ pub(crate) fn default_root() -> Option<PathBuf> {
         return (!root.as_os_str().is_empty()).then_some(root);
     }
     grana_dir::cache().map(|root| root.join("pyramid"))
-}
-
-fn accounting(root: &Path) -> Accounting {
-    let mut accounts = ACCOUNTING
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    Arc::clone(accounts.entry(root.to_path_buf()).or_default())
 }
 
 pub(crate) fn mix(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -272,69 +125,14 @@ pub(crate) fn modified(metadata: &std::fs::Metadata) -> u128 {
 }
 
 pub(crate) fn clear(root: &Path) -> std::io::Result<u64> {
-    let mut freed = 0;
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error),
-    };
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            freed += directory_bytes(&path);
-            remove(&path, true)?;
-        } else {
-            freed += metadata.len();
-            remove(&path, false)?;
-        }
-    }
-    reset(root);
-    Ok(freed)
+    DiskCache::clear(root)
 }
 
-fn directory_bytes(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| {
-            let path = entry.path();
-            std::fs::symlink_metadata(&path).map_or(0, |metadata| {
-                if metadata.file_type().is_symlink() {
-                    0
-                } else if metadata.is_dir() {
-                    directory_bytes(&path)
-                } else {
-                    metadata.len()
-                }
-            })
-        })
-        .sum()
-}
-
-fn remove(path: &Path, directory: bool) -> std::io::Result<()> {
-    let outcome = if directory {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    };
-    match outcome {
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-        _ => Ok(()),
-    }
-}
-
-fn reset(root: &Path) {
-    let accounts = ACCOUNTING
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    if let Some(account) = accounts.get(root) {
-        *account.lock().unwrap_or_else(|error| error.into_inner()) = Some(0);
-    }
+fn crc(head: &[u8], payload: &[u8]) -> u32 {
+    let mut crc = Crc32::new();
+    crc.update(head);
+    crc.update(payload);
+    crc.finish()
 }
 
 fn read_u32(bytes: &[u8], at: usize) -> u32 {
@@ -360,34 +158,4 @@ fn write_u32(bytes: &mut [u8], at: usize, value: u32) {
 
 fn write_u64(bytes: &mut [u8], at: usize, value: u64) {
     bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
-}
-
-fn update(state: u32, bytes: &[u8]) -> u32 {
-    bytes.iter().fold(state, |state, byte| {
-        CRC_TABLE[((state ^ u32::from(*byte)) & 0xff) as usize] ^ (state >> 8)
-    })
-}
-
-fn crc(state: u32) -> u32 {
-    state ^ CRC_SEED
-}
-
-const fn crc_table() -> [u32; 256] {
-    let mut table = [0u32; 256];
-    let mut index = 0;
-    while index < 256 {
-        let mut value = index as u32;
-        let mut bit = 0;
-        while bit < 8 {
-            value = if value & 1 == 1 {
-                CRC_POLYNOMIAL ^ (value >> 1)
-            } else {
-                value >> 1
-            };
-            bit += 1;
-        }
-        table[index] = value;
-        index += 1;
-    }
-    table
 }

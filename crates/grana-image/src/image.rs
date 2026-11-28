@@ -23,6 +23,7 @@ pub struct Image {
     pyramid: Pyramid,
     series: Vec<Series>,
     selected: usize,
+    identity: Option<u64>,
     vault: Vault,
 }
 
@@ -59,6 +60,7 @@ impl Image {
             pyramid,
             series,
             selected: source.series(),
+            identity,
             vault: Vault::new(reader, namespace, store),
         })
     }
@@ -93,6 +95,20 @@ impl Image {
 
     pub fn format(&self) -> Option<Format> {
         self.vault.reader().format()
+    }
+
+    pub fn identity(&self) -> Option<u64> {
+        self.identity
+    }
+
+    pub fn stamp(
+        &self,
+        time: u32,
+        level: usize,
+        channel: usize,
+        z: Range<u32>,
+    ) -> Result<Option<u64>, Error> {
+        self.vault.reader().stamp(level, time, channel, z)
     }
 
     pub fn family(&self) -> Option<grana_readout::Family> {

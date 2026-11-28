@@ -124,6 +124,15 @@ impl Layout {
     pub fn channels(&self) -> usize {
         self.stored + self.derived
     }
+
+    pub fn digest(self) -> u64 {
+        let mut digest = grana_geometry::Digest::new();
+        digest.mix(self.stored as u64);
+        digest.mix(self.derived as u64);
+        digest.mix(self.specs);
+        digest.mix(self.registration);
+        digest.finish()
+    }
 }
 
 fn spec_digest<'a>(specs: impl IntoIterator<Item = &'a DerivedSpec>) -> u64 {
@@ -206,6 +215,24 @@ impl Channels {
 
     pub fn image_shared(&self) -> Arc<Image> {
         Arc::clone(&self.reader)
+    }
+
+    pub fn identity(&self) -> Option<u64> {
+        self.reader.identity()
+    }
+
+    pub fn source_stamp(
+        &self,
+        time: u32,
+        channel: usize,
+        z: Range<u32>,
+    ) -> Result<Option<u64>, ChannelsError> {
+        if channel >= self.stored_channels() {
+            return Ok(None);
+        }
+        self.reader
+            .stamp(time, 0, channel, z)
+            .map_err(ChannelsError::Image)
     }
 
     pub fn pyramid(&self) -> &Pyramid {

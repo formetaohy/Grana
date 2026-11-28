@@ -23,6 +23,8 @@ pub trait Surfaces: Send + Sync {
         time: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<grana_engine::Surface>, String>;
+
+    fn prefetch(&self, _: &Scene, _: u32) {}
 }
 
 pub struct Task {

@@ -3852,6 +3852,7 @@ dependencies = [
  "grana-archive",
  "grana-calibration",
  "grana-chart",
+ "grana-dir",
  "grana-display",
  "grana-exec",
  "grana-file",

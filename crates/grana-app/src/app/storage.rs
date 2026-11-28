@@ -92,7 +92,11 @@ impl Storage {
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         self.executor.submit_with(Priority::Background, move |_| {
-            let result = grana_image::clear_cache().map_err(|error| error.to_string());
+            let result = grana_image::clear_cache()
+                .and_then(|pyramid| {
+                    grana_pipeline::surface::clear_cache().map(|surface| pyramid + surface)
+                })
+                .map_err(|error| error.to_string());
             if sender.send(Event::Cleared(result)) {
                 let _ = wake.send_event(Wake::Redraw);
             }
@@ -140,9 +144,16 @@ impl Storage {
         self.measuring = true;
         let sender = self.sender.clone();
         let wake = self.wake.clone();
-        let root = grana_image::cache_root();
+        let roots = [
+            grana_image::cache_root(),
+            grana_pipeline::surface::cache_root(),
+        ];
         self.executor.submit_with(Priority::Background, move |_| {
-            let bytes = root.map_or(0, |root| grana_file::bytes(&root).unwrap_or(0));
+            let bytes = roots
+                .iter()
+                .flatten()
+                .map(|root| grana_file::bytes(root).unwrap_or(0))
+                .sum();
             if sender.send(Event::Measured(bytes)) {
                 let _ = wake.send_event(Wake::Redraw);
             }

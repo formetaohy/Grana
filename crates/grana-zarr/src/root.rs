@@ -170,13 +170,21 @@ impl Witness {
                     detail: error.to_string(),
                 }),
             Self::Remote { store, tag } => {
+                use rayon::prelude::*;
+
+                let keys = keys.collect::<Vec<_>>();
+                let probed = keys
+                    .par_iter()
+                    .map(|key| {
+                        store.probe(key).map_err(|error| Error::Read {
+                            array: tag.clone(),
+                            detail: error.to_string(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 let mut hash = witness::START;
-                for key in keys {
+                for (key, probed) in keys.iter().zip(probed) {
                     hash = witness::mix(hash, key.as_bytes());
-                    let probed = store.probe(&key).map_err(|error| Error::Read {
-                        array: tag.clone(),
-                        detail: error.to_string(),
-                    })?;
                     match probed {
                         Presence::Missing => hash = witness::mix(hash, &[0]),
                         Presence::Object {

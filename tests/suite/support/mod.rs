@@ -928,6 +928,10 @@ impl grana_analysis::localization::LocalizationSource for Localizations {
 }
 
 pub fn labelled_frames(path: &Path) {
+    labelled_frames_at(path, 2, 10);
+}
+
+pub fn labelled_frames_at(path: &Path, first: u32, second: u32) {
     use grana_archive::{Channel, Fill, ImageSpec};
     use grana_volume::{ColorTable, Intensity, Level};
 
@@ -942,7 +946,7 @@ pub fn labelled_frames(path: &Path) {
     }];
     let levels = [Level::new(extent, Spacing::new(1.0, 1.0, 1.0))];
     let fill = |block: grana_archive::Block| -> Result<VoxelData, String> {
-        let start = if block.frame == 0 { 2 } else { 10 };
+        let start = if block.frame == 0 { first } else { second };
         let [width, height, _] = block.extent;
         let mut values = vec![0u8; block.voxels()];
         for z in 0..block.extent[2] {

@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use glam::Vec3;
 use grana_display::{Camera, OutputSize, Slice};
@@ -34,6 +34,30 @@ impl Bricks for VolumeBricks {
         _warps: &grana_warp::Warps,
     ) -> Result<Option<NoData>, String> {
         Ok(None)
+    }
+}
+
+struct RecordingSurfaces {
+    inner: Arc<dyn grana_offline::Surfaces>,
+    prefetched: Mutex<Vec<u32>>,
+}
+
+impl grana_offline::Surfaces for RecordingSurfaces {
+    fn frame(
+        &self,
+        scene: &Scene,
+        time: u32,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<grana_engine::Surface>, String> {
+        self.inner.frame(scene, time, cancel)
+    }
+
+    fn prefetch(&self, scene: &Scene, time: u32) {
+        self.prefetched
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(time);
+        self.inner.prefetch(scene, time);
     }
 }
 
@@ -769,11 +793,23 @@ fn paints_each_frame_surface_where_that_frame_labels_lie() {
         size,
         camera: camera.state(),
     };
+    let traced_source = Arc::new(RecordingSurfaces {
+        inner: Arc::new(grana_app::Traced::new(Arc::clone(&cache))),
+        prefetched: Mutex::new(Vec::new()),
+    });
     let traced = sequence(
         &stage,
-        Arc::new(grana_app::Traced::new(Arc::clone(&cache))),
+        traced_source.clone(),
         temp.path().join("traced"),
         "labels",
+    );
+    assert!(
+        traced_source
+            .prefetched
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains(&1),
+        "the export traces the next frame while the current frame renders"
     );
     let empty = sequence(
         &stage,
@@ -802,6 +838,76 @@ fn paints_each_frame_surface_where_that_frame_labels_lie() {
             pixels.len()
         );
     }
+}
+
+#[test]
+fn reopens_a_traced_surface_from_disk_and_invalidates_rewritten_data() {
+    let temp = Temp::new("grana-surface-disk-cache");
+    let root = temp.path().join("labels.ome.zarr");
+    crate::support::labelled_frames_at(&root, 2, 10);
+    let server = crate::support::Server::serve(&root);
+    let source = grana_image::Source::remote(server.url().to_string());
+    let surface_cache = temp.path().join("surface-cache");
+    let open = || {
+        let image = Arc::new(
+            grana_image::Image::open_with_cache(&source, None).expect("the remote labels open"),
+        );
+        let scene = Scene::new(Dataset::synthetic("labels", image.pyramid().clone()));
+        let channels = Arc::new(grana_pipeline::Channels::render(image, &scene));
+        (scene, channels)
+    };
+    let cancel = AtomicBool::new(false);
+    let mut progress = |_, _| {};
+    let (scene, channels) = open();
+    let first_cache = grana_pipeline::surface::Cache::with_disk_cache(
+        channels,
+        &scene,
+        Some(surface_cache.clone()),
+    );
+    let first = match first_cache.get(0, 0, &cancel, &mut progress) {
+        Ok(grana_pipeline::surface::Outcome::Traced(surface)) => surface,
+        _ => panic!("the first open traces the label surface"),
+    };
+    let first_stats = first_cache.statistics();
+    assert_eq!(first_stats.traced(), 1);
+    assert_eq!(first_stats.disk_hits(), 0);
+    let first_mesh = Arc::clone(first.mesh());
+    drop(first_cache);
+    drop(scene);
+
+    let (scene, channels) = open();
+    let second_cache = grana_pipeline::surface::Cache::with_disk_cache(
+        channels,
+        &scene,
+        Some(surface_cache.clone()),
+    );
+    let second = match second_cache.get(0, 0, &cancel, &mut progress) {
+        Ok(grana_pipeline::surface::Outcome::Traced(surface)) => surface,
+        _ => panic!("the second open reads the label surface from disk"),
+    };
+    let second_stats = second_cache.statistics();
+    assert_eq!(second_stats.traced(), 0);
+    assert_eq!(second_stats.disk_hits(), 1);
+    assert_eq!(second.mesh().as_ref(), first_mesh.as_ref());
+    assert_eq!(second.colors(), first.colors());
+    assert_eq!(second.revision(), first.revision());
+    drop(second_cache);
+    drop(scene);
+
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::remove_dir_all(&root).expect("the first label fixture leaves the rewrite path");
+    crate::support::labelled_frames_at(&root, 3, 11);
+    let (scene, channels) = open();
+    let rewritten_cache =
+        grana_pipeline::surface::Cache::with_disk_cache(channels, &scene, Some(surface_cache));
+    let rewritten = match rewritten_cache.get(0, 0, &cancel, &mut progress) {
+        Ok(grana_pipeline::surface::Outcome::Traced(surface)) => surface,
+        _ => panic!("the rewritten labels trace a new surface"),
+    };
+    let rewritten_stats = rewritten_cache.statistics();
+    assert_eq!(rewritten_stats.disk_hits(), 0);
+    assert_eq!(rewritten_stats.traced(), 1);
+    assert_ne!(rewritten.mesh().as_ref(), first_mesh.as_ref());
 }
 
 fn project(camera: &Camera, point: [f32; 3], size: OutputSize) -> [u32; 2] {

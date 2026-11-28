@@ -1,9 +1,13 @@
-use std::collections::HashMap;
+mod disk;
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use grana_geometry::{Digest, PackedMesh};
 use grana_scene::{Drifts, Scene};
+use grana_volume::ChannelInfo;
 
 use crate::channels::Channels;
 use crate::run::{SurfaceEvent, TraceRequest, trace};
@@ -115,29 +119,68 @@ pub enum Outcome {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    memory_hits: u64,
+    disk_hits: u64,
+    traced: u64,
+}
+
+impl CacheStats {
+    pub fn memory_hits(self) -> u64 {
+        self.memory_hits
+    }
+
+    pub fn disk_hits(self) -> u64 {
+        self.disk_hits
+    }
+
+    pub fn traced(self) -> u64 {
+        self.traced
+    }
+}
+
 pub struct Cache {
     channels: Arc<Channels>,
     drifts: Drifts,
     stamp: u64,
     generation: AtomicU64,
+    memory_hits: AtomicU64,
+    disk_hits: AtomicU64,
+    traced: AtomicU64,
     held: RwLock<Held>,
     tracing: Mutex<()>,
+    disk: Option<disk::Store>,
 }
 
 #[derive(Default)]
 struct Held {
     surfaces: Vec<Surface>,
+    empty: HashSet<(usize, u32)>,
 }
 
 impl Cache {
     pub fn new(channels: Arc<Channels>, scene: &Scene) -> Self {
+        Self::with_disk_cache(channels, scene, disk::default_root())
+    }
+
+    pub fn with_disk_cache(channels: Arc<Channels>, scene: &Scene, root: Option<PathBuf>) -> Self {
+        let stamp = stamp(scene);
+        let disk = channels.identity().and_then(|namespace| {
+            root.as_deref()
+                .and_then(|root| disk::Store::open(root, namespace, stamp))
+        });
         Self {
             channels,
             drifts: scene.drifts().clone(),
-            stamp: stamp(scene),
+            stamp,
             generation: AtomicU64::new(0),
+            memory_hits: AtomicU64::new(0),
+            disk_hits: AtomicU64::new(0),
+            traced: AtomicU64::new(0),
             held: RwLock::new(Held::default()),
             tracing: Mutex::new(()),
+            disk,
         }
     }
 
@@ -151,6 +194,14 @@ impl Cache {
 
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
+    }
+
+    pub fn statistics(&self) -> CacheStats {
+        CacheStats {
+            memory_hits: self.memory_hits.load(Ordering::Relaxed),
+            disk_hits: self.disk_hits.load(Ordering::Relaxed),
+            traced: self.traced.load(Ordering::Relaxed),
+        }
     }
 
     pub fn peek(&self, channel: usize, time: u32) -> Option<Surface> {
@@ -173,12 +224,52 @@ impl Cache {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if let Some(held) = self.peek(channel, time) {
+            self.memory_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(Outcome::Traced(held));
+        }
+        if self.read().empty(channel, time) {
+            self.memory_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(Outcome::Empty);
         }
         if cancel.load(Ordering::Relaxed) {
             return Ok(Outcome::Cancelled);
         }
         let level = self.channels.pyramid().level(0);
+        let depth = level.extent().z();
+        let source = match self.disk.is_some() {
+            true => self
+                .channels
+                .source_stamp(time, channel, 0..depth)
+                .map_err(|error| error.to_string())?,
+            false => None,
+        };
+        let context = self.context(channel);
+        let key = source.map(|source| disk::Key {
+            context,
+            channel,
+            time,
+            source,
+        });
+        if let (Some(store), Some(key)) = (&self.disk, key) {
+            match store.load(key) {
+                Some(disk::Record::Surface { mesh, colors }) => {
+                    let surface =
+                        Surface::of(channel, time, self.stamp, Arc::new(mesh), Arc::new(colors));
+                    let mut held = self.held.write().unwrap_or_else(|error| error.into_inner());
+                    held.insert(surface.clone(), time);
+                    self.disk_hits.fetch_add(1, Ordering::Relaxed);
+                    self.generation.fetch_add(1, Ordering::Relaxed);
+                    return Ok(Outcome::Traced(surface));
+                }
+                Some(disk::Record::Empty) => {
+                    let mut held = self.held.write().unwrap_or_else(|error| error.into_inner());
+                    held.insert_empty(channel, time);
+                    self.disk_hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(Outcome::Empty);
+                }
+                None => {}
+            }
+        }
         let request = TraceRequest::new(channel, time, level, self.drifts.clone());
         let mut traced = None;
         trace(&self.channels, request, cancel, &mut |event| match event {
@@ -188,9 +279,20 @@ impl Cache {
         if cancel.load(Ordering::Relaxed) {
             return Ok(Outcome::Cancelled);
         }
+        self.traced.fetch_add(1, Ordering::Relaxed);
         let Some((mesh, colors)) = traced else {
+            if let (Some(store), Some(key)) = (&self.disk, key) {
+                store.save_empty(key);
+            }
+            self.held
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert_empty(channel, time);
             return Ok(Outcome::Empty);
         };
+        if let (Some(store), Some(key)) = (&self.disk, key) {
+            store.save_surface(key, &mesh, &colors);
+        }
         let surface = Surface::of(channel, time, self.stamp, mesh, colors);
         let mut held = self.held.write().unwrap_or_else(|error| error.into_inner());
         held.insert(surface.clone(), time);
@@ -198,8 +300,48 @@ impl Cache {
         Ok(Outcome::Traced(surface))
     }
 
+    fn context(&self, channel: usize) -> u64 {
+        let mut digest = Digest::new();
+        digest.mix(self.channels.layout().digest());
+        digest.mix(channel as u64);
+        if let Some(info) = self.channels.pyramid().channels().get(channel) {
+            channel_info(info, &mut digest);
+        }
+        digest.finish()
+    }
+
     fn read(&self) -> std::sync::RwLockReadGuard<'_, Held> {
         self.held.read().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+fn channel_info(info: &ChannelInfo, digest: &mut Digest) {
+    digest.mix(info.name().len() as u64);
+    for byte in info.name().as_bytes() {
+        digest.mix(u64::from(*byte));
+    }
+    for component in info.tint() {
+        digest.real(component);
+    }
+    let statistics = info.statistics();
+    digest.real(statistics.intensity().min());
+    digest.real(statistics.intensity().max());
+    digest.mix(u64::from(statistics.distinct()));
+    digest.mix(u64::from(statistics.semantics().code()));
+    digest.real(statistics.background());
+    digest.mix(u64::from(info.format().code()));
+    digest.flag(info.color_table().is_some());
+    if let Some(table) = info.color_table() {
+        digest.mix(table.colors().len() as u64);
+        for color in table.colors() {
+            for component in color {
+                digest.real(*component);
+            }
+        }
+    }
+    digest.flag(info.no_data().is_some());
+    if let Some(no_data) = info.no_data() {
+        digest.mix(no_data.value().to_bits());
     }
 }
 
@@ -217,7 +359,16 @@ impl Held {
             .find(|held| held.channel() == channel)
     }
 
+    fn empty(&self, channel: usize, time: u32) -> bool {
+        self.empty.contains(&(channel, time))
+    }
+
+    fn insert_empty(&mut self, channel: usize, time: u32) {
+        self.empty.insert((channel, time));
+    }
+
     fn insert(&mut self, surface: Surface, time: u32) {
+        self.empty.remove(&(surface.channel(), surface.time()));
         self.surfaces
             .retain(|held| !(held.channel() == surface.channel() && held.time() == surface.time()));
         self.surfaces.push(surface);
@@ -241,4 +392,16 @@ impl Held {
         kept.reverse();
         self.surfaces = kept;
     }
+}
+
+pub fn cache_root() -> Option<PathBuf> {
+    disk::default_root()
+}
+
+pub fn clear_cache() -> std::io::Result<u64> {
+    cache_root().map_or(Ok(0), |root| disk::clear(&root))
+}
+
+pub fn clear_cache_at(root: &Path) -> std::io::Result<u64> {
+    disk::clear(root)
 }

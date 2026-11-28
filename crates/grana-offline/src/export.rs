@@ -232,6 +232,15 @@ impl Export {
         self.poses[self.frame.min(self.poses.len() - 1)]
     }
 
+    pub(crate) fn next_surface_time(&self) -> Option<u32> {
+        let current = self.pose().time;
+        self.poses
+            .iter()
+            .skip(self.frame + 1)
+            .map(|pose| pose.time)
+            .find(|time| *time != current)
+    }
+
     pub(crate) fn progress(&self) -> (u32, u32) {
         (self.written as u32, self.poses.len() as u32)
     }
