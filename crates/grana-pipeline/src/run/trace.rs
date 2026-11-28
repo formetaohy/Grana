@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use grana_analysis::{TraceBand, Tracer};
 use grana_geometry::PackedMesh;
 use grana_scene::Drifts;
-use grana_volume::{ChannelInfo, Level};
+use grana_volume::{ChannelInfo, Level, VoxelData};
 use grana_warp::Warp;
 
 use crate::channels::Channels;
@@ -76,35 +76,56 @@ pub fn trace(
     });
     let warp: &Warp = request.drifts.warp(request.channel, request.time);
     let background = info.statistics().background();
+    let read = |z: u32| -> Result<VoxelData, String> {
+        let ranges: [Range<u32>; 3] = [
+            0..dims[0],
+            0..dims[1],
+            z.saturating_sub(1)..(z + band + 1).min(dims[2]),
+        ];
+        reader
+            .read_region(request.time, 0, request.channel, &ranges, warp)
+            .map_err(|error| error.to_string())
+    };
     let mut tracer = Tracer::new();
     let mut done = 0usize;
     let mut z = 0u32;
+    let mut data = read(z)?;
     while z < dims[2] {
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
         let top = (z + band).min(dims[2]);
         let low = z.saturating_sub(1);
-        let high = (top + 1).min(dims[2]);
-        let ranges: [Range<u32>; 3] = [0..dims[0], 0..dims[1], low..high];
-        let data = reader
-            .read_region(request.time, 0, request.channel, &ranges, warp)
-            .map_err(|error| error.to_string())?;
-        let span = [dims[0], dims[1], high - low];
+        let span = [dims[0], dims[1], (top + 1).min(dims[2]) - low];
         let first = z - low;
         let last = (top - low).min(span[2] - 1);
         let cells = [0..span[0] - 1, 0..span[1] - 1, first..last];
-        tracer.push(TraceBand::new(
-            level,
-            [0, 0, low],
-            span,
-            cells,
-            &data,
-            background,
-        ));
-        z = top;
+        let ((), fetched) = rayon::join(
+            || {
+                tracer.push(TraceBand::new(
+                    level,
+                    [0, 0, low],
+                    span,
+                    cells,
+                    &data,
+                    background,
+                ))
+            },
+            || match top < dims[2] {
+                true => read(top).map(Some),
+                false => Ok(None),
+            },
+        );
+        let fetched = fetched?;
         done += 1;
         sink(SurfaceEvent::Progress { done, total: bands });
+        match fetched {
+            Some(next) => {
+                z = top;
+                data = next;
+            }
+            None => break,
+        }
     }
     if cancel.load(Ordering::Relaxed) {
         return Ok(());

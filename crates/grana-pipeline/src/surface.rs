@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use grana_geometry::PackedMesh;
 
+#[derive(Clone)]
 pub struct Surface {
     channel: usize,
     time: u32,

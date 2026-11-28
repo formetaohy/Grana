@@ -67,6 +67,9 @@ jobs:
       - name: Test
         run: cargo nextest run -p grana --all-features --locked --no-fail-fast
 
+      - name: Test crates
+        run: cargo nextest run --workspace --exclude grana --all-features --locked --no-fail-fast
+
   build:
     name: Release Build
     runs-on: windows-latest

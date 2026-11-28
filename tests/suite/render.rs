@@ -3373,3 +3373,92 @@ fn carries_its_bricks_across_a_resize_that_reseats_the_atlas() {
         "the carried bricks shade differently from the bricks the renderer streamed"
     );
 }
+
+#[test]
+fn paints_a_traced_surface_where_its_labels_are() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let extent = Extent::new(16, 16, 8);
+    let spacing = Spacing::new(1.0, 1.0, 1.0);
+    let volume = Volume::new(
+        extent,
+        spacing,
+        vec![Channel::new(
+            "empty",
+            [0.2, 0.6, 0.2],
+            VoxelData::U16(vec![0; extent.voxel_count() as usize]),
+        )],
+    );
+    let pyramid = volume.pyramid();
+    let mut labels = vec![0u32; extent.voxel_count() as usize];
+    for z in 2..6 {
+        for y in 4..12 {
+            for x in 4..12 {
+                labels[extent.index(x, y, z) as usize] = 1;
+            }
+        }
+    }
+    let mut tracer = grana_analysis::Tracer::new();
+    tracer.push(grana_analysis::TraceBand::new(
+        pyramid.level(0),
+        [0, 0, 0],
+        [extent.x(), extent.y(), extent.z()],
+        [0..extent.x() - 1, 0..extent.y() - 1, 0..extent.z() - 1],
+        &VoxelData::U32(labels),
+        0.0,
+    ));
+    let traced = tracer.finish().expect("the labels trace a surface");
+    let layers = [Layer::new(
+        LayerKey::new(1, 0, 0),
+        1,
+        1,
+        Arc::new(PackedMesh::new(traced.mesh)),
+        Arc::from([Style::new([0.2, 0.6, 0.2], true, false, 1.0)]),
+        0,
+    )];
+    let transfers = [TransferFunction::tinted([0.2, 0.6, 0.2])];
+    let mut row = channels(&pyramid, &transfers);
+    row[0].visible = false;
+    let scene = SceneFrame {
+        versions: versions(),
+        channels: &row,
+        shading: Shading::default(),
+        step_scale: 1.0,
+        layers: &layers,
+        splats: Splats::empty(),
+        overlays: &[],
+    };
+    let camera = axis_camera(&volume);
+    let mut renderer = build_renderer(&gpu, &pyramid);
+    let target = texture(&gpu, SIDE);
+    let view_texture = target.create_view(&Default::default());
+    let view = View {
+        target: &view_texture,
+        camera: &camera,
+        region: Region::none(),
+        scene: &scene,
+        viewport: WHOLE,
+        delivery: grana_render::Delivery::Immediate,
+    };
+    let shot = snapshot(&gpu, &mut renderer, &view, &target, &volume);
+    let level = pyramid.level(0);
+    let corners = [[4.0, 4.0, 2.0], [12.0, 12.0, 6.0]]
+        .map(|corner| project(&camera, level.voxel_center(corner)));
+    let rect = [
+        corners[0][0].min(corners[1][0]).saturating_sub(3),
+        corners[0][1].min(corners[1][1]).saturating_sub(3),
+        corners[0][0].max(corners[1][0]).saturating_add(3).min(SIDE),
+        corners[0][1].max(corners[1][1]).saturating_add(3).min(SIDE),
+    ];
+    assert!(
+        shot.coverage(rect) > 0.5,
+        "the traced surface does not cover the labels it came from: {:.2}",
+        shot.coverage(rect)
+    );
+    assert_eq!(
+        shot.painted(WHOLE),
+        shot.painted(rect),
+        "the traced surface painted pixels away from its labels"
+    );
+}

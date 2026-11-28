@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use grana_exec::Role;
 use grana_pipeline::Surface;
+use grana_pipeline::channels::Channels;
 use grana_pipeline::run::{SurfaceEvent, TraceRequest, trace};
 use grana_scene::Scene;
 
@@ -10,25 +11,35 @@ use super::Session;
 use crate::task::Progress;
 
 const SURFACE: &str = "Tracing surfaces";
+const RETAINED: usize = 4;
+const RETAINED_BYTES: u64 = 512 << 20;
 
 struct Trace {
     channel: usize,
+    time: u32,
     stamp: u64,
-    task: Progress<Result<Surface, String>>,
+    task: Progress<Result<Piece, String>>,
+}
+
+struct Piece {
+    mesh: Arc<grana_geometry::PackedMesh>,
+    colors: Arc<Vec<[f32; 3]>>,
 }
 
 #[derive(Default)]
 pub(super) struct Surfaces {
     held: Vec<Surface>,
+    shown: Vec<Surface>,
     tracing: Option<Trace>,
-    failed: HashMap<usize, String>,
+    failed: HashMap<(usize, u32), String>,
+    shown_key: (u32, u64),
     stamp: u64,
     revision: u64,
 }
 
 impl Surfaces {
-    pub(super) fn held(&self) -> &[Surface] {
-        &self.held
+    pub(super) fn shown(&self) -> &[Surface] {
+        &self.shown
     }
 
     pub(super) fn busy(&self) -> bool {
@@ -41,68 +52,138 @@ impl Surfaces {
         Some((SURFACE, done, total))
     }
 
+    pub(super) fn clear(&mut self) {
+        self.held.clear();
+        self.shown.clear();
+        self.tracing = None;
+        self.failed.clear();
+        self.shown_key = (0, 0);
+        self.stamp = 0;
+    }
+
+    fn current(&self, channel: usize, time: u32) -> Option<&Surface> {
+        self.held
+            .iter()
+            .find(|held| held.channel() == channel && held.time() == time)
+    }
+
+    fn newest(&self, channel: usize) -> Option<&Surface> {
+        self.held
+            .iter()
+            .rev()
+            .find(|held| held.channel() == channel)
+    }
+
     fn settled(&self, scene: &Scene) -> bool {
         if self.tracing.is_some() {
             return false;
         }
+        let time = scene.time();
         (0..scene.channels.len()).all(|channel| {
             let Some(held) = scene.channels.get(channel) else {
                 return true;
             };
             !held.enabled
                 || !wanted(scene, channel)
-                || self.held.iter().any(|surface| surface.channel() == channel)
-                || self.failed.contains_key(&channel)
+                || self.current(channel, time).is_some()
+                || self.failed.contains_key(&(channel, time))
         })
     }
 
-    pub(super) fn clear(&mut self) {
-        self.held.clear();
-        self.tracing = None;
-        self.failed.clear();
-        self.stamp = 0;
+    fn refresh(&mut self, scene: &Scene) {
+        let key = (scene.time(), self.revision);
+        if self.shown_key == key {
+            return;
+        }
+        self.shown_key = key;
+        let time = scene.time();
+        self.shown.clear();
+        for channel in 0..scene.channels.len() {
+            if !wanted(scene, channel) {
+                continue;
+            }
+            let chosen = self.current(channel, time).or_else(|| {
+                match self.failed.contains_key(&(channel, time)) {
+                    true => None,
+                    false => self.newest(channel),
+                }
+            });
+            if let Some(surface) = chosen {
+                self.shown.push(surface.clone());
+            }
+        }
     }
 
-    fn poll(&mut self, stamp: u64) -> bool {
+    fn store(&mut self, channel: usize, time: u32, stamp: u64, piece: Piece) -> bool {
+        if self.stamp != stamp {
+            return false;
+        }
+        self.revision += 1;
+        let surface = Surface::new(channel, time, piece.mesh, piece.colors, self.revision);
+        self.held
+            .retain(|held| !(held.channel() == channel && held.time() == time));
+        self.held.push(surface);
+        self.retain(time);
+        true
+    }
+
+    fn retain(&mut self, time: u32) {
+        let mut counts: HashMap<usize, usize> = HashMap::new();
+        let mut bytes = 0u64;
+        let mut kept = Vec::with_capacity(self.held.len());
+        for surface in self.held.iter().rev() {
+            let current = surface.time() == time;
+            let count = counts.entry(surface.channel()).or_default();
+            let size = surface.mesh().byte_length() as u64;
+            if (current || (*count < RETAINED && bytes + size <= RETAINED_BYTES)) || kept.is_empty()
+            {
+                *count += 1;
+                bytes += size;
+                kept.push(surface.clone());
+            }
+        }
+        kept.reverse();
+        self.held = kept;
+    }
+
+    fn poll(&mut self, stamp: u64, scene: &Scene) -> bool {
         let Some(tracing) = self.tracing.as_mut() else {
             return false;
         };
         match tracing.task.poll() {
-            crate::task::Poll::Event(outcome) => {
+            crate::task::Poll::Event(Ok(piece)) => {
                 let channel = tracing.channel;
-                let current = tracing.stamp == stamp;
+                let time = tracing.time;
+                let held = tracing.stamp;
                 self.tracing = None;
-                match outcome {
-                    Ok(surface) if current => {
-                        self.revision += 1;
-                        let surface = Surface::new(
-                            surface.channel(),
-                            surface.time(),
-                            Arc::clone(surface.mesh()),
-                            Arc::clone(surface.shared_colors()),
-                            self.revision,
-                        );
-                        grana_log::info!(
-                            target: "grana::session",
-                            channel = surface.channel(),
-                            triangles = surface.mesh().triangle_count(),
-                            labels = surface.colors().len(),
-                            "the channel surface is ready"
-                        );
-                        self.held.retain(|held| held.channel() != surface.channel());
-                        self.held.push(surface);
-                    }
-                    Ok(_) => {}
-                    Err(detail) if current => {
-                        grana_log::warn!(
-                            target: "grana::session",
-                            channel,
-                            %detail,
-                            "the channel surface failed"
-                        );
-                        self.failed.insert(channel, detail);
-                    }
-                    Err(_) => {}
+                if !self.store(channel, time, held, piece) || held != stamp {
+                    return true;
+                }
+                grana_log::info!(
+                    target: "grana::session",
+                    channel,
+                    time,
+                    triangles = self.held.last().map_or(0, |surface| surface.mesh().triangle_count()),
+                    "the channel surface is ready"
+                );
+                self.refresh(scene);
+                true
+            }
+            crate::task::Poll::Event(Err(detail)) => {
+                let channel = tracing.channel;
+                let time = tracing.time;
+                let held = tracing.stamp;
+                self.tracing = None;
+                if held == stamp {
+                    grana_log::warn!(
+                        target: "grana::session",
+                        channel,
+                        time,
+                        %detail,
+                        "the channel surface failed"
+                    );
+                    self.failed.insert((channel, time), detail);
+                    self.refresh(scene);
                 }
                 true
             }
@@ -113,11 +194,58 @@ impl Surfaces {
             }
         }
     }
+
+    fn ensure(&mut self, scene: &Scene, channels: Option<Arc<Channels>>) {
+        let Some(channels) = channels else {
+            return;
+        };
+        self.refresh(scene);
+        if self.tracing.is_some() {
+            return;
+        }
+        let time = scene.time();
+        if self.failed.len() > 32 {
+            self.failed.retain(|(_, failed), _| *failed == time);
+        }
+        let Some(channel) = (0..scene.channels.len()).find(|channel| {
+            let Some(held) = scene.channels.get(*channel) else {
+                return false;
+            };
+            held.enabled
+                && wanted(scene, *channel)
+                && self.current(*channel, time).is_none()
+                && !self.failed.contains_key(&(*channel, time))
+        }) else {
+            return;
+        };
+        let level = scene.dataset.pyramid().level(0);
+        let drifts = scene.drifts().clone();
+        self.tracing = Some(Trace {
+            channel,
+            time,
+            stamp: self.stamp,
+            task: Progress::spawn(Role::Compute, move |cancel, progress| {
+                let request = TraceRequest::new(channel, time, level, drifts);
+                let mut traced = None;
+                let outcome = trace(&channels, request, cancel, &mut |event| match event {
+                    SurfaceEvent::Progress { done, total } => progress(done, total),
+                    SurfaceEvent::Surface { mesh, colors } => {
+                        traced = Some(Piece { mesh, colors });
+                    }
+                });
+                match (outcome, traced) {
+                    (Ok(()), Some(piece)) => Ok(piece),
+                    (Ok(()), None) => Err("the labels hold no surface to trace".to_string()),
+                    (Err(detail), _) => Err(detail),
+                }
+            }),
+        });
+    }
 }
 
 impl Session {
     pub fn surfaces(&self) -> &[Surface] {
-        self.traced.held()
+        self.traced.shown()
     }
 
     pub fn surfaces_settled(&self) -> bool {
@@ -132,69 +260,36 @@ impl Session {
     }
 
     pub(super) fn poll_surfaces(&mut self) -> bool {
-        let stamp = self.scene.as_ref().map_or(0, geometry_stamp);
-        self.traced.poll(stamp)
+        let Self { scene, traced, .. } = self;
+        let Some(scene) = scene.as_ref() else {
+            return false;
+        };
+        let stamp = geometry_stamp(scene);
+        traced.poll(stamp, scene)
     }
 
     pub(super) fn ensure_surfaces(&mut self) {
         if self.loading.is_some() {
             return;
         }
-        let Some(scene) = self.scene.as_ref() else {
+        let Self {
+            scene,
+            traced,
+            channels,
+            ..
+        } = self;
+        let Some(scene) = scene.as_ref() else {
             return;
         };
         let stamp = geometry_stamp(scene);
-        if self.traced.stamp != stamp {
-            self.traced.held.clear();
-            self.traced.failed.clear();
-            self.traced.tracing = None;
-            self.traced.stamp = stamp;
+        if traced.stamp != stamp {
+            traced.held.clear();
+            traced.failed.clear();
+            traced.tracing = None;
+            traced.shown_key = (0, 0);
+            traced.stamp = stamp;
         }
-        if self.traced.busy() {
-            return;
-        }
-        let Some(channels) = self.channels.as_ref().map(Arc::clone) else {
-            return;
-        };
-        let Some(channel) = (0..scene.channels.len()).find(|channel| {
-            let Some(held) = scene.channels.get(*channel) else {
-                return false;
-            };
-            held.enabled
-                && wanted(scene, *channel)
-                && !self.traced.failed.contains_key(channel)
-                && !self
-                    .traced
-                    .held
-                    .iter()
-                    .any(|surface| surface.channel() == *channel)
-        }) else {
-            return;
-        };
-        let time = scene.time();
-        let level = scene.dataset.pyramid().level(0);
-        let drifts = scene.drifts().clone();
-        self.traced.tracing = Some(Trace {
-            channel,
-            stamp,
-            task: Progress::spawn(Role::Compute, move |cancel, progress| {
-                let request = TraceRequest::new(channel, time, level, drifts);
-                let mut traced = None;
-                let outcome = trace(&channels, request, cancel, &mut |event| match event {
-                    SurfaceEvent::Progress { done, total } => progress(done, total),
-                    SurfaceEvent::Surface { mesh, colors } => {
-                        traced = Some((mesh, colors));
-                    }
-                });
-                match (outcome, traced) {
-                    (Ok(()), Some((mesh, colors))) => {
-                        Ok(Surface::new(channel, time, mesh, colors, 0))
-                    }
-                    (Ok(()), None) => Err("the labels hold no surface to trace".to_string()),
-                    (Err(detail), _) => Err(detail),
-                }
-            }),
-        });
+        traced.ensure(scene, channels.as_ref().map(Arc::clone));
     }
 }
 
@@ -219,6 +314,6 @@ fn geometry_stamp(scene: &Scene) -> u64 {
     for value in [extent.x(), extent.y(), extent.z()] {
         mix(u64::from(value));
     }
-    mix(u64::from(scene.time()));
+    mix(scene.drifts().digest());
     hash
 }

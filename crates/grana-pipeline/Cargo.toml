@@ -45,6 +45,7 @@ grana-video = { workspace = true }
 grana-volume = { workspace = true }
 grana-zarr = { workspace = true }
 grana-weight = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 sha2 = { workspace = true }

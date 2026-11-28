@@ -5,13 +5,15 @@ use glam::Vec3;
 use grana_geometry::marching::{CORNER, EDGE_CORNER, EDGE_TABLE, TRIANGLE_TABLE};
 use grana_geometry::{Mesh, MeshVertex};
 use grana_volume::{Level, VoxelData};
+use rayon::prelude::*;
 
-const HALO: u32 = 1;
 const WORD: usize = 64;
+const CHUNK: usize = 8;
 const BACKGROUND: u32 = 0;
 const BACKGROUND_TOLERANCE: f32 = 0.5;
+const PIECE_PLANES: u32 = 3;
 
-pub trait TraceVoxel: Copy + PartialEq {
+pub trait TraceVoxel: Copy + PartialEq + Send + Sync {
     fn sample(self) -> f32;
 
     fn cast(value: f32) -> Self;
@@ -159,6 +161,247 @@ impl<'a, L: TraceVoxel> Field<'a, L> {
             background: L::background(background),
         }
     }
+
+    fn stride(&self) -> [usize; 3] {
+        let dims = [0, 1, 2].map(|axis| self.extent[axis] as usize);
+        [1, dims[0], dims[0] * dims[1]]
+    }
+
+    fn label(&self, cell: [u32; 3], corner: &[i64; 3]) -> u32 {
+        let mut local = [0usize; 3];
+        for axis in 0..3 {
+            let value = i64::from(cell[axis]) + corner[axis];
+            if value < 0 || value >= i64::from(self.extent[axis]) {
+                return BACKGROUND;
+            }
+            local[axis] = value as usize;
+        }
+        let value = self.labels
+            [local[0] + self.extent[0] as usize * (local[1] + self.extent[1] as usize * local[2])];
+        match value == self.background {
+            true => BACKGROUND,
+            false => value.label(),
+        }
+    }
+}
+
+struct Active {
+    low: [u32; 3],
+    span: [usize; 3],
+    words: usize,
+    bits: Vec<u64>,
+}
+
+impl Active {
+    fn of<L: TraceVoxel>(field: &Field<'_, L>, cells: &Range<u32>) -> Self {
+        let low = [field.cells[0].start, field.cells[1].start, cells.start];
+        let span = [
+            (field.cells[0].end - low[0]) as usize,
+            (field.cells[1].end - low[1]) as usize,
+            (cells.end - cells.start) as usize,
+        ];
+        let words = span[0].div_ceil(WORD);
+        let mut active = Self {
+            low,
+            span,
+            words,
+            bits: vec![0u64; words * span[1] * span[2]],
+        };
+        let high = [
+            low[0] + span[0] as u32 - 1,
+            low[1] + span[1] as u32 - 1,
+            low[2] + span[2] as u32 - 1,
+        ];
+        let voxels = [0, 1, 2]
+            .map(|axis| low[axis].saturating_sub(1)..(high[axis] + 2).min(field.extent[axis]));
+        let stride = field.stride();
+        for z in voxels[2].clone() {
+            for y in voxels[1].clone() {
+                let base = z as usize * stride[2] + y as usize * stride[1];
+                let row =
+                    &field.labels[base + voxels[0].start as usize..base + voxels[0].end as usize];
+                let (chunks, tail) = row.as_chunks::<CHUNK>();
+                for (offset, chunk) in chunks.iter().enumerate() {
+                    if chunk.iter().all(|value| *value == field.background) {
+                        continue;
+                    }
+                    let first = voxels[0].start + offset as u32 * CHUNK as u32;
+                    for (index, value) in chunk.iter().enumerate() {
+                        if *value != field.background {
+                            active.mark(low, high, [first + index as u32, y, z]);
+                        }
+                    }
+                }
+                let first = voxels[0].end - tail.len() as u32;
+                for (index, value) in tail.iter().enumerate() {
+                    if *value != field.background {
+                        active.mark(low, high, [first + index as u32, y, z]);
+                    }
+                }
+            }
+        }
+        active
+    }
+
+    fn mark(&mut self, low: [u32; 3], high: [u32; 3], voxel: [u32; 3]) {
+        let range = [0, 1, 2].map(|axis| {
+            voxel[axis].saturating_sub(1).max(low[axis])..=(voxel[axis] + 1).min(high[axis])
+        });
+        for z in range[2].clone() {
+            for y in range[1].clone() {
+                let line = (z - low[2]) as usize * self.span[1] + (y - low[1]) as usize;
+                for x in range[0].clone() {
+                    let column = (x - low[0]) as usize;
+                    self.bits[line * self.words + column / WORD] |= 1u64 << (column % WORD);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Piece {
+    labels: Vec<u32>,
+    slots: HashMap<u32, usize>,
+    positions: Vec<[f32; 3]>,
+    objects: Vec<u32>,
+    keys: HashMap<u128, u32>,
+    lower: Vec<(u32, u128)>,
+    upper: Vec<(u32, u128)>,
+    indices: Vec<u32>,
+}
+
+impl Piece {
+    fn trace<L: TraceVoxel>(field: &Field<'_, L>, cells: Range<u32>) -> Self {
+        let mut piece = Self::default();
+        let active = Active::of(field, &cells);
+        let planes = field.origin[2] + cells.start..field.origin[2] + cells.end;
+        for z in cells {
+            for y in field.cells[1].clone() {
+                let row =
+                    (z - active.low[2]) as usize * active.span[1] + (y - active.low[1]) as usize;
+                for word in 0..active.words {
+                    let mut bits = active.bits[row * active.words + word];
+                    while bits != 0 {
+                        let column = word * WORD + bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        let cell = [active.low[0] + column as u32, y, z];
+                        piece.cell(field, cell, &planes);
+                    }
+                }
+            }
+        }
+        piece
+    }
+
+    fn cell<L: TraceVoxel>(&mut self, field: &Field<'_, L>, cell: [u32; 3], planes: &Range<u32>) {
+        let mut corners = [BACKGROUND; 8];
+        let mut distinct = [BACKGROUND; 8];
+        let mut count = 0usize;
+        for (corner, point) in CORNER.iter().enumerate() {
+            let label = field.label(cell, point);
+            corners[corner] = label;
+            if label != BACKGROUND && !distinct[..count].contains(&label) {
+                distinct[count] = label;
+                count += 1;
+            }
+        }
+        for label in distinct[..count].iter().copied() {
+            let mut bits = 0usize;
+            for (corner, value) in corners.iter().enumerate() {
+                if *value != label {
+                    bits |= 1 << corner;
+                }
+            }
+            if EDGE_TABLE[bits] == 0 {
+                continue;
+            }
+            let slot = self.slot(label);
+            let table = TRIANGLE_TABLE[bits];
+            let mut entry = 0usize;
+            while entry < 16 && table[entry] >= 0 {
+                let mut vertices = [0u32; 3];
+                for (offset, vertex) in vertices.iter_mut().enumerate() {
+                    *vertex = self.edge(
+                        field,
+                        label,
+                        slot,
+                        cell,
+                        table[entry + offset] as usize,
+                        planes,
+                    );
+                }
+                entry += 3;
+                if vertices[0] == vertices[1]
+                    || vertices[1] == vertices[2]
+                    || vertices[2] == vertices[0]
+                {
+                    continue;
+                }
+                self.indices.extend_from_slice(&vertices);
+            }
+        }
+    }
+
+    fn slot(&mut self, label: u32) -> usize {
+        if let Some(slot) = self.slots.get(&label) {
+            return *slot;
+        }
+        let slot = self.labels.len();
+        self.slots.insert(label, slot);
+        self.labels.push(label);
+        slot
+    }
+
+    fn edge<L: TraceVoxel>(
+        &mut self,
+        field: &Field<'_, L>,
+        label: u32,
+        slot: usize,
+        cell: [u32; 3],
+        edge: usize,
+        planes: &Range<u32>,
+    ) -> u32 {
+        let [first, second] = EDGE_CORNER[edge];
+        let corner = [CORNER[first], CORNER[second]];
+        let mut low = [0u32; 3];
+        let mut axis = 0usize;
+        for component in 0..3 {
+            low[component] =
+                cell[component] + corner[0][component].min(corner[1][component]) as u32;
+            if corner[0][component] != corner[1][component] {
+                axis = component;
+            }
+        }
+        let absolute = [0, 1, 2].map(|component| field.origin[component] + low[component]);
+        assert!(
+            label < 1 << 30,
+            "a traced label addresses a surface within thirty bits"
+        );
+        let key = (u128::from(label) << 98)
+            | (u128::from(absolute[0]) << 66)
+            | (u128::from(absolute[1]) << 34)
+            | (u128::from(absolute[2]) << 2)
+            | axis as u128;
+        if let Some(vertex) = self.keys.get(&key) {
+            return *vertex;
+        }
+        let point = [0, 1, 2].map(|component| {
+            let offset = if component == axis { 0.5 } else { 0.0 };
+            absolute[component] as f32 + offset
+        });
+        let vertex = self.positions.len() as u32;
+        self.positions.push(field.level.voxel_center(point));
+        self.objects.push(slot as u32);
+        self.keys.insert(key, vertex);
+        if absolute[2] == planes.start {
+            self.lower.push((vertex, key));
+        }
+        if absolute[2] == planes.end {
+            self.upper.push((vertex, key));
+        }
+        vertex
+    }
 }
 
 pub struct Traced {
@@ -170,10 +413,10 @@ pub struct Traced {
 pub struct Tracer {
     labels: Vec<u32>,
     slots: HashMap<u32, usize>,
-    vertices: Vec<[f32; 3]>,
+    positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     objects: Vec<u32>,
-    edges: HashMap<u128, u32>,
+    keys: HashMap<u128, u32>,
     indices: Vec<u32>,
     volume: Vec<f64>,
 }
@@ -188,7 +431,7 @@ impl Tracer {
     }
 
     pub fn vertex_count(&self) -> usize {
-        self.vertices.len()
+        self.positions.len()
     }
 
     pub fn push(&mut self, band: TraceBand<'_>) {
@@ -220,134 +463,83 @@ impl Tracer {
     }
 
     fn band<L: TraceVoxel>(&mut self, field: Field<'_, L>) {
-        let Field {
-            level,
-            origin,
-            extent,
-            cells,
-            labels,
-            background,
-        } = field;
-        let dims = [0, 1, 2].map(|axis| extent[axis] as usize);
-        let stride = [1usize, dims[0], dims[0] * dims[1]];
-        let scan = [0, 1, 2].map(|axis| {
-            cells[axis].start.saturating_sub(HALO)..(cells[axis].end + HALO).min(extent[axis] - 1)
-        });
-        let span = [0, 1, 2].map(|axis| (scan[axis].end - scan[axis].start) as usize);
-        let words = span[0].div_ceil(WORD);
-        let mut active = vec![0u64; words * span[1] * span[2]];
-        let voxels = [0, 1, 2]
-            .map(|axis| scan[axis].start.saturating_sub(1)..(scan[axis].end + 1).min(extent[axis]));
-        for z in voxels[2].clone() {
-            for y in voxels[1].clone() {
-                for x in voxels[0].clone() {
-                    let voxel =
-                        x as usize * stride[0] + y as usize * stride[1] + z as usize * stride[2];
-                    if labels[voxel] == background {
-                        continue;
-                    }
-                    for dz in z.saturating_sub(1)..=(z + 1).min(scan[2].end - 1) {
-                        for dy in y.saturating_sub(1)..=(y + 1).min(scan[1].end - 1) {
-                            let row = (dz - scan[2].start) as usize * span[1]
-                                + (dy - scan[1].start) as usize;
-                            for dx in x.saturating_sub(1)..=(x + 1).min(scan[0].end - 1) {
-                                let column = dx - scan[0].start;
-                                active[row * words + column as usize / WORD] |=
-                                    1u64 << (column as usize % WORD);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for z in scan[2].clone() {
-            for y in scan[1].clone() {
-                let row = (z - scan[2].start) as usize * span[1] + (y - scan[1].start) as usize;
-                for word in 0..words {
-                    let mut bits = active[row * words + word];
-                    while bits != 0 {
-                        let column = word * WORD + bits.trailing_zeros() as usize;
-                        bits &= bits - 1;
-                        let cell = [scan[0].start + column as u32, y, z];
-                        let emit = (0..3).all(|axis| cells[axis].contains(&cell[axis]));
-                        self.cell(level, origin, extent, labels, background, cell, emit);
-                    }
-                }
-            }
+        let cells = field.cells[2].clone();
+        let planes = cells.end - cells.start;
+        let threads = rayon::current_num_threads().max(1) as u32;
+        let pieces = (planes / PIECE_PLANES).clamp(1, threads);
+        let step = planes.div_ceil(pieces);
+        let ranges = (0..pieces)
+            .map(|index| {
+                let start = cells.start + index * step;
+                start..(start + step).min(cells.end)
+            })
+            .filter(|range| !range.is_empty())
+            .collect::<Vec<_>>();
+        let traced = ranges
+            .into_par_iter()
+            .map(|range| Piece::trace(&field, range))
+            .collect::<Vec<_>>();
+        for piece in traced {
+            self.absorb(piece);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn cell<L: TraceVoxel>(
-        &mut self,
-        level: Level,
-        origin: [u32; 3],
-        extent: [u32; 3],
-        labels: &[L],
-        background: L,
-        cell: [u32; 3],
-        emit: bool,
-    ) {
-        let mut corners = [BACKGROUND; 8];
-        let mut distinct = [BACKGROUND; 8];
-        let mut count = 0usize;
-        for (corner, point) in CORNER.iter().enumerate() {
-            let label = voxel(extent, labels, background, cell, point);
-            corners[corner] = label;
-            if label != BACKGROUND && !distinct[..count].contains(&label) {
-                distinct[count] = label;
-                count += 1;
-            }
+    fn absorb(&mut self, piece: Piece) {
+        let Piece {
+            labels,
+            positions,
+            objects,
+            lower,
+            upper,
+            indices,
+            ..
+        } = piece;
+        let mut mapped = Vec::with_capacity(labels.len());
+        for label in labels {
+            mapped.push(self.slot(label));
         }
-        for label in distinct.iter().take(count).copied() {
-            let mut bits = 0usize;
-            for (corner, value) in corners.iter().enumerate() {
-                if *value != label {
-                    bits |= 1 << corner;
+        let mut remap = Vec::with_capacity(positions.len());
+        let mut lower = lower.into_iter().peekable();
+        for (local, position) in positions.into_iter().enumerate() {
+            let shared = match lower.peek() {
+                Some((at, key)) if *at as usize == local => {
+                    let key = *key;
+                    lower.next();
+                    self.keys.get(&key).copied()
+                }
+                _ => None,
+            };
+            let global = match shared {
+                Some(global) => global,
+                None => {
+                    let global = self.positions.len() as u32;
+                    self.positions.push(position);
+                    self.normals.push([0.0; 3]);
+                    self.objects.push(mapped[objects[local] as usize] as u32);
+                    global
+                }
+            };
+            remap.push(global);
+        }
+        for (local, key) in upper {
+            self.keys.insert(key, remap[local as usize]);
+        }
+        for triangle in indices.as_chunks::<3>().0 {
+            let vertices = triangle.map(|local| remap[local as usize]);
+            let points = vertices.map(|vertex| self.positions[vertex as usize]);
+            let cross = (Vec3::from(points[1]) - Vec3::from(points[0]))
+                .cross(Vec3::from(points[2]) - Vec3::from(points[0]));
+            for vertex in vertices {
+                let normal = &mut self.normals[vertex as usize];
+                for axis in 0..3 {
+                    normal[axis] += cross[axis];
                 }
             }
-            if EDGE_TABLE[bits] == 0 {
-                continue;
-            }
-            let slot = self.slot(label);
-            let table = TRIANGLE_TABLE[bits];
-            let mut entry = 0usize;
-            while entry < 16 && table[entry] >= 0 {
-                let mut vertices = [0u32; 3];
-                for (offset, vertex) in vertices.iter_mut().enumerate() {
-                    *vertex = self.edge(
-                        level,
-                        origin,
-                        label,
-                        slot,
-                        cell,
-                        table[entry + offset] as usize,
-                    );
-                }
-                entry += 3;
-                if vertices[0] == vertices[1]
-                    || vertices[1] == vertices[2]
-                    || vertices[2] == vertices[0]
-                {
-                    continue;
-                }
-                let points = vertices.map(|vertex| self.vertices[vertex as usize]);
-                let cross = (Vec3::from(points[1]) - Vec3::from(points[0]))
-                    .cross(Vec3::from(points[2]) - Vec3::from(points[0]));
-                for vertex in vertices {
-                    let normal = &mut self.normals[vertex as usize];
-                    for axis in 0..3 {
-                        normal[axis] += cross[axis];
-                    }
-                }
-                if emit {
-                    self.indices.extend_from_slice(&vertices);
-                    self.volume[slot] += f64::from(
-                        Vec3::from(points[0])
-                            .dot(Vec3::from(points[1]).cross(Vec3::from(points[2]))),
-                    ) / 6.0;
-                }
-            }
+            let slot = self.objects[vertices[0] as usize] as usize;
+            self.volume[slot] += f64::from(
+                Vec3::from(points[0]).dot(Vec3::from(points[1]).cross(Vec3::from(points[2]))),
+            ) / 6.0;
+            self.indices.extend_from_slice(&vertices);
         }
     }
 
@@ -360,51 +552,6 @@ impl Tracer {
         self.labels.push(label);
         self.volume.push(0.0);
         slot
-    }
-
-    fn edge(
-        &mut self,
-        level: Level,
-        origin: [u32; 3],
-        label: u32,
-        slot: usize,
-        cell: [u32; 3],
-        edge: usize,
-    ) -> u32 {
-        let [first, second] = EDGE_CORNER[edge];
-        let corner = [CORNER[first], CORNER[second]];
-        let mut low = [0u32; 3];
-        let mut axis = 0usize;
-        for component in 0..3 {
-            low[component] =
-                cell[component] + corner[0][component].min(corner[1][component]) as u32;
-            if corner[0][component] != corner[1][component] {
-                axis = component;
-            }
-        }
-        let absolute = [0, 1, 2].map(|component| origin[component] + low[component]);
-        assert!(
-            label < 1 << 30,
-            "a traced label addresses a surface within thirty bits"
-        );
-        let key = (u128::from(label) << 98)
-            | (u128::from(absolute[0]) << 66)
-            | (u128::from(absolute[1]) << 34)
-            | (u128::from(absolute[2]) << 2)
-            | axis as u128;
-        if let Some(vertex) = self.edges.get(&key) {
-            return *vertex;
-        }
-        let point = [0, 1, 2].map(|component| {
-            let offset = if component == axis { 0.5 } else { 0.0 };
-            absolute[component] as f32 + offset
-        });
-        let vertex = self.vertices.len() as u32;
-        self.vertices.push(level.voxel_center(point));
-        self.normals.push([0.0; 3]);
-        self.objects.push(slot as u32);
-        self.edges.insert(key, vertex);
-        vertex
     }
 
     pub fn finish(mut self) -> Option<Traced> {
@@ -422,7 +569,7 @@ impl Tracer {
             }
         }
         let vertices = self
-            .vertices
+            .positions
             .iter()
             .zip(&self.normals)
             .zip(&self.objects)
@@ -436,28 +583,6 @@ impl Tracer {
             mesh: Mesh::new(vertices, self.indices),
             labels: self.labels,
         })
-    }
-}
-
-fn voxel<L: TraceVoxel>(
-    extent: [u32; 3],
-    labels: &[L],
-    background: L,
-    cell: [u32; 3],
-    corner: &[i64; 3],
-) -> u32 {
-    let mut local = [0usize; 3];
-    for axis in 0..3 {
-        let value = i64::from(cell[axis]) + corner[axis];
-        if value < 0 || value >= i64::from(extent[axis]) {
-            return BACKGROUND;
-        }
-        local[axis] = value as usize;
-    }
-    let value = labels[local[0] + extent[0] as usize * (local[1] + extent[1] as usize * local[2])];
-    match value == background {
-        true => BACKGROUND,
-        false => value.label(),
     }
 }
 
@@ -482,16 +607,50 @@ mod tests {
         labels
     }
 
-    fn trace(labels: &[u32], cells: [std::ops::Range<u32>; 3]) -> Traced {
+    fn cube() -> Vec<u32> {
+        let mut labels = vec![0u32; (SIDE * SIDE * SIDE) as usize];
+        for z in 4..12u32 {
+            for y in 4..12u32 {
+                for x in 4..12u32 {
+                    labels[(x + SIDE * (y + SIDE * z)) as usize] = 1;
+                }
+            }
+        }
+        labels
+    }
+
+    fn sliced(labels: &[u32], low: u32, high: u32) -> VoxelData {
+        let mut data = Vec::with_capacity(((high - low) * SIDE * SIDE) as usize);
+        for z in low..high {
+            for y in 0..SIDE {
+                let row = (z * SIDE + y) * SIDE;
+                data.extend_from_slice(&labels[row as usize..(row + SIDE) as usize]);
+            }
+        }
+        VoxelData::U32(data)
+    }
+
+    fn traced_in_bands(labels: &[u32], band: u32) -> Traced {
         let mut tracer = Tracer::new();
-        tracer.push(TraceBand::new(
-            level(),
-            [0, 0, 0],
-            [SIDE, SIDE, SIDE],
-            cells,
-            &VoxelData::U32(labels.to_vec()),
-            0.0,
-        ));
+        let mut z = 0u32;
+        while z < SIDE {
+            let top = (z + band).min(SIDE);
+            let low = z.saturating_sub(1);
+            let high = (top + 1).min(SIDE);
+            let span = [SIDE, SIDE, high - low];
+            let data = sliced(labels, low, high);
+            let first = z - low;
+            let last = (top - low).min(span[2] - 1);
+            tracer.push(TraceBand::new(
+                level(),
+                [0, 0, low],
+                span,
+                [0..SIDE - 1, 0..SIDE - 1, first..last],
+                &data,
+                0.0,
+            ));
+            z = top;
+        }
         tracer.finish().expect("the labels trace a surface")
     }
 
@@ -509,7 +668,7 @@ mod tests {
 
     #[test]
     fn keeps_a_one_voxel_sheet_as_its_own_thin_surface() {
-        let traced = trace(&slab(), [0..SIDE - 1, 0..SIDE - 1, 0..SIDE - 1]);
+        let traced = traced_in_bands(&slab(), SIDE);
         assert_eq!(traced.labels, vec![1], "one label carries one surface");
         let (low, high) = bounds(&traced);
         assert!(
@@ -534,7 +693,7 @@ mod tests {
                 labels[(x + SIDE * (y + SIDE * 8)) as usize] = 2;
             }
         }
-        let traced = trace(&labels, [0..SIDE - 1, 0..SIDE - 1, 0..SIDE - 1]);
+        let traced = traced_in_bands(&labels, SIDE);
         assert_eq!(traced.labels, vec![1, 2], "each label names its own object");
         let mut outward = [0.0f64; 2];
         let mut count = [0usize; 2];
@@ -566,40 +725,49 @@ mod tests {
         }
     }
 
+    fn surface(traced: &Traced) -> Vec<([u32; 3], [u32; 3], u32)> {
+        let mut rows = traced
+            .mesh
+            .vertices()
+            .iter()
+            .map(|vertex| {
+                (
+                    vertex.position().map(f32::to_bits),
+                    vertex.normal().map(f32::to_bits),
+                    vertex.object(),
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        rows
+    }
+
     #[test]
-    fn emits_a_shared_cell_once_across_bands() {
-        let labels = slab();
-        let mut whole = Tracer::new();
-        whole.push(TraceBand::new(
-            level(),
-            [0, 0, 0],
-            [SIDE, SIDE, SIDE],
-            [0..SIDE - 1, 0..SIDE - 1, 0..SIDE - 1],
-            &VoxelData::U32(labels.clone()),
-            0.0,
-        ));
-        let whole = whole.finish().expect("the labels trace a surface");
-        let mut split = Tracer::new();
-        for (low, high) in [(0u32, 8u32), (8, SIDE - 1)] {
-            split.push(TraceBand::new(
-                level(),
-                [0, 0, 0],
-                [SIDE, SIDE, SIDE],
-                [0..SIDE - 1, 0..SIDE - 1, low..high],
-                &VoxelData::U32(labels.clone()),
-                0.0,
-            ));
-        }
-        let split = split.finish().expect("the labels trace a surface");
+    fn a_split_band_traces_the_same_surface_as_one_band() {
+        let labels = cube();
+        let whole = traced_in_bands(&labels, SIDE);
+        let split = traced_in_bands(&labels, 8);
         assert_eq!(
             whole.mesh.triangle_count(),
             split.mesh.triangle_count(),
             "a band boundary does not emit a cell twice"
         );
+        let whole = surface(&whole);
+        let split = surface(&split);
         assert_eq!(
-            whole.mesh.vertex_count(),
-            split.mesh.vertex_count(),
-            "a band boundary shares the vertices it names"
+            whole.len(),
+            split.len(),
+            "a band boundary shares every vertex it names"
         );
+        if let Some(at) = whole
+            .iter()
+            .zip(&split)
+            .position(|(left, right)| left != right)
+        {
+            panic!(
+                "the band rim at vertex {at} differs: {:?} against {:?}",
+                whole[at], split[at]
+            );
+        }
     }
 }
