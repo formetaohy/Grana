@@ -8,14 +8,12 @@ use std::path::Path;
 use burn::prelude::*;
 
 use crate::Result;
-use crate::plan::Peaks;
 
 pub(crate) struct Model {
     encoder: encoder::Encoder,
     decoder: decoder::Decoder,
     device: Device,
     weights: u64,
-    peaks: Peaks,
 }
 
 impl Model {
@@ -37,7 +35,6 @@ impl Model {
             decoder,
             device,
             weights,
-            peaks: Peaks::default(),
         })
     }
 
@@ -47,10 +44,6 @@ impl Model {
 
     pub(crate) fn weights(&self) -> u64 {
         self.weights
-    }
-
-    pub(crate) fn peaks(&self) -> &Peaks {
-        &self.peaks
     }
 
     pub(crate) fn encode(&self, input: Tensor<4>, queries: usize) -> Result<Tensor<4>> {

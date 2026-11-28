@@ -56,24 +56,14 @@ impl Segmenter {
     }
 
     pub fn plan(&self, depth: u32, spare: u64) -> Result<Plan> {
-        Plan::of(
-            self.model.weights(),
-            depth as usize,
-            spare,
-            self.model.peaks(),
-        )
+        Plan::of(self.model.weights(), depth as usize, spare)
     }
 
     #[doc(hidden)]
     pub fn forced_plan(&self, depth: u32, splits: usize) -> Plan {
         Plan::forced(
             splits,
-            Plan::estimate(
-                self.model.weights(),
-                depth as usize,
-                splits,
-                self.model.peaks(),
-            ),
+            Plan::estimate(self.model.weights(), depth as usize, splits),
         )
     }
 
@@ -94,9 +84,6 @@ impl Segmenter {
         progress: &mut dyn FnMut(usize),
     ) -> Result<Volume> {
         let prediction = self.predict(planes, width, height, plan, progress);
-        if prediction.is_ok() {
-            self.account(planes.len() as u32, plan);
-        }
         self.model.device().memory_cleanup();
         let prediction = prediction?;
         let labels = postprocess::labels(
@@ -108,16 +95,6 @@ impl Segmenter {
         let mut volume = Volume::new(width, height, planes.len() as u32, labels);
         volume.retain_above(self.settings.minimum_voxel_count(cell_measure));
         Ok(volume)
-    }
-
-    fn account(&self, depth: u32, plan: Plan) {
-        let Some(usage) = self.model.device().memory_pool_usage() else {
-            return;
-        };
-        let measured = usage.bytes_reserved.saturating_sub(self.model.weights());
-        self.model
-            .peaks()
-            .record(depth as usize, plan.splits(), measured);
     }
 
     fn predict(

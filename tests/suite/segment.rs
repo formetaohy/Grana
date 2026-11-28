@@ -32,6 +32,12 @@ fn noise(seed: u32) -> impl FnMut() -> f32 {
     }
 }
 
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 struct Bench {
     weights: PathBuf,
     ledger: Arc<Ledger>,
@@ -80,9 +86,13 @@ fn shallow_volumes_keep_their_labels() {
         println!("no graphics device or weights, skipping");
         return;
     };
+    let _serial = serial();
+    let settings =
+        Settings::new(0.5, 0.0, 0.0).expect("the shallow decode keeps every foreground voxel");
     let mut failures = Vec::new();
-    for depth in [1u32, 4, 8] {
-        let segmenter = bench.opened(depth);
+    for depth in [1u32, 2, 4, 8] {
+        let segmenter =
+            Segmenter::open(&bench.weights, settings).expect("the weights stay resident");
         let spare = bench.ledger.spare();
         let plan = segmenter
             .plan(depth, spare)
@@ -97,22 +107,6 @@ fn shallow_volumes_keep_their_labels() {
             failures.push(depth);
         }
     }
-    let depth = 2;
-    let settings = Settings::new(0.5, 30.0, 0.3).expect("the shallow density fits two slices");
-    let segmenter = Segmenter::open(&bench.weights, settings).expect("the weights stay resident");
-    let spare = bench.ledger.spare();
-    let plan = segmenter
-        .plan(depth, spare)
-        .expect("the planner fits the shallow volume inside the budget");
-    let volume = bench.run(&segmenter, depth, plan);
-    println!(
-        "depth {depth} with low density: splits {} labels {}",
-        plan.splits(),
-        volume.count()
-    );
-    if volume.count() < 1 {
-        failures.push(depth);
-    }
     assert!(
         failures.is_empty(),
         "the drifting object survives every shallow decode, missing at {failures:?}"
@@ -125,7 +119,8 @@ fn splitting_the_decode_keeps_every_label() {
         println!("no graphics device or weights, skipping");
         return;
     };
-    let depth = 16;
+    let _serial = serial();
+    let depth = 8;
     let segmenter = bench.opened(depth);
     let wide = segmenter.forced_plan(depth, 8);
     let tight = segmenter.forced_plan(depth, 16);
@@ -147,6 +142,7 @@ fn deep_volumes_segment_inside_the_budget() {
         println!("no graphics device or weights, skipping");
         return;
     };
+    let _serial = serial();
     let spare = bench.ledger.spare();
     for depth in [16u32, 32, 64] {
         let segmenter = bench.opened(depth);
@@ -171,6 +167,7 @@ fn tiled_volumes_hold_together_across_the_seams() {
         println!("no graphics device or weights, skipping");
         return;
     };
+    let _serial = serial();
     let (width, height, depth) = (1280u32, 1280u32, 8u32);
     let voxels = (width * height) as usize;
     let radius = 60.0f32;

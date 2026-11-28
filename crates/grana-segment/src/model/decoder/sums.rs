@@ -1,5 +1,6 @@
 use burn::prelude::*;
 const NORMALIZATION_EPSILON: f32 = 1.0e-5;
+pub(crate) const BLOCK: usize = 32;
 pub(crate) struct ColumnSums {
     sum: Tensor<5>,
     square: Tensor<5>,
@@ -14,22 +15,21 @@ pub(crate) struct Statistics {
     deviation: Tensor<5>,
 }
 impl ColumnSums {
-    pub(crate) fn of(tensor: &Tensor<5>) -> Self {
-        let [_, channels, _, _, width] = tensor.dims();
+    fn blank(channels: usize, width: usize, device: &Device) -> Self {
         let shape = [1, channels, 1, 1, width];
         Self {
-            sum: Tensor::zeros(shape, &tensor.device()),
-            square: Tensor::zeros(shape, &tensor.device()),
+            sum: Tensor::zeros(shape, &device.clone()),
+            square: Tensor::zeros(shape, &device.clone()),
             samples: 0,
         }
     }
-    pub(crate) fn add(&mut self, chunk: &Tensor<5>) {
+    fn add(&mut self, chunk: &Tensor<5>) {
         let [_, _, depth, height, width] = chunk.dims();
         self.samples += depth * height * width;
         self.sum = self.sum.clone() + chunk.clone().sum_dims(&[2, 3]);
         self.square = self.square.clone() + chunk.clone().mul(chunk.clone()).sum_dims(&[2, 3]);
     }
-    pub(crate) fn join(self, other: Self) -> Self {
+    fn join(self, other: Self) -> Self {
         Self {
             sum: Tensor::cat(vec![self.sum, other.sum], 4),
             square: Tensor::cat(vec![self.square, other.square], 4),
@@ -74,5 +74,21 @@ impl Statistics {
     }
     pub(crate) fn normalise(&self, input: Tensor<5>) -> Tensor<5> {
         (input - self.mean.clone()) / self.deviation.clone()
+    }
+}
+
+pub(crate) fn accumulate(holder: &mut Option<ColumnSums>, tensor: &Tensor<5>, column: usize) {
+    let width = tensor.dims()[4];
+    let mut offset = 0;
+    while offset < width {
+        let length = (BLOCK - (column + offset) % BLOCK).min(width - offset);
+        let piece = tensor.clone().narrow(4, offset, length);
+        let mut sums = ColumnSums::blank(piece.dims()[1], length, &piece.device());
+        sums.add(&piece);
+        *holder = Some(match holder.take() {
+            None => sums,
+            Some(held) => held.join(sums),
+        });
+        offset += length;
     }
 }
